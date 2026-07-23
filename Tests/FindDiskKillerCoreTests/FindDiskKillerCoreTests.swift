@@ -93,6 +93,306 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(timeWeightedAverage([partlyOutsideWindow], endingAt: end) == 100)
 }
 
+@Test func fileAccessTraceParserReadsRequestedBytesWithoutInventingPhysicalIO() throws {
+    let day = Date(timeIntervalSinceReferenceDate: 50_000)
+    let readLine = "12:34:56.250000 read F=3 B=0x4000 /Users/example/My Project/源文件.swift O=0x0 0.000120 W Google Chrome.9988"
+    let writeLine = "12:34:57.500000 pwritev F=7 B=4096 /Users/example/My Project/output.bin O=0x20 0.000080 Builder.44"
+
+    guard case .event(let read) = FileAccessTraceParser.parse(line: readLine, on: day),
+          case .event(let write) = FileAccessTraceParser.parse(line: writeLine, on: day)
+    else {
+        Issue.record("Expected both controlled fs_usage fixtures to parse")
+        return
+    }
+
+    #expect(read.direction == .read)
+    #expect(read.requestedBytes == 16_384)
+    #expect(read.path == "/Users/example/My Project/源文件.swift")
+    #expect(read.processLabel == "Google Chrome")
+    #expect(read.threadID == 9_988)
+    #expect(write.direction == .write)
+    #expect(write.requestedBytes == 4_096)
+    #expect(write.path == "/Users/example/My Project/output.bin")
+}
+
+@Test func fileAccessTraceParserHandlesCallsErrorsAndCoverageGaps() {
+    let day = Date(timeIntervalSinceReferenceDate: 60_000)
+    let calls: [(String, FileAccessTraceDirection)] = [
+        ("read", .read), ("pread", .read), ("readv", .read), ("preadv", .read),
+        ("write", .write), ("pwrite", .write), ("writev", .write), ("pwritev", .write)
+    ]
+    for (call, direction) in calls {
+        let line = "01:02:03.000001 \(call) F=4 B=32 /tmp/trace O=0x0 0.000010 Tool.7"
+        guard case .event(let event) = FileAccessTraceParser.parse(line: line, on: day) else {
+            Issue.record("Expected \(call) to parse")
+            continue
+        }
+        #expect(event.direction == direction)
+    }
+
+    let failed = "01:02:03.000001 write F=4 B=32 [ 28] /tmp/trace 0.000010 Tool.7"
+    #expect(FileAccessTraceParser.parse(line: failed, on: day) == .failedCall)
+
+    let truncated = "01:02:03.000001 read F=4 B=32 .../tail/file 0.000010 Tool.7"
+    guard case .event(let truncatedEvent) = FileAccessTraceParser.parse(
+        line: truncated,
+        on: day
+    ) else {
+        Issue.record("Expected a truncated-path event")
+        return
+    }
+    #expect(truncatedEvent.path == nil)
+    #expect(truncatedEvent.pathWasTruncated)
+
+    let missingPath = "01:02:03.000001 read F=4 B=32 O=0x0 0.000010 Tool.7"
+    guard case .event(let missingPathEvent) = FileAccessTraceParser.parse(
+        line: missingPath,
+        on: day
+    ) else {
+        Issue.record("Expected an unlocated event")
+        return
+    }
+    #expect(missingPathEvent.path == nil)
+
+    let malformedBytes = "01:02:03.000001 read F=4 B=unknown /tmp/trace 0.000010 Tool.7"
+    #expect(FileAccessTraceParser.parse(line: malformedBytes, on: day) == .unsupportedFormat)
+    let unknownColumn = "01:02:03.000001 read F=4 B=32 /tmp/trace X=7 0.000010 Tool.7"
+    #expect(FileAccessTraceParser.parse(line: unknownColumn, on: day) == .unsupportedFormat)
+    let longPath = "/tmp/" + String(repeating: "长目录 ", count: 80) + "file.swift"
+    let longLine = "01:02:03.000001 read F=4 B=32 \(longPath) 0.000010 Tool.7"
+    guard case .event(let longPathEvent) = FileAccessTraceParser.parse(
+        line: longLine,
+        on: day
+    ) else {
+        Issue.record("Expected a complete long Unicode path to parse")
+        return
+    }
+    #expect(longPathEvent.path == longPath)
+    #expect(FileAccessTraceParser.recognizesHeader(
+        "TIMESTAMP CALL FILE DESCRIPTOR BYTE COUNT PATHNAME TIME PROCESS"
+    ))
+}
+
+@Test func fileAccessTraceStreamRequiresAKnownHeaderAndFailsClosed() {
+    let day = Date(timeIntervalSinceReferenceDate: 70_000)
+    let line = "01:02:03.000001 read F=4 B=32 /tmp/trace 0.000010 Tool.7"
+    var missingHeader = FileAccessTraceStreamParser()
+    #expect(missingHeader.consume(line: line, on: day) == .unsupportedFormat)
+    #expect(missingHeader.state == .unsupportedFormat)
+    #expect(missingHeader.consume(
+        line: "TIMESTAMP CALL FILE DESCRIPTOR BYTE COUNT PATHNAME TIME PROCESS",
+        on: day
+    ) == .unsupportedFormat)
+
+    var recognized = FileAccessTraceStreamParser()
+    #expect(recognized.consume(line: "fs_usage fixture", on: day) == .ignored)
+    #expect(recognized.consume(
+        line: "TIMESTAMP CALL FILE DESCRIPTOR BYTE COUNT PATHNAME TIME PROCESS",
+        on: day
+    ) == .ignored)
+    #expect(recognized.state == .parsing)
+    guard case .event = recognized.consume(line: line, on: day) else {
+        Issue.record("Expected a record after the known header")
+        return
+    }
+}
+
+@Test func fileAccessTraceTargetUsesVolumeAndPathComponents() throws {
+    let directory = try FileAccessTraceTarget(
+        path: "/Volumes/JianDisk/code",
+        resolvedPath: "/System/Volumes/Data/Volumes/JianDisk/code",
+        volumeIdentifier: "volume-a",
+        kind: .directory,
+        isCaseSensitive: true
+    )
+    #expect(directory.match(
+        path: "/Volumes/JianDisk/code/project/file.swift",
+        volumeIdentifier: "volume-a"
+    ) == .included(relativePath: "project/file.swift"))
+    #expect(directory.match(
+        path: "/Volumes/JianDisk/code-other/file.swift",
+        volumeIdentifier: "volume-a"
+    ) == .excluded)
+    #expect(directory.match(
+        path: "/Volumes/JianDisk/code/file.swift",
+        volumeIdentifier: "volume-b"
+    ) == .excluded)
+    #expect(directory.match(
+        path: "/Volumes/JianDisk/code/file.swift",
+        volumeIdentifier: nil
+    ) == .unverifiable)
+    #expect(directory.match(
+        path: "/private/var/empty",
+        resolvedPath: "/System/Volumes/Data/Volumes/JianDisk/code/link-target",
+        volumeIdentifier: "volume-a"
+    ) == .included(relativePath: "link-target"))
+
+    let file = try FileAccessTraceTarget(
+        path: "/tmp/Report.txt",
+        volumeIdentifier: "volume-c",
+        kind: .file,
+        isCaseSensitive: false
+    )
+    #expect(file.match(
+        path: "/tmp/report.TXT",
+        volumeIdentifier: "volume-c"
+    ) == .included(relativePath: "report.TXT"))
+    #expect(file.match(
+        path: "/tmp/report.TXT.backup",
+        volumeIdentifier: "volume-c"
+    ) == .excluded)
+    #expect(throws: FileAccessTraceTargetError.invalidPath) {
+        try FileAccessTraceTarget(
+            path: "relative/path",
+            volumeIdentifier: "volume-c",
+            kind: .file,
+            isCaseSensitive: true
+        )
+    }
+}
+
+@Test func fileAccessTraceAggregatorSeparatesReadWriteFilesAndProcessSessions() throws {
+    let start = Date(timeIntervalSinceReferenceDate: 1_000)
+    let target = try FileAccessTraceTarget(
+        path: "/work",
+        volumeIdentifier: "volume-a",
+        kind: .directory,
+        isCaseSensitive: true
+    )
+    let firstSession = FileAccessTraceProcessIdentity(
+        pid: 42,
+        startAbstime: 10,
+        displayName: "Builder"
+    )
+    let replacementSession = FileAccessTraceProcessIdentity(
+        pid: 42,
+        startAbstime: 20,
+        displayName: "Builder"
+    )
+    var aggregator = FileAccessTraceAggregator(target: target, startedAt: start)
+    aggregator.ingest(traceEvent(
+        at: start.addingTimeInterval(0.1),
+        direction: .read,
+        bytes: 100,
+        path: "/work/a.swift",
+        process: firstSession
+    ))
+    aggregator.ingest(traceEvent(
+        at: start.addingTimeInterval(0.6),
+        direction: .write,
+        bytes: 200,
+        path: "/work/b.o",
+        process: firstSession
+    ))
+    aggregator.ingest(traceEvent(
+        at: start.addingTimeInterval(1.1),
+        direction: .write,
+        bytes: 300,
+        path: "/work/b.o",
+        process: replacementSession
+    ))
+
+    let snapshot = aggregator.snapshot(at: start.addingTimeInterval(2))
+    #expect(snapshot.coverage == .complete)
+    #expect(snapshot.requestedReadBytes == 100)
+    #expect(snapshot.requestedWriteBytes == 500)
+    #expect(snapshot.currentReadBytesPerSecond == 50)
+    #expect(snapshot.currentWriteBytesPerSecond == 250)
+    #expect(snapshot.peakReadBytesPerSecond == 100)
+    #expect(snapshot.peakWriteBytesPerSecond == 300)
+    #expect(snapshot.files.first?.path == "/work/b.o")
+    #expect(snapshot.files.first?.requestedWriteBytes == 500)
+    #expect(snapshot.processes.count == 2)
+    #expect(Set(snapshot.processes.map(\.identity.startAbstime)) == [10, 20])
+}
+
+@Test func fileAccessTraceAggregatorMakesGapsAndFormatFailuresExplicit() throws {
+    let start = Date(timeIntervalSinceReferenceDate: 2_000)
+    let target = try FileAccessTraceTarget(
+        path: "/work",
+        volumeIdentifier: "volume-a",
+        kind: .directory,
+        isCaseSensitive: true
+    )
+    var aggregator = FileAccessTraceAggregator(
+        target: target,
+        startedAt: start,
+        maximumFiles: 1
+    )
+    aggregator.ingest(traceEvent(
+        at: start.addingTimeInterval(0.1),
+        direction: .write,
+        bytes: 10,
+        path: "/work/a",
+        process: nil
+    ))
+    aggregator.ingest(traceEvent(
+        at: start.addingTimeInterval(0.2),
+        direction: .write,
+        bytes: 20,
+        path: "/work/b",
+        process: FileAccessTraceProcessIdentity(pid: 8, startAbstime: 1, displayName: "Tool")
+    ))
+    aggregator.ingest(FileAccessTraceEvent(
+        timestamp: start.addingTimeInterval(0.3),
+        direction: .read,
+        requestedBytes: 100,
+        path: nil,
+        volumeIdentifier: nil,
+        process: nil
+    ))
+
+    let partial = aggregator.snapshot(at: start.addingTimeInterval(1))
+    #expect(partial.coverage == .partial(droppedEventCount: 3))
+    #expect(partial.requestedWriteBytes == 30)
+    #expect(partial.requestedReadBytes == 0)
+    #expect(partial.files.count == 1)
+
+    aggregator.markUnsupportedFormat()
+    let unsupported = aggregator.snapshot(at: start.addingTimeInterval(1))
+    #expect(unsupported.coverage == .unsupportedFormat)
+    #expect(unsupported.requestedReadBytes == nil)
+    #expect(unsupported.requestedWriteBytes == nil)
+    #expect(unsupported.currentReadBytesPerSecond == nil)
+    #expect(unsupported.files.isEmpty)
+}
+
+@Test func fileAccessTraceAggregatorKeepsDetailsBoundedDuringAnEventStorm() throws {
+    let start = Date(timeIntervalSinceReferenceDate: 3_000)
+    let target = try FileAccessTraceTarget(
+        path: "/work",
+        volumeIdentifier: "volume-a",
+        kind: .directory,
+        isCaseSensitive: true
+    )
+    var aggregator = FileAccessTraceAggregator(
+        target: target,
+        startedAt: start,
+        maximumRateBuckets: 20,
+        maximumFiles: 8,
+        maximumProcesses: 4
+    )
+    for index in 0..<20_000 {
+        aggregator.ingest(traceEvent(
+            at: start.addingTimeInterval(Double(index) / 4),
+            direction: .write,
+            bytes: 1,
+            path: "/work/file-\(index)",
+            process: FileAccessTraceProcessIdentity(
+                pid: Int32(index),
+                startAbstime: UInt64(index),
+                displayName: "Process \(index)"
+            )
+        ))
+    }
+
+    let snapshot = aggregator.snapshot(at: start.addingTimeInterval(5_000))
+    #expect(snapshot.requestedWriteBytes == 20_000)
+    #expect(snapshot.files.count == 8)
+    #expect(snapshot.processes.count == 4)
+    #expect(snapshot.coverage == .partial(droppedEventCount: 19_996))
+}
+
 @MainActor
 @Test func systemAndProcessNetworkGapsRemainUnavailableUntilRebased() async {
     let store = MonitorStore()
@@ -1021,6 +1321,23 @@ private func fixtureVolume(id: String, mountPath: String) -> VolumeInfo {
         hasStableIdentity: true,
         isRemovable: false,
         physicalDiskBSDNames: []
+    )
+}
+
+private func traceEvent(
+    at timestamp: Date,
+    direction: FileAccessTraceDirection,
+    bytes: UInt64,
+    path: String,
+    process: FileAccessTraceProcessIdentity?
+) -> FileAccessTraceEvent {
+    FileAccessTraceEvent(
+        timestamp: timestamp,
+        direction: direction,
+        requestedBytes: bytes,
+        path: path,
+        volumeIdentifier: "volume-a",
+        process: process
     )
 }
 
