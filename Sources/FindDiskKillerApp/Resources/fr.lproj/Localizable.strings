@@ -195,6 +195,7 @@
 "%d%% · 阈值 %d%%" = "%d%% · Seuil %d%%";
 "磁盘健康" = "État du disque";
 "连接方式" = "Connexion";
+"外接 NVMe（雷电/USB4）" = "NVMe externe (Thunderbolt/USB4)";
 "容量" = "Capacité";
 "设备报告温度警告" = "Le disque signale une alerte de température";
 "设备报告关键健康警告" = "Le disque signale une alerte d’état critique";

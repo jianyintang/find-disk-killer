@@ -551,7 +551,7 @@ private struct DiskHealthDetail: View {
 
     private func deviceDetails(_ snapshot: DiskHealthSnapshot) -> [HealthDisplayItem] {
         var items: [HealthDisplayItem] = []
-        if let connection = snapshot.connection {
+        if let connection = connectionText(snapshot) {
             items.append(.plain(title: L10n.text("连接方式"), value: connection))
         }
         if let capacity = snapshot.capacity {
@@ -577,11 +577,15 @@ private struct DiskHealthDetail: View {
 
     private func reliabilityDetails(_ snapshot: DiskHealthSnapshot) -> [HealthDisplayItem] {
         var items: [HealthDisplayItem] = []
-        if let spare = snapshot.availableSpare,
-           let threshold = snapshot.availableSpareThreshold {
+        if let spare = snapshot.availableSpare {
+            let value = if let threshold = snapshot.availableSpareThreshold {
+                L10n.format("%d%% · 阈值 %d%%", Int(spare), Int(threshold))
+            } else {
+                "\(spare)%"
+            }
             items.append(.plain(
                 title: L10n.text("可用备用空间"),
-                value: L10n.format("%d%% · 阈值 %d%%", Int(spare), Int(threshold))
+                value: value
             ))
         }
         if let errors = snapshot.mediaErrors {
@@ -594,6 +598,19 @@ private struct DiskHealthDetail: View {
             items.append(.plain(title: L10n.text("异常断电"), value: counterText(shutdowns)))
         }
         return items
+    }
+
+    private func connectionText(_ snapshot: DiskHealthSnapshot) -> String? {
+        switch snapshot.connectionKind {
+        case .externalNVMe:
+            L10n.text("外接 NVMe（雷电/USB4）")
+        case .nvme:
+            "NVMe"
+        case .reported:
+            snapshot.connection
+        case .unavailable:
+            nil
+        }
     }
 
     private func healthSource(_ snapshot: DiskHealthSnapshot) -> some View {

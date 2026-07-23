@@ -400,6 +400,8 @@ FindDiskKiller App
 
 字段容器名称已经明确提示“设备特定键可能变化且不保证”。实现必须建立逐字段 capability model，不能因为字典存在就假设所有型号语义相同。
 
+NVMe 语义不能只依赖 `BusProtocol`。内置盘通常报告 `NVMe` 或 `Apple Fabric`，但雷电/USB4 直通的 NVMe 可能报告 `PCI-Express`。解析器只有在总线明确包含 `NVMe` / `Apple Fabric`，或 `DeviceTreePath` 明确包含 `IONVMeController` 时，才按 NVMe 规则解释详细字段；不能仅凭 `PCI-Express` 判定。若设备树确认 NVMe 控制器且 `Internal = false`，界面使用“外接 NVMe（雷电/USB4）”这类用户可理解的连接名称，同时保留原始总线值作为诊断证据。
+
 DiskHealthStore 不以可能变化的 `disk0`、`disk4` 作为长期主键。序列号、控制器唯一标识等组成强身份，经本地 HMAC 后允许跨重启保存趋势；只有设备树位置、型号和容量时属于弱身份，只维持本次启动或本次连接会话。无法确认强身份时不得跨重启计算磨损增量，也不得让同型号同容量的替换设备继承旧盘历史。健康页面可见时最多每 30 秒刷新一次，后台每 30 分钟刷新一次；读取失败显示最后成功时间，不把失败解释成设备故障。
 
 健康对象始终是物理 whole disk，不是 APFS 卷。同一物理盘的 SMART 结果只展示一次；多卷不得复制健康结论，多物理盘组成的存储集合不得合成为单一健康度。卷页面提供清晰的“查看物理设备健康”入口。
@@ -456,9 +458,11 @@ USB 硬盘盒可能不透传 SMART。此时页面显示：
 
 第二阶段可以引入 `smartctl` provider，提高 SATA 和部分 USB bridge 的覆盖率。它不是首版前置条件。
 
+已有原生 `diskutil` NVMe 字段的设备不得为了读取同一数据而依赖或内置 `smartctl`。`smartctl` 也无法保证读取不透传 SMART 的硬盘盒；只有设备覆盖矩阵证明它能增加有效数据时才进入实现。
+
 - 固定受审计版本并遵守 smartmontools 的 GPL 分发义务，随包提供许可证与对应源代码获取方式。
 - 以独立进程 provider 调用，不把 GPL 代码链接到主程序；随分发包提供许可证、对应源代码或有效获取方式。
-- 使用设备类型探测，不让用户输入 `-d` 等底层参数；若设备访问仍需 root，复用同一 helper 安全模型。
+- 只接受 JSON 结构化输出，并限制执行超时与输出大小；设备路径、命令和参数均使用白名单，不接受用户拼接的 `-d` 等底层参数。若设备访问仍需 root，复用同一 helper 安全模型并明确展示管理员批准的原因。
 - SATA `Total_LBAs_Written`、Wear Leveling Count、Media Wearout Indicator 等均为厂商属性；只有型号适配表确认 raw value 语义后才展示。
 - 未确认的属性保留在可导出的原始诊断中，不进入用户健康结论。
 

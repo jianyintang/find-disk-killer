@@ -38,10 +38,18 @@ public struct UInt128Value: Comparable, Hashable, Sendable {
     }
 }
 
+public enum DiskHealthConnectionKind: Equatable, Sendable {
+    case externalNVMe
+    case nvme
+    case reported
+    case unavailable
+}
+
 public struct DiskHealthSnapshot: Identifiable, Sendable {
     public let bsdName: String
     public let model: String
     public let connection: String?
+    public let connectionKind: DiskHealthConnectionKind
     public let capacity: UInt64?
     public let isSolidState: Bool?
     public let smartStatus: String?
@@ -300,13 +308,26 @@ public enum DiskHealthParser {
             throw DiskHealthProviderError.malformedOutput
         }
 
+        let connection = dictionary["BusProtocol"] as? String
+        let deviceTreePath = dictionary["DeviceTreePath"] as? String
         let details = dictionary["SMARTDeviceSpecificKeysMayVaryNotGuaranteed"]
             as? [String: Any]
-        let connection = dictionary["BusProtocol"] as? String
-        let isNVMeSemantics = connection.map {
-            let value = $0.lowercased()
-            return value.contains("nvme") || value.contains("apple fabric")
-        } ?? false
+        let isNVMeSemantics = hasNVMeSemantics(
+            busProtocol: connection,
+            deviceTreePath: deviceTreePath
+        )
+        let connectionKind: DiskHealthConnectionKind
+        if isNVMeSemantics,
+           hasNVMeController(in: deviceTreePath),
+           dictionary["Internal"] as? Bool == false {
+            connectionKind = .externalNVMe
+        } else if isNVMeSemantics {
+            connectionKind = .nvme
+        } else if connection != nil {
+            connectionKind = .reported
+        } else {
+            connectionKind = .unavailable
+        }
 
         return DiskHealthSnapshot(
             bsdName: bsdName,
@@ -314,6 +335,7 @@ public enum DiskHealthParser {
                 ?? (dictionary["IORegistryEntryName"] as? String)
                 ?? bsdName,
             connection: connection,
+            connectionKind: connectionKind,
             capacity: unsignedInteger(dictionary["TotalSize"] ?? dictionary["Size"]),
             isSolidState: dictionary["SolidState"] as? Bool,
             smartStatus: dictionary["SMARTStatus"] as? String,
@@ -344,6 +366,26 @@ public enum DiskHealthParser {
             sampledAt: sampledAt,
             source: "diskutil -plist"
         )
+    }
+
+    public static func hasNVMeSemantics(
+        busProtocol: String?,
+        deviceTreePath: String?
+    ) -> Bool {
+        if let busProtocol {
+            let value = busProtocol.lowercased()
+            if value.contains("nvme") || value.contains("apple fabric") {
+                return true
+            }
+        }
+        return hasNVMeController(in: deviceTreePath)
+    }
+
+    private static func hasNVMeController(in deviceTreePath: String?) -> Bool {
+        deviceTreePath?.range(
+            of: "IONVMeController",
+            options: [.caseInsensitive]
+        ) != nil
     }
 
     private static func wideCounter(

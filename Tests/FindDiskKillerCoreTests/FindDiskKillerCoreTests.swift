@@ -422,6 +422,7 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     )
 
     #expect(snapshot.model == "Fixture SSD")
+    #expect(snapshot.connectionKind == .nvme)
     #expect(snapshot.dataUnitsWritten == UInt128Value(high: 0, low: 9_260_388))
     #expect(snapshot.percentageUsed == 0)
     #expect(snapshot.criticalWarning == 2)
@@ -429,6 +430,134 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(abs((snapshot.temperatureCelsius ?? 0) - 48.85) < 0.001)
     #expect(snapshot.mediaErrors == UInt128Value(high: 0, low: 0))
     #expect(snapshot.sampledAt == sampledAt)
+}
+
+@Test func diskHealthParserRecognizesExternalNVMeBehindThunderbolt() throws {
+    let data = try PropertyListSerialization.data(
+        fromPropertyList: [
+            "DeviceIdentifier": "disk4",
+            "WholeDisk": true,
+            "MediaName": "Acer SSD N3500CN 2TB",
+            "BusProtocol": "PCI-Express",
+            "DeviceTreePath": "IODeviceTree:/arm-io/usb-drd1/IONVMeController/IOBlockStorageDriver",
+            "Internal": false,
+            "TotalSize": UInt64(2_000_398_934_016),
+            "SolidState": true,
+            "SMARTStatus": "Verified",
+            "SMARTDeviceSpecificKeysMayVaryNotGuaranteed": [
+                "CRITICAL_WARNING": UInt64(0),
+                "DATA_UNITS_READ_0": UInt64(1_560_000),
+                "DATA_UNITS_READ_1": UInt64(0),
+                "DATA_UNITS_WRITTEN_0": UInt64(1_271_484),
+                "DATA_UNITS_WRITTEN_1": UInt64(0),
+                "PERCENTAGE_USED": UInt64(0),
+                "AVAILABLE_SPARE": UInt64(100),
+                "AVAILABLE_SPARE_THRESHOLD": UInt64(10),
+                "TEMPERATURE": UInt64(313),
+                "POWER_ON_HOURS_0": UInt64(34),
+                "POWER_ON_HOURS_1": UInt64(0),
+                "POWER_CYCLES_0": UInt64(3),
+                "POWER_CYCLES_1": UInt64(0),
+                "UNSAFE_SHUTDOWNS_0": UInt64(1),
+                "UNSAFE_SHUTDOWNS_1": UInt64(0),
+                "MEDIA_ERRORS_0": UInt64(0),
+                "MEDIA_ERRORS_1": UInt64(0),
+                "NUM_ERROR_INFO_LOG_ENTRIES_0": UInt64(0),
+                "NUM_ERROR_INFO_LOG_ENTRIES_1": UInt64(0)
+            ]
+        ],
+        format: .binary,
+        options: 0
+    )
+    let snapshot = try DiskHealthParser.parse(
+        data: data,
+        bsdName: "disk4",
+        sampledAt: Date()
+    )
+
+    #expect(DiskHealthParser.hasNVMeSemantics(
+        busProtocol: "PCI-Express",
+        deviceTreePath: "IODeviceTree:/bridge/ionvmecontroller/device"
+    ))
+    #expect(snapshot.connection == "PCI-Express")
+    #expect(snapshot.connectionKind == .externalNVMe)
+    #expect(snapshot.dataUnitsRead == UInt128Value(high: 0, low: 1_560_000))
+    #expect(snapshot.dataUnitsWritten == UInt128Value(high: 0, low: 1_271_484))
+    #expect(snapshot.percentageUsed == 0)
+    #expect(snapshot.availableSpare == 100)
+    #expect(snapshot.availableSpareThreshold == 10)
+    #expect(abs((snapshot.temperatureCelsius ?? 0) - 39.85) < 0.001)
+    #expect(snapshot.powerOnHours == UInt128Value(high: 0, low: 34))
+    #expect(snapshot.powerCycles == UInt128Value(high: 0, low: 3))
+    #expect(snapshot.unsafeShutdowns == UInt128Value(high: 0, low: 1))
+    #expect(snapshot.mediaErrors == UInt128Value(high: 0, low: 0))
+    #expect(snapshot.errorLogEntries == UInt128Value(high: 0, low: 0))
+    #expect(snapshot.hostBytesRead == 798_720_000_000)
+    #expect(snapshot.hostBytesWritten == 650_999_808_000)
+}
+
+@Test func diskHealthParserDoesNotTreatPlainPCIExpressAsNVMe() throws {
+    let data = try PropertyListSerialization.data(
+        fromPropertyList: [
+            "DeviceIdentifier": "disk5",
+            "WholeDisk": true,
+            "BusProtocol": "PCI-Express",
+            "SMARTStatus": "Verified",
+            "SMARTDeviceSpecificKeysMayVaryNotGuaranteed": [
+                "DATA_UNITS_WRITTEN_0": UInt64(100),
+                "DATA_UNITS_WRITTEN_1": UInt64(0),
+                "TEMPERATURE": UInt64(313),
+                "PERCENTAGE_USED": UInt64(4)
+            ]
+        ],
+        format: .binary,
+        options: 0
+    )
+    let snapshot = try DiskHealthParser.parse(
+        data: data,
+        bsdName: "disk5",
+        sampledAt: Date()
+    )
+
+    #expect(!DiskHealthParser.hasNVMeSemantics(
+        busProtocol: "PCI-Express",
+        deviceTreePath: nil
+    ))
+    #expect(snapshot.connectionKind == .reported)
+    #expect(snapshot.dataUnitsWritten == nil)
+    #expect(snapshot.temperatureCelsius == nil)
+    #expect(snapshot.percentageUsed == nil)
+}
+
+@Test func diskHealthParserRejectsMissingOrMalformedNVMeFields() throws {
+    let data = try PropertyListSerialization.data(
+        fromPropertyList: [
+            "DeviceIdentifier": "disk8",
+            "WholeDisk": true,
+            "BusProtocol": "NVMe",
+            "SMARTDeviceSpecificKeysMayVaryNotGuaranteed": [
+                "DATA_UNITS_READ_0": "120",
+                "DATA_UNITS_READ_1": UInt64(0),
+                "AVAILABLE_SPARE": UInt64(101),
+                "TEMPERATURE": UInt64(249),
+                "POWER_CYCLES_0": UInt64(3)
+            ]
+        ],
+        format: .binary,
+        options: 0
+    )
+    let snapshot = try DiskHealthParser.parse(
+        data: data,
+        bsdName: "disk8",
+        sampledAt: Date()
+    )
+
+    #expect(snapshot.connectionKind == .nvme)
+    #expect(snapshot.dataUnitsRead == nil)
+    #expect(snapshot.dataUnitsWritten == nil)
+    #expect(snapshot.availableSpare == nil)
+    #expect(snapshot.temperatureCelsius == nil)
+    #expect(snapshot.powerCycles == nil)
 }
 
 @Test func diskHealthCapabilitiesIncludeNonHeadlineCounters() throws {
@@ -859,6 +988,7 @@ private func fixtureHealthSnapshot(
         bsdName: bsdName,
         model: model,
         connection: "Apple Fabric",
+        connectionKind: .nvme,
         capacity: 1_000_000,
         isSolidState: true,
         smartStatus: smartStatus,

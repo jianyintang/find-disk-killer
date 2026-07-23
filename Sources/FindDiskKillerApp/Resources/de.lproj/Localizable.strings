@@ -195,6 +195,7 @@
 "%d%% · 阈值 %d%%" = "%d%% · Schwellenwert %d%%";
 "磁盘健康" = "Laufwerkszustand";
 "连接方式" = "Verbindung";
+"外接 NVMe（雷电/USB4）" = "Externes NVMe (Thunderbolt/USB4)";
 "容量" = "Kapazität";
 "设备报告温度警告" = "Das Laufwerk meldet eine Temperaturwarnung";
 "设备报告关键健康警告" = "Das Laufwerk meldet eine kritische Zustandswarnung";

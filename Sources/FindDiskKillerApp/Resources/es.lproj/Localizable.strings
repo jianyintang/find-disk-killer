@@ -195,6 +195,7 @@
 "%d%% · 阈值 %d%%" = "%d%% · Umbral %d%%";
 "磁盘健康" = "Estado del disco";
 "连接方式" = "Conexión";
+"外接 NVMe（雷电/USB4）" = "NVMe externo (Thunderbolt/USB4)";
 "容量" = "Capacidad";
 "设备报告温度警告" = "El disco informa de una alerta de temperatura";
 "设备报告关键健康警告" = "El disco informa de una alerta crítica de estado";

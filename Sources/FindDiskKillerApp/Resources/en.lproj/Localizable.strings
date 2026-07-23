@@ -195,6 +195,7 @@
 "%d%% · 阈值 %d%%" = "%d%% · Threshold %d%%";
 "磁盘健康" = "Disk Health";
 "连接方式" = "Connection";
+"外接 NVMe（雷电/USB4）" = "External NVMe (Thunderbolt/USB4)";
 "容量" = "Capacity";
 "设备报告温度警告" = "The device reports a temperature warning";
 "设备报告关键健康警告" = "The device reports a critical health warning";
