@@ -3,7 +3,7 @@ import SwiftUI
 
 struct DisksView: View {
     let store: MonitorStore
-    @State private var showHardwareDetails = false
+    @State private var showHardwareDetails = true
     @State private var selectedMode: DiskPageMode = .activity
     @State private var selectedHealthDisk: String?
 
