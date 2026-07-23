@@ -1,0 +1,898 @@
+import Foundation
+import Observation
+
+@MainActor
+@Observable
+public final class MonitorStore {
+    public let diskHealth = DiskHealthStore()
+    public private(set) var points: [ThroughputPoint] = []
+    public private(set) var systemPoints: [SystemResourcePoint] = []
+    public private(set) var disks: [DiskActivity] = []
+    public private(set) var volumes: [VolumeInfo] = []
+    public private(set) var processes: [ProcessActivity] = []
+    public private(set) var health: MonitorHealth = .starting
+    public private(set) var isCollecting = false
+    public private(set) var startedAt: Date?
+    public private(set) var lastUpdatedAt: Date?
+    public private(set) var lastError: String?
+    public private(set) var visibleProcessCount = 0
+    public private(set) var activeApplicationCount = 0
+    public private(set) var isDiskAvailable = false
+    public private(set) var isSystemCPUAvailable = false
+    public private(set) var isSystemNetworkAvailable = false
+    public private(set) var isProcessNetworkAvailable = false
+    public private(set) var selectedCoverage: Double = 0
+    public var selectedRange: SampleRange = .minute {
+        didSet {
+            guard selectedRange != oldValue else { return }
+            scheduleProcessSummaryRebuild(
+                at: lastUpdatedAt ?? Date(),
+                priority: .userInitiated
+            )
+        }
+    }
+    public var isFollowingLive = true
+    public var samplingInterval: TimeInterval = 1
+
+    private static let elevatedDeviceWriteRate = 20_000_000.0
+    private static let elevatedProcessWriteRate = 5_000_000.0
+
+    public var currentReadRate: Double {
+        recentDiskAverage(\.readBytesPerSecond)
+    }
+    public var currentWriteRate: Double {
+        recentDiskAverage(\.writeBytesPerSecond)
+    }
+    public var currentCPUPercent: Double {
+        recentSystemAverage(\.cpuPercent)
+    }
+    public var currentNetworkReceiveRate: Double {
+        recentSystemAverage(\.networkReceiveBytesPerSecond)
+    }
+    public var currentNetworkSendRate: Double {
+        recentSystemAverage(\.networkSendBytesPerSecond)
+    }
+    public var topWriter: ProcessActivity? {
+        processes.max { $0.currentWriteBytesPerSecond < $1.currentWriteBytesPerSecond }
+    }
+    public var topCPUProcess: ProcessActivity? {
+        processes.max { $0.currentCPUPercent < $1.currentCPUPercent }
+    }
+    public var topNetworkProcess: ProcessActivity? {
+        processes.max {
+            ($0.currentNetworkReceiveBytesPerSecond + $0.currentNetworkSendBytesPerSecond)
+                < ($1.currentNetworkReceiveBytesPerSecond + $1.currentNetworkSendBytesPerSecond)
+        }
+    }
+
+    private func recentDiskAverage(
+        _ value: KeyPath<ThroughputPoint, Double?>
+    ) -> Double {
+        guard let end = points.last?.timestamp else { return 0 }
+        return timeWeightedAverage(
+            points.compactMap { point in
+                point[keyPath: value].map {
+                    TimedRate(timestamp: point.timestamp, duration: point.sampleDuration, value: $0)
+                }
+            },
+            endingAt: end
+        )
+    }
+
+    private func recentSystemAverage(
+        _ value: KeyPath<SystemResourcePoint, Double?>
+    ) -> Double {
+        guard let end = systemPoints.last?.timestamp else { return 0 }
+        return timeWeightedAverage(
+            systemPoints.compactMap { point in
+                point[keyPath: value].map {
+                    TimedRate(timestamp: point.timestamp, duration: point.sampleDuration, value: $0)
+                }
+            },
+            endingAt: end
+        )
+    }
+
+    private struct ProcessKey: Hashable {
+        let pid: Int32
+        let startAbstime: UInt64
+    }
+
+    private struct ProcessTotals {
+        let cpuTimeNanoseconds: UInt64
+        let read: UInt64
+        let written: UInt64
+        let networkReceived: UInt64?
+        let networkSent: UInt64?
+    }
+
+    private struct SystemTotals {
+        let cpuUser: UInt64
+        let cpuSystem: UInt64
+        let cpuNice: UInt64
+        let cpuIdle: UInt64
+    }
+
+    private struct NetworkInterfaceTotals {
+        let received: UInt64
+        let sent: UInt64
+    }
+
+    private struct DiskTotals {
+        let read: UInt64
+        let written: UInt64
+        let readOperations: UInt64
+        let writeOperations: UInt64
+    }
+
+    private struct DiskWindowSample {
+        let timestamp: Date
+        let duration: TimeInterval
+        let bytesRead: UInt64
+        let bytesWritten: UInt64
+        let readOperations: UInt64
+        let writeOperations: UInt64
+    }
+
+    private struct GroupMetadata: Sendable {
+        var name: String
+        var path: String
+        var appBundlePath: String?
+        var pids: Set<Int32>
+        var sessions: Set<ProcessSession>
+        var brand: ProcessBrand?
+        var brandIsVerified: Bool
+        var lastActivity: Date
+    }
+
+    private struct ProcessRateSample: Sendable {
+        let timestamp: Date
+        let duration: TimeInterval
+        let bytesRead: UInt64
+        let bytesWritten: UInt64
+        let cpuTimeNanoseconds: UInt64
+        let networkBytesReceived: UInt64
+        let networkBytesSent: UInt64
+        let networkAvailable: Bool
+    }
+
+    private struct GroupRates: Sendable {
+        var read = 0.0
+        var write = 0.0
+        var cpu = 0.0
+        var networkReceived = 0.0
+        var networkSent = 0.0
+        var networkAvailable = false
+    }
+
+    private var priorProcesses: [ProcessKey: ProcessTotals] = [:]
+    private var priorDisks: [UInt64: DiskTotals] = [:]
+    private var recentDiskSamples: [UInt64: [DiskWindowSample]] = [:]
+    private var priorUptime: TimeInterval?
+    private var priorSystemTotals: SystemTotals?
+    private var priorNetworkInterfaces: [UInt32: NetworkInterfaceTotals] = [:]
+    private var diskSegment = 0
+    private var diskWasAvailable = false
+    private var cpuSegment = 0
+    private var cpuWasAvailable = false
+    private var networkSegment = 0
+    private var networkWasAvailable = false
+    private var groupHistory: [String: [ProcessRateSample]] = [:]
+    private var groupMetadata: [String: GroupMetadata] = [:]
+    private var elevatedSince: Date?
+    private var samplingTask: Task<Void, Never>?
+    private var processSummaryTask: Task<Void, Never>?
+    private var processSummaryGeneration = 0
+    private var lastHistoryTrimAt: Date?
+
+    public init() {}
+
+    public func start() {
+        guard samplingTask == nil else { return }
+        isCollecting = true
+        health = .starting
+        startedAt = startedAt ?? Date()
+
+        samplingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let snapshot = await SystemSampler.shared.collect()
+                self?.ingest(snapshot)
+                let interval = self?.samplingInterval ?? 1
+                try? await Task.sleep(for: .seconds(interval))
+            }
+        }
+    }
+
+    public func stop() {
+        samplingTask?.cancel()
+        samplingTask = nil
+        processSummaryTask?.cancel()
+        processSummaryTask = nil
+        isCollecting = false
+        health = .stopped
+    }
+
+    public func restart() {
+        stop()
+        priorProcesses.removeAll(keepingCapacity: true)
+        priorDisks.removeAll(keepingCapacity: true)
+        recentDiskSamples.removeAll(keepingCapacity: true)
+        priorUptime = nil
+        priorSystemTotals = nil
+        priorNetworkInterfaces.removeAll(keepingCapacity: true)
+        diskSegment = 0
+        cpuSegment = 0
+        networkSegment = 0
+        diskWasAvailable = false
+        cpuWasAvailable = false
+        networkWasAvailable = false
+        start()
+    }
+
+    func ingest(_ snapshot: SystemSnapshot) {
+        let duration = max(0.1, snapshot.uptime - (priorUptime ?? snapshot.uptime))
+        priorUptime = snapshot.uptime
+        lastUpdatedAt = snapshot.date
+        volumes = snapshot.volumes
+        visibleProcessCount = snapshot.processes.count
+        isProcessNetworkAvailable = snapshot.processNetworkAvailable
+
+        ingestDisks(snapshot.disks, at: snapshot.date, duration: duration)
+        ingestSystem(snapshot, duration: duration)
+        ingestProcesses(snapshot.processes, at: snapshot.date, duration: duration)
+        trimHistoryIfNeeded(at: snapshot.date)
+        scheduleProcessSummaryRebuild(at: snapshot.date, priority: .utility)
+        updateHealth(at: snapshot.date)
+
+        if case .starting = health, points.count >= 2 {
+            health = .normal
+        }
+    }
+
+    private func ingestSystem(_ snapshot: SystemSnapshot, duration: TimeInterval) {
+        let current = SystemTotals(
+            cpuUser: snapshot.cpuUserTicks,
+            cpuSystem: snapshot.cpuSystemTicks,
+            cpuNice: snapshot.cpuNiceTicks,
+            cpuIdle: snapshot.cpuIdleTicks
+        )
+
+        var cpuPercent: Double?
+        if snapshot.cpuStatsAvailable, let prior = priorSystemTotals {
+            let activeTicks = safeDelta(current.cpuUser, prior.cpuUser)
+                + safeDelta(current.cpuSystem, prior.cpuSystem)
+                + safeDelta(current.cpuNice, prior.cpuNice)
+            let idleTicks = safeDelta(current.cpuIdle, prior.cpuIdle)
+            let totalTicks = activeTicks + idleTicks
+            if totalTicks > 0 {
+                cpuPercent = Double(activeTicks) / Double(totalTicks) * 100
+            }
+        }
+        if snapshot.cpuStatsAvailable {
+            priorSystemTotals = current
+        } else {
+            priorSystemTotals = nil
+        }
+        isSystemCPUAvailable = cpuPercent != nil
+        if isSystemCPUAvailable, !cpuWasAvailable {
+            cpuSegment += 1
+        }
+        cpuWasAvailable = isSystemCPUAvailable
+
+        var receiveRate: Double?
+        var sendRate: Double?
+        if snapshot.networkInterfacesAvailable {
+            var receivedDelta: UInt64 = 0
+            var sentDelta: UInt64 = 0
+            var matchedInterfaceCount = 0
+            for interface in snapshot.networkInterfaces {
+                guard let previous = priorNetworkInterfaces[interface.index] else { continue }
+                matchedInterfaceCount += 1
+                receivedDelta += safeDelta(interface.bytesReceived, previous.received)
+                sentDelta += safeDelta(interface.bytesSent, previous.sent)
+            }
+            priorNetworkInterfaces = Dictionary(uniqueKeysWithValues: snapshot.networkInterfaces.map {
+                ($0.index, NetworkInterfaceTotals(received: $0.bytesReceived, sent: $0.bytesSent))
+            })
+            if matchedInterfaceCount > 0 {
+                receiveRate = Double(receivedDelta) / duration
+                sendRate = Double(sentDelta) / duration
+            }
+        } else {
+            priorNetworkInterfaces.removeAll(keepingCapacity: true)
+        }
+        isSystemNetworkAvailable = receiveRate != nil && sendRate != nil
+        if isSystemNetworkAvailable, !networkWasAvailable {
+            networkSegment += 1
+        }
+        networkWasAvailable = isSystemNetworkAvailable
+
+        systemPoints.append(SystemResourcePoint(
+            timestamp: snapshot.date,
+            sampleDuration: duration,
+            cpuPercent: cpuPercent,
+            cpuSegment: cpuSegment,
+            networkReceiveBytesPerSecond: receiveRate,
+            networkSendBytesPerSecond: sendRate,
+            networkSegment: networkSegment
+        ))
+        if systemPoints.count > 3_600 {
+            systemPoints.removeFirst(systemPoints.count - 3_600)
+        }
+    }
+
+    private func ingestDisks(_ counters: [RawDiskCounter], at date: Date, duration: TimeInterval) {
+        var diskRows: [DiskActivity] = []
+        var totalReadRate = 0.0
+        var totalWriteRate = 0.0
+        var hasPhysicalSample = false
+
+        for counter in counters {
+            let current = DiskTotals(
+                read: counter.bytesRead,
+                written: counter.bytesWritten,
+                readOperations: counter.readOperations,
+                writeOperations: counter.writeOperations
+            )
+            defer { priorDisks[counter.registryID] = current }
+            guard let prior = priorDisks[counter.registryID] else { continue }
+
+            let readDelta = safeDelta(counter.bytesRead, prior.read)
+            let writeDelta = safeDelta(counter.bytesWritten, prior.written)
+            let readOperations = safeDelta(counter.readOperations, prior.readOperations)
+            let writeOperations = safeDelta(counter.writeOperations, prior.writeOperations)
+            let readRate = Double(readDelta) / duration
+            let writeRate = Double(writeDelta) / duration
+
+            var recent = recentDiskSamples[counter.registryID, default: []]
+            recent.append(DiskWindowSample(
+                timestamp: date,
+                duration: duration,
+                bytesRead: readDelta,
+                bytesWritten: writeDelta,
+                readOperations: readOperations,
+                writeOperations: writeOperations
+            ))
+            recent.removeAll { $0.timestamp < date.addingTimeInterval(-5) }
+            recentDiskSamples[counter.registryID] = recent
+
+            if counter.isPhysical {
+                hasPhysicalSample = true
+                totalReadRate += readRate
+                totalWriteRate += writeRate
+            }
+            diskRows.append(DiskActivity(
+                id: counter.registryID,
+                name: counter.name,
+                readBytesPerSecond: diskWindowAverage(recent, endingAt: date) {
+                    Double($0.bytesRead) / max(0.1, $0.duration)
+                },
+                writeBytesPerSecond: diskWindowAverage(recent, endingAt: date) {
+                    Double($0.bytesWritten) / max(0.1, $0.duration)
+                },
+                readOperationsPerSecond: diskWindowAverage(recent, endingAt: date) {
+                    Double($0.readOperations) / max(0.1, $0.duration)
+                },
+                writeOperationsPerSecond: diskWindowAverage(recent, endingAt: date) {
+                    Double($0.writeOperations) / max(0.1, $0.duration)
+                },
+                capacity: counter.capacity,
+                bsdName: counter.bsdName,
+                isPhysical: counter.isPhysical
+            ))
+        }
+
+        disks = diskRows.sorted { $0.writeBytesPerSecond > $1.writeBytesPerSecond }
+        isDiskAvailable = hasPhysicalSample
+        if isDiskAvailable, !diskWasAvailable {
+            diskSegment += 1
+        }
+        diskWasAvailable = isDiskAvailable
+        points.append(ThroughputPoint(
+            timestamp: date,
+            sampleDuration: duration,
+            readBytesPerSecond: hasPhysicalSample ? totalReadRate : nil,
+            writeBytesPerSecond: hasPhysicalSample ? totalWriteRate : nil,
+            segment: diskSegment
+        ))
+        if points.count > 3_600 {
+            points.removeFirst(points.count - 3_600)
+        }
+    }
+
+    private func ingestProcesses(
+        _ counters: [RawProcessCounter],
+        at date: Date,
+        duration: TimeInterval
+    ) {
+        var groupedDeltas: [String: (
+            read: UInt64,
+            written: UInt64,
+            cpu: UInt64,
+            networkReceived: UInt64,
+            networkSent: UInt64,
+            networkAvailable: Bool
+        )] = [:]
+        var liveKeys: Set<ProcessKey> = []
+        var livePIDsByGroup: [String: Set<Int32>] = [:]
+        var liveSessionsByGroup: [String: Set<ProcessSession>] = [:]
+
+        for counter in counters {
+            let key = ProcessKey(pid: counter.pid, startAbstime: counter.startAbstime)
+            liveKeys.insert(key)
+            let current = ProcessTotals(
+                cpuTimeNanoseconds: counter.cpuTimeNanoseconds,
+                read: counter.bytesRead,
+                written: counter.bytesWritten,
+                networkReceived: counter.networkBytesReceived,
+                networkSent: counter.networkBytesSent
+            )
+            defer { priorProcesses[key] = current }
+
+            let classification = ProcessClassifier.classify(
+                name: counter.name,
+                executablePath: counter.path
+            )
+            livePIDsByGroup[classification.groupID, default: []].insert(counter.pid)
+            liveSessionsByGroup[classification.groupID, default: []].insert(ProcessSession(
+                pid: counter.pid,
+                startAbstime: counter.startAbstime
+            ))
+            var metadata = groupMetadata[classification.groupID] ?? GroupMetadata(
+                name: classification.displayName,
+                path: counter.path,
+                appBundlePath: classification.appBundlePath,
+                pids: [],
+                sessions: [],
+                brand: classification.brand,
+                brandIsVerified: classification.brandIsVerified,
+                lastActivity: date
+            )
+            groupMetadata[classification.groupID] = metadata
+
+            guard let prior = priorProcesses[key] else { continue }
+            let readDelta = safeDelta(counter.bytesRead, prior.read)
+            let writeDelta = safeDelta(counter.bytesWritten, prior.written)
+            let cpuDelta = safeDelta(counter.cpuTimeNanoseconds, prior.cpuTimeNanoseconds)
+            let receivedDeltaValue = optionalCounterDelta(
+                counter.networkBytesReceived,
+                prior.networkReceived
+            )
+            let sentDeltaValue = optionalCounterDelta(
+                counter.networkBytesSent,
+                prior.networkSent
+            )
+            let networkAvailable = receivedDeltaValue != nil && sentDeltaValue != nil
+            let receivedDelta = receivedDeltaValue ?? 0
+            let sentDelta = sentDeltaValue ?? 0
+            let hasActivity = readDelta > 0 || writeDelta > 0 || cpuDelta > 0
+                || receivedDelta > 0 || sentDelta > 0
+            guard hasActivity || groupHistory[classification.groupID] != nil else { continue }
+
+            let existing = groupedDeltas[classification.groupID] ?? (0, 0, 0, 0, 0, true)
+            groupedDeltas[classification.groupID] = (
+                existing.read + readDelta,
+                existing.written + writeDelta,
+                existing.cpu + cpuDelta,
+                existing.networkReceived + receivedDelta,
+                existing.networkSent + sentDelta,
+                existing.networkAvailable && networkAvailable
+            )
+            if hasActivity {
+                metadata.lastActivity = date
+                groupMetadata[classification.groupID] = metadata
+            }
+        }
+
+        priorProcesses = priorProcesses.filter { liveKeys.contains($0.key) }
+        for groupID in groupMetadata.keys {
+            groupMetadata[groupID]?.pids = livePIDsByGroup[groupID] ?? []
+            groupMetadata[groupID]?.sessions = liveSessionsByGroup[groupID] ?? []
+        }
+        activeApplicationCount = livePIDsByGroup.count
+
+        for (groupID, delta) in groupedDeltas {
+            groupHistory[groupID, default: []].append(ProcessRateSample(
+                timestamp: date,
+                duration: duration,
+                bytesRead: delta.read,
+                bytesWritten: delta.written,
+                cpuTimeNanoseconds: delta.cpu,
+                networkBytesReceived: delta.networkReceived,
+                networkBytesSent: delta.networkSent,
+                networkAvailable: delta.networkAvailable
+            ))
+        }
+    }
+
+    private func scheduleProcessSummaryRebuild(
+        at date: Date,
+        priority: TaskPriority
+    ) {
+        let observedDuration = min(
+            selectedRange.seconds,
+            max(1, date.timeIntervalSince(startedAt ?? date))
+        )
+        selectedCoverage = min(1, observedDuration / selectedRange.seconds)
+
+        processSummaryTask?.cancel()
+        processSummaryGeneration += 1
+        let generation = processSummaryGeneration
+        let historySnapshot = groupHistory
+        let metadataSnapshot = groupMetadata
+        let range = selectedRange
+        let processNetworkAvailable = isProcessNetworkAvailable
+        let worker = Task.detached(priority: priority) {
+            Self.buildProcessSummaries(
+                history: historySnapshot,
+                metadata: metadataSnapshot,
+                at: date,
+                range: range,
+                observedDuration: observedDuration,
+                processNetworkAvailable: processNetworkAvailable
+            )
+        }
+
+        processSummaryTask = Task { [weak self] in
+            let result = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard let self, !Task.isCancelled,
+                  generation == processSummaryGeneration,
+                  let result
+            else { return }
+            processes = result
+            updateHealth(at: date)
+        }
+    }
+
+    func waitForPendingProcessSummary() async {
+        await processSummaryTask?.value
+    }
+
+    nonisolated private static func buildProcessSummaries(
+        history groupHistory: [String: [ProcessRateSample]],
+        metadata groupMetadata: [String: GroupMetadata],
+        at date: Date,
+        range: SampleRange,
+        observedDuration: TimeInterval,
+        processNetworkAvailable: Bool
+    ) -> [ProcessActivity]? {
+        let cutoff = date.addingTimeInterval(-range.seconds)
+
+        var result: [ProcessActivity] = []
+        for (groupID, history) in groupHistory {
+            guard !Task.isCancelled else { return nil }
+            let startIndex = Self.firstSampleIndex(onOrAfter: cutoff, in: history)
+            let selected = history[startIndex...]
+            guard !selected.isEmpty, let metadata = groupMetadata[groupID] else { continue }
+
+            var totalRead: UInt64 = 0
+            var totalWritten: UInt64 = 0
+            var totalReceived: UInt64 = 0
+            var totalSent: UInt64 = 0
+            var networkReceived: UInt64 = 0
+            var networkSent: UInt64 = 0
+            var networkObservedDuration = 0.0
+            var peakWriteRate = 0.0
+            var cpuTotal = 0.0
+            var peakCPU = 0.0
+            var sampleCount = 0
+            var metricNetworkSegment = 0
+            var metricNetworkWasAvailable = false
+            var metrics: [ProcessMetricPoint] = []
+            let metricIndices = Self.downsampledProcessSampleIndices(
+                history,
+                range: startIndex..<history.endIndex,
+                maxCount: 240
+            )
+            let metricIndexSet = Set(metricIndices)
+
+            for index in startIndex..<history.endIndex {
+                let sample = history[index]
+                let duration = max(0.1, sample.duration)
+                let writeRate = Double(sample.bytesWritten) / duration
+                let cpu = Double(sample.cpuTimeNanoseconds)
+                    / duration / 1_000_000_000 * 100
+                totalRead += sample.bytesRead
+                totalWritten += sample.bytesWritten
+                totalReceived += sample.networkBytesReceived
+                totalSent += sample.networkBytesSent
+                peakWriteRate = max(peakWriteRate, writeRate)
+                cpuTotal += cpu
+                peakCPU = max(peakCPU, cpu)
+                sampleCount += 1
+                if sample.networkAvailable {
+                    networkReceived += sample.networkBytesReceived
+                    networkSent += sample.networkBytesSent
+                    networkObservedDuration += sample.duration
+                    if !metricNetworkWasAvailable { metricNetworkSegment += 1 }
+                }
+                metricNetworkWasAvailable = sample.networkAvailable
+
+                if metricIndexSet.contains(index) {
+                    metrics.append(ProcessMetricPoint(
+                        timestamp: sample.timestamp,
+                        readBytesPerSecond: Double(sample.bytesRead) / duration,
+                        writeBytesPerSecond: writeRate,
+                        cpuPercent: cpu,
+                        networkReceiveBytesPerSecond: sample.networkAvailable
+                            ? Double(sample.networkBytesReceived) / duration
+                            : nil,
+                        networkSendBytesPerSecond: sample.networkAvailable
+                            ? Double(sample.networkBytesSent) / duration
+                            : nil,
+                        networkSegment: metricNetworkSegment
+                    ))
+                }
+            }
+
+            let currentRate = GroupRates(
+                read: processWindowAverage(history, endingAt: date) {
+                    Double($0.bytesRead) / max(0.1, $0.duration)
+                },
+                write: processWindowAverage(history, endingAt: date) {
+                    Double($0.bytesWritten) / max(0.1, $0.duration)
+                },
+                cpu: processWindowAverage(history, endingAt: date) {
+                    Double($0.cpuTimeNanoseconds)
+                        / max(0.1, $0.duration) / 1_000_000_000 * 100
+                },
+                networkReceived: processWindowAverage(
+                    history,
+                    endingAt: date,
+                    where: \.networkAvailable
+                ) {
+                    Double($0.networkBytesReceived) / max(0.1, $0.duration)
+                },
+                networkSent: processWindowAverage(
+                    history,
+                    endingAt: date,
+                    where: \.networkAvailable
+                ) {
+                    Double($0.networkBytesSent) / max(0.1, $0.duration)
+                },
+                networkAvailable: history.last?.networkAvailable == true
+                    && processNetworkAvailable
+            )
+            result.append(ProcessActivity(
+                id: groupID,
+                name: metadata.name,
+                executablePath: metadata.path,
+                appBundlePath: metadata.appBundlePath,
+                pids: metadata.pids.sorted(),
+                sessions: metadata.sessions.sorted { lhs, rhs in
+                    lhs.pid == rhs.pid
+                        ? lhs.startAbstime < rhs.startAbstime
+                        : lhs.pid < rhs.pid
+                },
+                memberCount: metadata.pids.count,
+                currentReadBytesPerSecond: currentRate.read,
+                currentWriteBytesPerSecond: currentRate.write,
+                currentCPUPercent: currentRate.cpu,
+                currentNetworkReceiveBytesPerSecond: currentRate.networkReceived,
+                currentNetworkSendBytesPerSecond: currentRate.networkSent,
+                totalReadBytes: totalRead,
+                totalWriteBytes: totalWritten,
+                totalNetworkReceivedBytes: totalReceived,
+                totalNetworkSentBytes: totalSent,
+                averageWriteBytesPerSecond: Double(totalWritten) / observedDuration,
+                peakWriteBytesPerSecond: peakWriteRate,
+                averageCPUPercent: sampleCount > 0 ? cpuTotal / Double(sampleCount) : 0,
+                peakCPUPercent: peakCPU,
+                averageNetworkReceiveBytesPerSecond: networkObservedDuration > 0
+                    ? Double(networkReceived) / networkObservedDuration
+                    : 0,
+                averageNetworkSendBytesPerSecond: networkObservedDuration > 0
+                    ? Double(networkSent) / networkObservedDuration
+                    : 0,
+                isNetworkAvailable: networkObservedDuration > 0 && currentRate.networkAvailable,
+                metrics: metrics,
+                brand: metadata.brand,
+                brandIsVerified: metadata.brandIsVerified,
+                lastActivity: metadata.lastActivity
+            ))
+        }
+
+        return result
+            .sorted {
+                activityScore($0) > activityScore($1)
+            }
+            .prefix(200)
+            .map { $0 }
+    }
+
+    private func trimHistoryIfNeeded(at date: Date) {
+        guard lastHistoryTrimAt.map({ date.timeIntervalSince($0) >= 60 }) ?? true else {
+            return
+        }
+        lastHistoryTrimAt = date
+        let cutoff = date.addingTimeInterval(-3_600)
+        for groupID in groupHistory.keys {
+            guard var history = groupHistory[groupID] else { continue }
+            let firstValid = Self.firstSampleIndex(onOrAfter: cutoff, in: history)
+            if firstValid == history.endIndex {
+                groupHistory.removeValue(forKey: groupID)
+                groupMetadata.removeValue(forKey: groupID)
+            } else if firstValid > history.startIndex {
+                history.removeFirst(firstValid)
+                groupHistory[groupID] = history
+            }
+        }
+    }
+
+    private func diskWindowAverage(
+        _ samples: [DiskWindowSample],
+        endingAt end: Date,
+        value: (DiskWindowSample) -> Double
+    ) -> Double {
+        timeWeightedAverage(
+            samples.map {
+                TimedRate(timestamp: $0.timestamp, duration: $0.duration, value: value($0))
+            },
+            endingAt: end
+        )
+    }
+
+    nonisolated private static func processWindowAverage(
+        _ samples: [ProcessRateSample],
+        endingAt end: Date,
+        where include: KeyPath<ProcessRateSample, Bool>? = nil,
+        value: (ProcessRateSample) -> Double
+    ) -> Double {
+        let windowStart = end.addingTimeInterval(-5)
+        var weightedTotal = 0.0
+        var observedDuration = 0.0
+        for sample in samples.reversed() {
+            let sampleEnd = min(sample.timestamp, end)
+            let sampleStart = sample.timestamp.addingTimeInterval(-max(0, sample.duration))
+            if sampleEnd <= windowStart { break }
+            guard include.map({ sample[keyPath: $0] }) ?? true else { continue }
+            let overlap = sampleEnd.timeIntervalSince(max(sampleStart, windowStart))
+            guard overlap > 0 else { continue }
+            weightedTotal += value(sample) * overlap
+            observedDuration += overlap
+        }
+        return observedDuration > 0 ? weightedTotal / observedDuration : 0
+    }
+
+    private func updateHealth(at date: Date) {
+        guard isCollecting else {
+            health = .stopped
+            return
+        }
+
+        let elevated = (isDiskAvailable && currentWriteRate >= Self.elevatedDeviceWriteRate)
+            || processes.contains { $0.currentWriteBytesPerSecond >= Self.elevatedProcessWriteRate }
+        if elevated {
+            elevatedSince = elevatedSince ?? date
+            health = .elevated(duration: date.timeIntervalSince(elevatedSince ?? date))
+        } else {
+            elevatedSince = nil
+            health = points.count < 2 ? .starting : .normal
+        }
+    }
+
+    nonisolated private static func firstSampleIndex(
+        onOrAfter cutoff: Date,
+        in samples: [ProcessRateSample]
+    ) -> Int {
+        var lower = samples.startIndex
+        var upper = samples.endIndex
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if samples[middle].timestamp < cutoff {
+                lower = middle + 1
+            } else {
+                upper = middle
+            }
+        }
+        return lower
+    }
+
+    nonisolated private static func downsampledProcessSampleIndices(
+        _ samples: [ProcessRateSample],
+        range: Range<Int>,
+        maxCount: Int
+    ) -> [Int] {
+        guard range.count > maxCount, maxCount >= 12 else {
+            return Array(range)
+        }
+
+        let dimensions = 5
+        let bucketCount = max(1, (maxCount - 2) / (dimensions * 2))
+        let interiorStart = range.lowerBound + 1
+        let interiorEnd = range.upperBound - 1
+        let interiorCount = max(0, interiorEnd - interiorStart)
+        let bucketSize = max(1, Int(ceil(Double(interiorCount) / Double(bucketCount))))
+        var selected: Set<Int> = [range.lowerBound, range.upperBound - 1]
+
+        var previousNetworkAvailability = samples[range.lowerBound].networkAvailable
+        for index in (range.lowerBound + 1)..<range.upperBound {
+            let available = samples[index].networkAvailable
+            if available != previousNetworkAvailability {
+                selected.insert(index - 1)
+                selected.insert(index)
+            }
+            previousNetworkAvailability = available
+        }
+
+        var bucketStart = interiorStart
+        while bucketStart < interiorEnd {
+            let bucketEnd = min(interiorEnd, bucketStart + bucketSize)
+            var minima = Array(repeating: (value: Double.infinity, index: bucketStart), count: dimensions)
+            var maxima = Array(repeating: (value: -Double.infinity, index: bucketStart), count: dimensions)
+
+            for index in bucketStart..<bucketEnd {
+                let sample = samples[index]
+                let duration = max(0.1, sample.duration)
+                let values: [Double?] = [
+                    Double(sample.bytesRead) / duration,
+                    Double(sample.bytesWritten) / duration,
+                    Double(sample.cpuTimeNanoseconds) / duration / 1_000_000_000 * 100,
+                    sample.networkAvailable ? Double(sample.networkBytesReceived) / duration : nil,
+                    sample.networkAvailable ? Double(sample.networkBytesSent) / duration : nil
+                ]
+                for dimension in values.indices {
+                    guard let value = values[dimension] else { continue }
+                    if value < minima[dimension].value { minima[dimension] = (value, index) }
+                    if value > maxima[dimension].value { maxima[dimension] = (value, index) }
+                }
+            }
+
+            for dimension in 0..<dimensions where minima[dimension].value.isFinite {
+                selected.insert(minima[dimension].index)
+                selected.insert(maxima[dimension].index)
+            }
+            bucketStart = bucketEnd
+        }
+        return selected.sorted()
+    }
+}
+
+private func safeDelta(_ current: UInt64, _ previous: UInt64) -> UInt64 {
+    current >= previous ? current - previous : 0
+}
+
+func optionalCounterDelta(_ current: UInt64?, _ previous: UInt64?) -> UInt64? {
+    guard let current, let previous else { return nil }
+    return safeDelta(current, previous)
+}
+
+private func activityScore(_ process: ProcessActivity) -> Double {
+    let disk = process.currentWriteBytesPerSecond / 5_000_000
+    let cpu = process.currentCPUPercent / 25
+    let network = (
+        process.currentNetworkReceiveBytesPerSecond + process.currentNetworkSendBytesPerSecond
+    ) / 5_000_000
+    return max(disk, cpu, network)
+}
+
+struct TimedRate: Sendable {
+    let timestamp: Date
+    let duration: TimeInterval
+    let value: Double
+}
+
+func timeWeightedAverage(
+    _ samples: [TimedRate],
+    endingAt end: Date,
+    window: TimeInterval = 5
+) -> Double {
+    let windowStart = end.addingTimeInterval(-window)
+    var weightedTotal = 0.0
+    var observedDuration = 0.0
+
+    for sample in samples {
+        let sampleEnd = min(sample.timestamp, end)
+        let sampleStart = sample.timestamp.addingTimeInterval(-max(0, sample.duration))
+        let overlapStart = max(sampleStart, windowStart)
+        let overlap = sampleEnd.timeIntervalSince(overlapStart)
+        guard overlap > 0 else { continue }
+        weightedTotal += sample.value * overlap
+        observedDuration += overlap
+    }
+    return observedDuration > 0 ? weightedTotal / observedDuration : 0
+}
