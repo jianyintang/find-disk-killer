@@ -378,7 +378,7 @@ final class TraceHelperController {
         invalidateConnection()
         do {
             if service.status != .notRegistered && service.status != .notFound {
-                try await service.unregister()
+                try unregisterServiceBeforeReplacement()
             }
             try service.register()
             refreshStatus()
@@ -397,6 +397,10 @@ final class TraceHelperController {
         guard service.status == .enabled else {
             throw TraceHelperClientError.unavailable
         }
+    }
+
+    private func unregisterServiceBeforeReplacement() throws {
+        try service.unregister()
     }
 
     func drainTrace(
