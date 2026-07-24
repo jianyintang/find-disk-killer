@@ -313,7 +313,7 @@
 "停止追踪" = "Stop tracing";
 "准备就绪" = "Ready";
 "启用追踪" = "Enable tracing";
-"在“登录项与扩展”中允许 FindDiskKiller 后返回这里，点击重新检查。" = "Allow FindDiskKiller in Login Items & Extensions, then return here and click Check Again.";
+"在“登录项与扩展”中允许 FindDiskKiller 后返回这里，追踪会自动开始。" = "Allow FindDiskKiller in Login Items & Extensions, then return here. Tracing will start automatically.";
 "完整路径不会上传或默认保存。开始追踪前不会申请管理员批准。" = "Full paths are not uploaded or saved by default. Administrator approval is not requested until you start tracing.";
 "尚未开始" = "Not started";
 "已停止" = "Stopped";

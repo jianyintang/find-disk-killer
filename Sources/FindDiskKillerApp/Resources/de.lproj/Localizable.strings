@@ -313,7 +313,7 @@
 "停止追踪" = "Aufzeichnung stoppen";
 "准备就绪" = "Bereit";
 "启用追踪" = "Aufzeichnung aktivieren";
-"在“登录项与扩展”中允许 FindDiskKiller 后返回这里，点击重新检查。" = "Erlauben Sie FindDiskKiller unter „Anmeldeobjekte & Erweiterungen“, kehren Sie zurück und klicken Sie auf „Erneut prüfen“.";
+"在“登录项与扩展”中允许 FindDiskKiller 后返回这里，追踪会自动开始。" = "Erlauben Sie FindDiskKiller unter „Anmeldeobjekte & Erweiterungen“ und kehren Sie dann hierher zurück. Die Aufzeichnung startet automatisch.";
 "完整路径不会上传或默认保存。开始追踪前不会申请管理员批准。" = "Vollständige Pfade werden weder hochgeladen noch standardmäßig gespeichert. Die Administratorfreigabe wird erst beim Start angefordert.";
 "尚未开始" = "Nicht gestartet";
 "已停止" = "Gestoppt";

@@ -37,18 +37,31 @@ final class TraceHelperController {
         case .notRegistered: .notRegistered
         case .enabled: .enabled
         case .requiresApproval: .requiresApproval
-        case .notFound: .notFound
+        // An unregistered embedded daemon can be reported as notFound. Verify the
+        // signed bundle payload before deciding that this build is incomplete.
+        case .notFound: packagedServiceIsPresent ? .notRegistered : .notFound
         @unknown default: .notFound
         }
     }
 
     // Registration is only called from the tracing workspace's explicit action.
     func requestRegistration() {
+        guard packagedServiceIsPresent else {
+            state = .notFound
+            return
+        }
         do {
             try service.register()
             refreshStatus()
         } catch {
-            state = .operationFailed(error.localizedDescription)
+            // register() can race with approval or an earlier registration. The
+            // framework status is authoritative when it has already advanced.
+            switch service.status {
+            case .enabled, .requiresApproval:
+                refreshStatus()
+            default:
+                state = .operationFailed(error.localizedDescription)
+            }
         }
     }
 
@@ -225,5 +238,20 @@ final class TraceHelperController {
         connection?.interruptionHandler = nil
         connection?.invalidate()
         connection = nil
+    }
+
+    private var packagedServiceIsPresent: Bool {
+        let directory = Bundle.main.bundleURL
+            .appending(path: "Contents/Library/LaunchDaemons", directoryHint: .isDirectory)
+        let plist = directory.appending(
+            path: TraceHelperProtocolConfiguration.launchDaemonPlistName,
+            directoryHint: .notDirectory
+        )
+        let executable = directory.appending(
+            path: TraceHelperProtocolConfiguration.machServiceName,
+            directoryHint: .notDirectory
+        )
+        return FileManager.default.fileExists(atPath: plist.path)
+            && FileManager.default.isExecutableFile(atPath: executable.path)
     }
 }

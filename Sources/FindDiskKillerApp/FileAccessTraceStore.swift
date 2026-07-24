@@ -166,17 +166,24 @@ final class FileAccessTraceStore {
     @ObservationIgnored private var sessionID: String?
     @ObservationIgnored private var lastListUpdate = Date.distantPast
     @ObservationIgnored private var lastChartPoint = Date.distantPast
+    @ObservationIgnored private var hasPendingStartIntent = false
+    @ObservationIgnored private var attemptedRegistrationForIntent = false
 
     var isRunning: Bool { state == .running || state == .starting }
 
     func refreshPermissionStatus() {
         helper.refreshStatus()
         guard selection != nil, !isRunning else { return }
-        state = stateForHelper()
+        if hasPendingStartIntent {
+            advancePendingStart(allowRegistration: false)
+        } else {
+            state = stateForHelper()
+        }
     }
 
     func select(_ url: URL) {
         guard !isRunning else { return }
+        cancelPendingStart()
         do {
             selection = try FileAccessTraceSelection.make(url: url)
             resetMeasurements()
@@ -189,8 +196,9 @@ final class FileAccessTraceStore {
 
     func requestPermission() {
         guard selection != nil, !isRunning else { return }
-        helper.requestRegistration()
-        state = stateForHelper()
+        hasPendingStartIntent = true
+        attemptedRegistrationForIntent = false
+        advancePendingStart(allowRegistration: true)
     }
 
     func openApprovalSettings() {
@@ -198,16 +206,74 @@ final class FileAccessTraceStore {
     }
 
     func start() {
-        guard let selection, !isRunning else { return }
-        helper.refreshStatus()
-        guard helper.state == .enabled || helper.state == .ready else {
-            state = stateForHelper()
-            return
-        }
+        guard selection != nil, !isRunning else { return }
+        hasPendingStartIntent = true
+        attemptedRegistrationForIntent = false
+        advancePendingStart(allowRegistration: true)
+    }
 
+    func beginTracing(_ url: URL) {
+        guard !isRunning else { return }
+        let standardizedURL = url.standardizedFileURL
+        if selection?.url.standardizedFileURL.path != standardizedURL.path {
+            select(standardizedURL)
+        }
+        guard selection?.url.standardizedFileURL.path == standardizedURL.path else { return }
+        start()
+    }
+
+    private func advancePendingStart(allowRegistration: Bool) {
+        guard hasPendingStartIntent, selection != nil, !isRunning else { return }
+        helper.refreshStatus()
+        switch helper.state {
+        case .enabled, .ready:
+            launchTrace()
+        case .requiresApproval:
+            state = .waitingForApproval
+        case .notRegistered, .notFound:
+            guard allowRegistration, !attemptedRegistrationForIntent else {
+                state = stateForHelper()
+                return
+            }
+            attemptedRegistrationForIntent = true
+            helper.requestRegistration()
+            if helper.state == .requiresApproval {
+                state = .waitingForApproval
+                helper.openLoginItemsSettings()
+            } else if helper.state == .enabled || helper.state == .ready {
+                launchTrace()
+            } else {
+                state = stateForHelper()
+                if case .failed = state {
+                    cancelPendingStart()
+                }
+            }
+        case .connecting:
+            state = .ready
+        case .protocolMismatch, .connectionUnavailable, .operationFailed:
+            state = stateForHelper()
+            cancelPendingStart()
+        }
+    }
+
+    private func launchTrace() {
+        guard let selection, hasPendingStartIntent, !isRunning else { return }
+        hasPendingStartIntent = false
+        attemptedRegistrationForIntent = false
         resetMeasurements()
         let now = Date()
         startedAt = now
+        requestedReadBytes = 0
+        requestedWriteBytes = 0
+        currentReadBytesPerSecond = 0
+        currentWriteBytesPerSecond = 0
+        peakReadBytesPerSecond = 0
+        peakWriteBytesPerSecond = 0
+        ratePoints = [FileAccessTraceRatePoint(
+            timestamp: now,
+            readBytesPerSecond: 0,
+            writeBytesPerSecond: 0
+        )]
         engine = FileAccessTraceEngine(target: selection.target, startedAt: now)
         state = .starting
         drainTask?.cancel()
@@ -232,6 +298,7 @@ final class FileAccessTraceStore {
 
     func stop() {
         guard isRunning else { return }
+        cancelPendingStart()
         let sessionID = sessionID
         drainTask?.cancel()
         drainTask = nil
@@ -246,6 +313,7 @@ final class FileAccessTraceStore {
 
     func clear() {
         guard !isRunning else { return }
+        cancelPendingStart()
         stopDetachedSessionIfNeeded()
         resetMeasurements()
         state = selection == nil ? .noTarget : stateForHelper()
@@ -253,6 +321,7 @@ final class FileAccessTraceStore {
 
     func removeTarget() {
         guard !isRunning else { return }
+        cancelPendingStart()
         stopDetachedSessionIfNeeded()
         selection = nil
         resetMeasurements()
@@ -380,5 +449,10 @@ final class FileAccessTraceStore {
         guard let sessionID else { return }
         self.sessionID = nil
         Task { try? await helper.stopTrace(sessionID: sessionID) }
+    }
+
+    private func cancelPendingStart() {
+        hasPendingStartIntent = false
+        attemptedRegistrationForIntent = false
     }
 }

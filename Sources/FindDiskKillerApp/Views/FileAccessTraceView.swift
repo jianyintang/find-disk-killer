@@ -193,11 +193,8 @@ struct FileAccessTraceView: View {
             Button(L10n.text("启用追踪"), action: store.requestPermission)
                 .buttonStyle(.borderedProminent)
         case .waitingForApproval:
-            HStack(spacing: 8) {
-                Button(L10n.text("重新检查"), action: store.refreshPermissionStatus)
-                Button(L10n.text("打开登录项设置"), action: store.openApprovalSettings)
-                    .buttonStyle(.borderedProminent)
-            }
+            Button(L10n.text("打开登录项设置"), action: store.openApprovalSettings)
+                .buttonStyle(.borderedProminent)
         case .failed:
             Button(L10n.text("重新检查"), action: store.refreshPermissionStatus)
         default:
@@ -317,7 +314,7 @@ struct FileAccessTraceView: View {
         case .permissionRequired:
             L10n.text("点击启用后，macOS 会请求一次管理员确认。FindDiskKiller 不会在后台自行申请。")
         case .waitingForApproval:
-            L10n.text("在“登录项与扩展”中允许 FindDiskKiller 后返回这里，点击重新检查。")
+            L10n.text("在“登录项与扩展”中允许 FindDiskKiller 后返回这里，追踪会自动开始。")
         case .unsupportedFormat:
             L10n.text("为了避免显示看似精确但含义错误的数字，本次结果已停止统计。")
         case .failed:

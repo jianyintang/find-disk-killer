@@ -313,7 +313,7 @@
 "停止追踪" = "Detener seguimiento";
 "准备就绪" = "Listo";
 "启用追踪" = "Activar seguimiento";
-"在“登录项与扩展”中允许 FindDiskKiller 后返回这里，点击重新检查。" = "Permite FindDiskKiller en «Ítems de inicio y extensiones», vuelve aquí y haz clic en «Comprobar de nuevo».";
+"在“登录项与扩展”中允许 FindDiskKiller 后返回这里，追踪会自动开始。" = "Permite FindDiskKiller en «Ítems de inicio y extensiones» y vuelve aquí. El seguimiento comenzará automáticamente.";
 "完整路径不会上传或默认保存。开始追踪前不会申请管理员批准。" = "Las rutas completas no se suben ni se guardan de forma predeterminada. La aprobación del administrador solo se solicita al iniciar el seguimiento.";
 "尚未开始" = "Sin iniciar";
 "已停止" = "Detenido";

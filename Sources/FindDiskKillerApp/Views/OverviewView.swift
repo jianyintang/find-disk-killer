@@ -1769,11 +1769,22 @@ private struct ProcessFileActivityView: View {
             return
         }
         let url = URL(fileURLWithPath: row.path, isDirectory: true).standardizedFileURL
-        if !isActiveTraceTarget(row) {
+        let isExistingTarget = isActiveTraceTarget(row)
+        if !isExistingTarget {
             traceStore.select(url)
         }
         guard traceStore.selection?.url.standardizedFileURL.path == url.path else { return }
         tracedPath = url.path
+        let shouldBegin = !isExistingTarget || (
+            traceStore.startedAt == nil && traceStore.state != .waitingForApproval
+        )
+        guard shouldBegin else { return }
+        Task { @MainActor in
+            // Commit the workspace transition before Service Management performs
+            // registration so the click always has immediate visual feedback.
+            await Task.yield()
+            traceStore.start()
+        }
     }
 
     @ViewBuilder

@@ -7,7 +7,7 @@
         <string>com.jianyintang.FindDiskKiller</string>
     </array>
     <key>BundleProgram</key>
-    <string>Contents/Library/LaunchServices/com.jianyintang.FindDiskKiller.TraceHelper</string>
+    <string>Contents/Library/LaunchDaemons/com.jianyintang.FindDiskKiller.TraceHelper</string>
     <key>Label</key>
     <string>com.jianyintang.FindDiskKiller.TraceHelper</string>
     <key>MachServices</key>
@@ -19,4 +19,3 @@
     <string>Adaptive</string>
 </dict>
 </plist>
-
