@@ -27,10 +27,10 @@
 		B878AAEF8FDB35BB9B078B31 /* FileAccessTraceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A3C91E9D097BF60792BFA1D /* FileAccessTraceView.swift */; };
 		BC3E000C2202C14A4B4919C6 /* FindDiskKillerTraceProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = C4C6752601A90F75FCAC330C /* FindDiskKillerTraceProtocol */; };
 		BD8828B6911CFC4D4E24E5CB /* CFindDiskKillerTrace in Frameworks */ = {isa = PBXBuildFile; productRef = E51665319183E47877DA0458 /* CFindDiskKillerTrace */; };
+		BED81DF72719B8136B7FB922 /* FindDiskKiller.icns in Resources */ = {isa = PBXBuildFile; fileRef = 73D1E9A8CB4ED5D09C2B90D7 /* FindDiskKiller.icns */; };
 		C17D460138BAAD4608FB55FC /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 397BF22044FB3F231AE3EF11 /* SettingsView.swift */; };
 		C58B53F593260693F3CBADD7 /* ProcessHoverCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C5B6D633FF601F496BFED97 /* ProcessHoverCard.swift */; };
 		CB385437F19C8B95DB52B8A0 /* FindDiskKillerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5425128EC43659859EFFB0 /* FindDiskKillerApp.swift */; };
-		CF6BD1D91FA624032033C460 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 240D70355C753FFE1EEDBC42 /* Assets.xcassets */; };
 		D13AE54F2957B4238E2008D4 /* com.jianyintang.FindDiskKiller.TraceHelper.plist in CopyFiles */ = {isa = PBXBuildFile; fileRef = 0EC9EF0D9A07E6D818C8D2BF /* com.jianyintang.FindDiskKiller.TraceHelper.plist */; };
 		D8E39C8B0F6523922443851B /* MenuBarPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5CA4BCE3E2500A9F4B1027 /* MenuBarPanel.swift */; };
 		E25BC097CC890DF89F578E08 /* ProcessIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10F875FFF3EC9D9FECC30CD /* ProcessIcon.swift */; };
@@ -82,7 +82,6 @@
 		19522173F0ADEF7848BBB1F9 /* claude-code.svg */ = {isa = PBXFileReference; path = "claude-code.svg"; sourceTree = "<group>"; };
 		195FD2EA225982A5C2A7D542 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		1F0023EE9E80BF9FD710B334 /* FileAccessTraceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileAccessTraceStore.swift; sourceTree = "<group>"; };
-		240D70355C753FFE1EEDBC42 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		397BF22044FB3F231AE3EF11 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		3C5B6D633FF601F496BFED97 /* ProcessHoverCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessHoverCard.swift; sourceTree = "<group>"; };
 		457028605863AA4C13E784A4 /* ProcessesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessesView.swift; sourceTree = "<group>"; };
@@ -95,6 +94,7 @@
 		68194E3D67F4FC76209C94C2 /* claude-code.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "claude-code.png"; sourceTree = "<group>"; };
 		6E35F5D951DD72C76FB62E50 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
 		73A1B95E2CC7DE4E5687DCDC /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/Localizable.strings; sourceTree = "<group>"; };
+		73D1E9A8CB4ED5D09C2B90D7 /* FindDiskKiller.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = FindDiskKiller.icns; sourceTree = "<group>"; };
 		7B45AA78FCDDF1D3E2E56551 /* OverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewView.swift; sourceTree = "<group>"; };
 		7BB11F2EFC76CFC186F5A935 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		7F13AE24E17E72270635D523 /* DisksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisksView.swift; sourceTree = "<group>"; };
@@ -138,11 +138,11 @@
 		06371809CAAB4D69E2CA353B /* Resources */ = {
 			isa = PBXGroup;
 			children = (
-				240D70355C753FFE1EEDBC42 /* Assets.xcassets */,
 				68194E3D67F4FC76209C94C2 /* claude-code.png */,
 				19522173F0ADEF7848BBB1F9 /* claude-code.svg */,
 				D8EBB20F5BF3CF0CE623067C /* codex-openai.png */,
 				557B99818141A5F6C7641804 /* codex-openai.svg */,
+				73D1E9A8CB4ED5D09C2B90D7 /* FindDiskKiller.icns */,
 				710BED35EF73FDAAD7FBB024 /* Localizable.strings */,
 				DEAF50A4052D9A28723D4E58 /* THIRD_PARTY_ASSETS.md */,
 			);
@@ -342,7 +342,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				CF6BD1D91FA624032033C460 /* Assets.xcassets in Resources */,
+				BED81DF72719B8136B7FB922 /* FindDiskKiller.icns in Resources */,
 				EC249E190109F76E7790D340 /* Localizable.strings in Resources */,
 				149AD03F0F95F5953BC2472D /* THIRD_PARTY_ASSETS.md in Resources */,
 				99192C06F8FEEAE121E9322F /* claude-code.png in Resources */,
@@ -441,10 +441,10 @@
 		83337EB51E4852E4E12E32F7 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
 				CODE_SIGN_ENTITLEMENTS = AppConfig/FindDiskKiller.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				INFOPLIST_FILE = "AppConfig/FindDiskKiller-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -548,10 +548,10 @@
 		AF8907EAC6DB470D1EB25E24 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
 				CODE_SIGN_ENTITLEMENTS = AppConfig/FindDiskKiller.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				INFOPLIST_FILE = "AppConfig/FindDiskKiller-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

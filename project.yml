@@ -52,6 +52,7 @@ targets:
       properties:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: FindDiskKiller
+        CFBundleIconFile: FindDiskKiller
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.utilities
@@ -63,10 +64,10 @@ targets:
       path: AppConfig/FindDiskKiller.entitlements
     settings:
       base:
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
         PRODUCT_BUNDLE_IDENTIFIER: com.jianyintang.FindDiskKiller
         PRODUCT_NAME: FindDiskKiller
-        CURRENT_PROJECT_VERSION: "2"
+        CURRENT_PROJECT_VERSION: "3"
         MARKETING_VERSION: 0.1.0
     dependencies:
       - package: FindDiskKillerPackage
