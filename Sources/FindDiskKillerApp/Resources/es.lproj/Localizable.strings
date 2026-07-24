@@ -365,3 +365,13 @@
 "需要启用文件访问追踪" = "Es necesario activar el seguimiento de acceso a archivos";
 "需要处理" = "Requiere atención";
 "系统追踪提前结束，已有结果可能不完整" = "El seguimiento del sistema terminó antes de tiempo. Los resultados existentes pueden estar incompletos.";
+"返回文件活动" = "Volver a Actividad de archivos";
+"目录读写追踪" = "Seguimiento de E/S de carpeta";
+"这里会记录此目录内所有应用向系统请求的读写，不只限于 %@；请在下方“访问应用”中确认实际参与者。" = "Se registran las solicitudes de lectura y escritura de todas las apps en esta carpeta, no solo de %@. Consulta Apps con acceso para ver cuáles participaron.";
+"目录追踪正在运行" = "El seguimiento de la carpeta está activo";
+"查看追踪" = "Ver seguimiento";
+"打开当前目录的读写追踪详情" = "Abrir los detalles de lectura y escritura de la carpeta actual";
+"追踪此目录" = "Seguir esta carpeta";
+"查看此目录内具体的请求读写、活跃文件和访问应用" = "Ver solicitudes detalladas de lectura y escritura, archivos activos y apps con acceso";
+"请先停止当前目录的追踪" = "Detén primero el seguimiento de la carpeta actual";
+"查看详细活动" = "Ver actividad detallada";

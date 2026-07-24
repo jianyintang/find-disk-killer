@@ -3,7 +3,6 @@ import SwiftUI
 
 struct DisksView: View {
     let store: MonitorStore
-    let fileAccessTrace: FileAccessTraceStore
     @State private var showHardwareDetails = true
     @State private var selectedMode: DiskPageMode = .activity
     @State private var selectedHealthDisk: String?
@@ -18,7 +17,7 @@ struct DisksView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 390)
+                .frame(width: 260)
                 Spacer()
                 if selectedMode == .health {
                     Button {
@@ -45,8 +44,6 @@ struct DisksView: View {
                 activityContent
             case .health:
                 healthContent
-            case .trace:
-                FileAccessTraceView(store: fileAccessTrace)
             }
         }
         .task(id: healthDevices) {
@@ -280,14 +277,12 @@ struct DisksView: View {
 private enum DiskPageMode: String, CaseIterable, Identifiable {
     case activity
     case health
-    case trace
 
     var id: String { rawValue }
     var title: String {
         switch self {
         case .activity: L10n.text("实时活动")
         case .health: L10n.text("磁盘健康")
-        case .trace: L10n.text("文件访问追踪")
         }
     }
 }

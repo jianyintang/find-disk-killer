@@ -365,3 +365,13 @@
 "需要启用文件访问追踪" = "Le suivi des accès aux fichiers doit être activé";
 "需要处理" = "Action requise";
 "系统追踪提前结束，已有结果可能不完整" = "Le suivi système s’est arrêté prématurément. Les résultats existants peuvent être incomplets.";
+"返回文件活动" = "Retour à l’activité des fichiers";
+"目录读写追踪" = "Suivi des E/S du dossier";
+"这里会记录此目录内所有应用向系统请求的读写，不只限于 %@；请在下方“访问应用”中确认实际参与者。" = "Les demandes de lecture et d’écriture de toutes les apps dans ce dossier sont enregistrées, pas seulement celles de %@. Consultez « Apps ayant accédé » pour identifier les participantes.";
+"目录追踪正在运行" = "Le suivi du dossier est en cours";
+"查看追踪" = "Afficher le suivi";
+"打开当前目录的读写追踪详情" = "Ouvrir le détail des lectures et écritures du dossier actuel";
+"追踪此目录" = "Suivre ce dossier";
+"查看此目录内具体的请求读写、活跃文件和访问应用" = "Afficher les demandes détaillées, les fichiers actifs et les apps ayant accédé au dossier";
+"请先停止当前目录的追踪" = "Arrêtez d’abord le suivi du dossier actuel";
+"查看详细活动" = "Afficher l’activité détaillée";

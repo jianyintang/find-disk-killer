@@ -945,6 +945,7 @@ struct ProcessDetailSheet: View {
     @State private var chartsReady = false
     @State private var isProcessAvailable = true
     @State private var selectedSection: ProcessDetailSection = .overview
+    @State private var fileAccessTrace = FileAccessTraceStore()
     @AccessibilityFocusState private var headerIsFocused: Bool
 
     init(
@@ -1068,10 +1069,17 @@ struct ProcessDetailSheet: View {
                     .padding(18)
                 }
             } else {
-                ProcessFileActivityView(process: process, volumes: store.volumes)
+                ProcessFileActivityView(
+                    process: process,
+                    volumes: store.volumes,
+                    traceStore: fileAccessTrace
+                )
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onDisappear {
+            fileAccessTrace.stop()
+        }
     }
 
     private func processChartSection(
@@ -1205,6 +1213,7 @@ private enum FileActivitySort: String, CaseIterable, Identifiable {
 private struct ProcessFileActivityView: View {
     let process: ProcessActivity
     let volumes: [VolumeInfo]
+    let traceStore: FileAccessTraceStore
     @State private var snapshot: OpenFileSnapshot?
     @State private var rows: [FileAccessDirectory] = []
     @State private var fileChangesHaveGap = false
@@ -1218,19 +1227,35 @@ private struct ProcessFileActivityView: View {
     @State private var monitoredSessions: [ProcessSession]
     @State private var monitoredVolumes: [VolumeInfo]
     @State private var isFileActivityHelpPresented = false
+    @State private var tracedPath: String?
 
-    init(process: ProcessActivity, volumes: [VolumeInfo]) {
+    init(
+        process: ProcessActivity,
+        volumes: [VolumeInfo],
+        traceStore: FileAccessTraceStore
+    ) {
         self.process = process
         self.volumes = volumes
+        self.traceStore = traceStore
         _monitoredSessions = State(initialValue: process.sessions)
         _monitoredVolumes = State(initialValue: volumes)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            fileActivityHeader
-            Divider()
-            fileActivityContent
+        Group {
+            if tracedPath != nil {
+                FileAccessTraceView(
+                    store: traceStore,
+                    contextProcessName: process.localizedDisplayName,
+                    onBack: { tracedPath = nil }
+                )
+            } else {
+                VStack(spacing: 0) {
+                    fileActivityHeader
+                    Divider()
+                    fileActivityContent
+                }
+            }
         }
         .task {
             let lease = await FileChangeWatcher.shared.beginSession(volumes: monitoredVolumes)
@@ -1316,9 +1341,55 @@ private struct ProcessFileActivityView: View {
                 Spacer()
                 observationSummary
             }
+
+            if traceStore.selection != nil {
+                traceSessionShortcut
+            }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
+    }
+
+    private var traceSessionShortcut: some View {
+        Button {
+            tracedPath = traceStore.selection?.url.path
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: traceStore.isRunning ? "scope" : "clock.arrow.circlepath")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(traceStore.isRunning ? Color.green : Color.accentColor)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        (traceStore.isRunning ? Color.green : Color.accentColor).opacity(0.1),
+                        in: RoundedRectangle(cornerRadius: 6)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.text(traceStore.isRunning ? "目录追踪正在运行" : "目录读写追踪"))
+                        .font(.callout.weight(.semibold))
+                    Text(traceStore.selection?.privatePath ?? "")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 12)
+                Text(L10n.text("查看追踪"))
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(Color.accentColor)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(Color.accentColor.opacity(0.045))
+        .overlay(alignment: .leading) {
+            Rectangle().fill(Color.accentColor).frame(width: 3)
+        }
+        .accessibilityHint(L10n.text("打开当前目录的读写追踪详情"))
     }
 
     @ViewBuilder
@@ -1441,7 +1512,11 @@ private struct ProcessFileActivityView: View {
                 LazyVStack(spacing: 0) {
                     ForEach(filteredRows) { row in
                         Button {
-                            selectedPath = row.id
+                            if shouldOpenTraceFromRow(row) {
+                                openTrace(row)
+                            } else {
+                                selectedPath = row.id
+                            }
                         } label: {
                             FileLocationRow(
                                 row: row,
@@ -1450,7 +1525,10 @@ private struct ProcessFileActivityView: View {
                                     ? accessDescription(row.modes)
                                     : L10n.text("当前未打开"),
                                 isWritable: isWritable(row),
-                                isSelected: selectedPath == row.id
+                                isSelected: selectedPath == row.id,
+                                showsTraceAction: shouldOpenTraceFromRow(row),
+                                isTraceTarget: isActiveTraceTarget(row),
+                                isTraceRunning: isActiveTraceTarget(row) && traceStore.isRunning
                             )
                         }
                         .buttonStyle(.plain)
@@ -1487,6 +1565,19 @@ private struct ProcessFileActivityView: View {
                                 .textSelection(.enabled)
                         }
                         Spacer(minLength: 12)
+                        Button {
+                            openTrace(selectedRow)
+                        } label: {
+                            Label(L10n.text("追踪此目录"), systemImage: "scope")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(!canOpenTrace(selectedRow))
+                        .help(L10n.text(
+                            canOpenTrace(selectedRow)
+                                ? "查看此目录内具体的请求读写、活跃文件和访问应用"
+                                : "请先停止当前目录的追踪"
+                        ))
                         Button {
                             copyPath(selectedRow.path)
                         } label: {
@@ -1639,6 +1730,13 @@ private struct ProcessFileActivityView: View {
     @ViewBuilder
     private func fileLocationActions(_ row: FileAccessDirectory) -> some View {
         Button {
+            openTrace(row)
+        } label: {
+            Label(L10n.text("追踪此目录"), systemImage: "scope")
+        }
+        .disabled(!canOpenTrace(row))
+        Divider()
+        Button {
             revealInFinder(row.path)
         } label: {
             Label(L10n.text("在 Finder 中显示"), systemImage: "folder")
@@ -1657,6 +1755,32 @@ private struct ProcessFileActivityView: View {
     private func copyPath(_ path: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(path, forType: .string)
+    }
+
+    private func shouldOpenTraceFromRow(_ row: FileAccessDirectory) -> Bool {
+        filter == .changed && row.lastChangedAt != nil && canOpenTrace(row)
+    }
+
+    private func canOpenTrace(_ row: FileAccessDirectory) -> Bool {
+        !traceStore.isRunning || isActiveTraceTarget(row)
+    }
+
+    private func isActiveTraceTarget(_ row: FileAccessDirectory) -> Bool {
+        traceStore.selection?.url.standardizedFileURL.path
+            == URL(fileURLWithPath: row.path).standardizedFileURL.path
+    }
+
+    private func openTrace(_ row: FileAccessDirectory) {
+        guard canOpenTrace(row) else {
+            selectedPath = row.id
+            return
+        }
+        let url = URL(fileURLWithPath: row.path, isDirectory: true).standardizedFileURL
+        if !isActiveTraceTarget(row) {
+            traceStore.select(url)
+        }
+        guard traceStore.selection?.url.standardizedFileURL.path == url.path else { return }
+        tracedPath = url.path
     }
 
     @ViewBuilder
@@ -1933,6 +2057,9 @@ private struct FileLocationRow: View {
     let access: String
     let isWritable: Bool
     let isSelected: Bool
+    let showsTraceAction: Bool
+    let isTraceTarget: Bool
+    let isTraceRunning: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1969,8 +2096,6 @@ private struct FileLocationRow: View {
             Spacer(minLength: 8)
             if let lastChangedAt = row.lastChangedAt {
                 VStack(alignment: .trailing, spacing: 3) {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .foregroundStyle(.purple)
                     Text(L10n.format(
                         "修改于 %@",
                         lastChangedAt.formatted(date: .omitted, time: .standard)
@@ -1979,6 +2104,22 @@ private struct FileLocationRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
+                    if showsTraceAction || isTraceTarget {
+                        Label(
+                            L10n.text(
+                                isTraceRunning
+                                    ? "追踪中"
+                                    : (isTraceTarget ? "查看追踪" : "查看详细活动")
+                            ),
+                            systemImage: isTraceRunning ? "scope" : "chevron.right"
+                        )
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(isTraceRunning ? Color.green : Color.accentColor)
+                        .lineLimit(1)
+                    } else {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .foregroundStyle(.purple)
+                    }
                 }
             } else {
                 Image(systemName: "chevron.right")

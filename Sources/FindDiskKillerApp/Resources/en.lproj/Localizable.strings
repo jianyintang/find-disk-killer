@@ -365,3 +365,13 @@
 "需要启用文件访问追踪" = "File access tracing needs to be enabled";
 "需要处理" = "Needs attention";
 "系统追踪提前结束，已有结果可能不完整" = "System tracing ended early. Existing results may be incomplete.";
+"返回文件活动" = "Back to File Activity";
+"目录读写追踪" = "Folder I/O Trace";
+"这里会记录此目录内所有应用向系统请求的读写，不只限于 %@；请在下方“访问应用”中确认实际参与者。" = "This records read and write requests from every app in this folder, not just %@. Check Accessing Apps below to see which apps participated.";
+"目录追踪正在运行" = "Folder trace is running";
+"查看追踪" = "View trace";
+"打开当前目录的读写追踪详情" = "Open read and write trace details for the current folder";
+"追踪此目录" = "Trace this folder";
+"查看此目录内具体的请求读写、活跃文件和访问应用" = "View detailed read and write requests, active files, and apps accessing this folder";
+"请先停止当前目录的追踪" = "Stop the current folder trace first";
+"查看详细活动" = "View detailed activity";

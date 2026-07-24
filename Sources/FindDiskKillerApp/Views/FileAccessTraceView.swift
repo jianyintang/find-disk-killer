@@ -5,6 +5,18 @@ import SwiftUI
 
 struct FileAccessTraceView: View {
     let store: FileAccessTraceStore
+    let contextProcessName: String?
+    let onBack: (() -> Void)?
+
+    init(
+        store: FileAccessTraceStore,
+        contextProcessName: String? = nil,
+        onBack: (() -> Void)? = nil
+    ) {
+        self.store = store
+        self.contextProcessName = contextProcessName
+        self.onBack = onBack
+    }
 
     var body: some View {
         Group {
@@ -23,16 +35,57 @@ struct FileAccessTraceView: View {
     }
 
     private var traceWorkspace: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 22) {
-                targetHeader
-                if needsStatusBand { statusBand }
-                measurementRail
-                TraceRateChart(points: store.ratePoints)
-                traceTables
-                semanticsNote
+        VStack(spacing: 0) {
+            if let onBack {
+                HStack(spacing: 12) {
+                    Button(action: onBack) {
+                        Label(L10n.text("返回文件活动"), systemImage: "chevron.left")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                    Spacer()
+                    Text(L10n.text("目录读写追踪"))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 18)
+                .frame(height: 44)
+                Divider()
             }
-            .padding(22)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 22) {
+                    targetHeader
+                    if contextProcessName != nil { applicationContextNote }
+                    if needsStatusBand { statusBand }
+                    measurementRail
+                    TraceRateChart(points: store.ratePoints)
+                    traceTables
+                    semanticsNote
+                }
+                .padding(22)
+            }
+        }
+    }
+
+    private var applicationContextNote: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "scope")
+                .foregroundStyle(Color.accentColor)
+            Text(L10n.format(
+                "这里会记录此目录内所有应用向系统请求的读写，不只限于 %@；请在下方“访问应用”中确认实际参与者。",
+                contextProcessName ?? ""
+            ))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.accentColor.opacity(0.055))
+        .overlay(alignment: .leading) {
+            Rectangle().fill(Color.accentColor).frame(width: 3)
         }
     }
 
@@ -65,10 +118,12 @@ struct FileAccessTraceView: View {
 
     private var traceActions: some View {
         HStack(spacing: 8) {
-            Button(action: chooseTarget) {
-                Label(L10n.text("更换目标"), systemImage: "folder.badge.gearshape")
+            if onBack == nil {
+                Button(action: chooseTarget) {
+                    Label(L10n.text("更换目标"), systemImage: "folder.badge.gearshape")
+                }
+                .disabled(store.isRunning)
             }
-            .disabled(store.isRunning)
 
             if store.isRunning {
                 Button(role: .destructive, action: store.stop) {
@@ -91,10 +146,12 @@ struct FileAccessTraceView: View {
                     Label(L10n.text("清除本次结果"), systemImage: "eraser")
                 }
                 .disabled(store.isRunning || store.startedAt == nil)
-                Button(action: store.removeTarget) {
-                    Label(L10n.text("移除目标"), systemImage: "xmark")
+                if onBack == nil {
+                    Button(action: store.removeTarget) {
+                        Label(L10n.text("移除目标"), systemImage: "xmark")
+                    }
+                    .disabled(store.isRunning)
                 }
-                .disabled(store.isRunning)
             } label: {
                 Image(systemName: "ellipsis")
             }

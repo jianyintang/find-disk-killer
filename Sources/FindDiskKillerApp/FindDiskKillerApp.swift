@@ -7,7 +7,6 @@ struct FindDiskKillerApp: App {
     @NSApplicationDelegateAdaptor(FindDiskKillerApplicationDelegate.self) private var appDelegate
     @State private var store = MonitorStore()
     @State private var processDetailWindows = ProcessDetailWindowCoordinator()
-    @State private var fileAccessTrace = FileAccessTraceStore()
     @AppStorage("showRateInMenuBar") private var showRateInMenuBar = true
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.system.rawValue
 
@@ -15,14 +14,12 @@ struct FindDiskKillerApp: App {
         Window("FindDiskKiller", id: "main") {
             RootView(
                 store: store,
-                processDetailWindows: processDetailWindows,
-                fileAccessTrace: fileAccessTrace
+                processDetailWindows: processDetailWindows
             )
                 .frame(minWidth: 920, minHeight: 620)
                 .environment(\.locale, Locale(identifier: selectedLanguage.localeIdentifier))
                 .id(appLanguage)
                 .task {
-                    fileAccessTrace.refreshPermissionStatus()
                     store.start()
                 }
         }
