@@ -101,6 +101,30 @@ struct FindDiskKillerApp: App {
 
 final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if CommandLine.arguments.contains("--unregister-trace-helper") {
+            NSApp.setActivationPolicy(.prohibited)
+            Task { @MainActor in
+                let controller = TraceHelperController()
+                controller.unregister()
+                print("trace-helper-unregister=\(controller.state)")
+                NSApp.terminate(nil)
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--repair-trace-helper") {
+            NSApp.setActivationPolicy(.prohibited)
+            Task { @MainActor in
+                let controller = TraceHelperController()
+                do {
+                    try controller.repairService()
+                    print("trace-helper-repair=\(controller.state)")
+                } catch {
+                    print("trace-helper-repair-failure=\(error)")
+                }
+                NSApp.terminate(nil)
+            }
+            return
+        }
         NSApp.setActivationPolicy(.regular)
     }
 }
