@@ -14,6 +14,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
       - name: Test
         run: swift test
       - name: Install XcodeGen

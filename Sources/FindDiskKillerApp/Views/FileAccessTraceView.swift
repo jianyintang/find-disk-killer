@@ -927,6 +927,7 @@ private struct TraceProcessIcon: View {
     }
 }
 
+@MainActor
 private func tableHeading(_ title: String, count: Int, symbol: String) -> some View {
     HStack(spacing: 8) {
         Image(systemName: symbol).foregroundStyle(.secondary)
