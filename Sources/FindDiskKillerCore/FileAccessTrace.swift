@@ -44,10 +44,6 @@ public enum FileAccessTraceParser {
         "write", "pwrite", "writev", "pwritev",
         "write_nocancel", "pwrite_nocancel", "writev_nocancel", "pwritev_nocancel"
     ]
-    private static let errnoExpression = try? NSRegularExpression(
-        pattern: #"\[\s*\d+\]"#
-    )
-
     public static func recognizesHeader(_ line: String) -> Bool {
         let value = line.uppercased()
         return value.contains("TIMESTAMP")
@@ -82,10 +78,14 @@ public enum FileAccessTraceParser {
             return .ignored
         }
 
+        // Failed fs_usage calls can omit B= entirely and place a standalone
+        // errno marker after F= (for example: `read F=4 [ 2] ...`). They are
+        // valid rows but contribute no measurable requested bytes.
+        if containsStandaloneErrno(fields: fields) { return .failedCall }
+
         guard let byteIndex = fields.firstIndex(where: { $0.hasPrefix("B=") }),
               let requestedBytes = parseUnsigned(String(fields[byteIndex].dropFirst(2)))
         else { return .unsupportedFormat }
-        if containsErrno(fields: fields, after: byteIndex) { return .failedCall }
 
         guard let durationIndex = fields.indices.reversed().first(where: {
                 $0 > byteIndex && $0 < fields.count - 1 && isDuration(fields[$0])
@@ -173,15 +173,27 @@ public enum FileAccessTraceParser {
         return UInt64(value)
     }
 
-    private static func containsErrno(fields: [String], after byteIndex: Int) -> Bool {
-        guard let expression = errnoExpression else { return true }
-        let start = byteIndex + 1
-        guard start < fields.count else { return false }
-        let end = min(fields.count, start + 2)
-        let value = fields[start..<end].joined(separator: " ")
-        let range = NSRange(value.startIndex..<value.endIndex, in: value)
-        guard let match = expression.firstMatch(in: value, range: range) else { return false }
-        return match.range.location == 0
+    private static func containsStandaloneErrno(fields: [String]) -> Bool {
+        guard fields.count > 2 else { return false }
+        for index in 2..<fields.count {
+            guard index > 0,
+                  fields[index - 1].hasPrefix("F=") || fields[index - 1].hasPrefix("B=")
+            else { continue }
+            let field = fields[index]
+            if field.first == "[", field.last == "]",
+               !field.dropFirst().dropLast().isEmpty,
+               field.dropFirst().dropLast().allSatisfy(\.isNumber) {
+                return true
+            }
+            if field == "[", index + 1 < fields.count {
+                let suffix = fields[index + 1]
+                if suffix.last == "]", !suffix.dropLast().isEmpty,
+                   suffix.dropLast().allSatisfy(\.isNumber) {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     private static func parseProcessField(_ value: String) -> (label: String, threadID: UInt64)? {

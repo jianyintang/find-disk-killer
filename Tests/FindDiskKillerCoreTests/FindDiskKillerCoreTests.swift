@@ -173,6 +173,8 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
 
     let failed = "01:02:03.000001 write F=4 B=32 [ 28] /tmp/trace 0.000010 Tool.7"
     #expect(FileAccessTraceParser.parse(line: failed, on: day) == .failedCall)
+    let failedWithoutByteCount = "01:02:03.000001 read F=4 [ 2] 0.000010 Tool.7"
+    #expect(FileAccessTraceParser.parse(line: failedWithoutByteCount, on: day) == .failedCall)
 
     let truncated = "01:02:03.000001 read F=4 B=32 .../tail/file 0.000010 Tool.7"
     guard case .event(let truncatedEvent) = FileAccessTraceParser.parse(
@@ -227,6 +229,12 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
         Issue.record("Expected a validated row to establish the piped format")
         return
     }
+    #expect(missingHeader.state == .parsing)
+
+    #expect(missingHeader.consume(
+        line: "01:02:03.000002 read F=4 [ 2] 0.000010 Tool.7",
+        on: day
+    ) == .failedCall)
     #expect(missingHeader.state == .parsing)
 
     var malformedData = FileAccessTraceStreamParser()
