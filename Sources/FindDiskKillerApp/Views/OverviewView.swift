@@ -1512,11 +1512,7 @@ private struct ProcessFileActivityView: View {
                 LazyVStack(spacing: 0) {
                     ForEach(filteredRows) { row in
                         Button {
-                            if shouldOpenTraceFromRow(row) {
-                                openTrace(row)
-                            } else {
-                                selectedPath = row.id
-                            }
+                            selectedPath = row.id
                         } label: {
                             FileLocationRow(
                                 row: row,
@@ -1526,8 +1522,6 @@ private struct ProcessFileActivityView: View {
                                     : L10n.text("当前未打开"),
                                 isWritable: isWritable(row),
                                 isSelected: selectedPath == row.id,
-                                showsTraceAction: shouldOpenTraceFromRow(row),
-                                isTraceTarget: isActiveTraceTarget(row),
                                 isTraceRunning: isActiveTraceTarget(row) && traceStore.isRunning
                             )
                         }
@@ -1568,7 +1562,10 @@ private struct ProcessFileActivityView: View {
                         Button {
                             openTrace(selectedRow)
                         } label: {
-                            Label(L10n.text("追踪此目录"), systemImage: "scope")
+                            Label(
+                                L10n.text(isActiveTraceTarget(selectedRow) ? "查看追踪" : "追踪此目录"),
+                                systemImage: "scope"
+                            )
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
@@ -1755,10 +1752,6 @@ private struct ProcessFileActivityView: View {
     private func copyPath(_ path: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(path, forType: .string)
-    }
-
-    private func shouldOpenTraceFromRow(_ row: FileAccessDirectory) -> Bool {
-        filter == .changed && row.lastChangedAt != nil && canOpenTrace(row)
     }
 
     private func canOpenTrace(_ row: FileAccessDirectory) -> Bool {
@@ -2057,8 +2050,6 @@ private struct FileLocationRow: View {
     let access: String
     let isWritable: Bool
     let isSelected: Bool
-    let showsTraceAction: Bool
-    let isTraceTarget: Bool
     let isTraceRunning: Bool
 
     var body: some View {
@@ -2094,7 +2085,12 @@ private struct FileLocationRow: View {
                 .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            if let lastChangedAt = row.lastChangedAt {
+            if isTraceRunning {
+                Label(L10n.text("追踪中"), systemImage: "scope")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Color.green)
+                    .lineLimit(1)
+            } else if let lastChangedAt = row.lastChangedAt {
                 VStack(alignment: .trailing, spacing: 3) {
                     Text(L10n.format(
                         "修改于 %@",
@@ -2104,27 +2100,9 @@ private struct FileLocationRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
-                    if showsTraceAction || isTraceTarget {
-                        Label(
-                            L10n.text(
-                                isTraceRunning
-                                    ? "追踪中"
-                                    : (isTraceTarget ? "查看追踪" : "查看详细活动")
-                            ),
-                            systemImage: isTraceRunning ? "scope" : "chevron.right"
-                        )
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(isTraceRunning ? Color.green : Color.accentColor)
-                        .lineLimit(1)
-                    } else {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .foregroundStyle(.purple)
-                    }
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundStyle(.purple)
                 }
-            } else {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
             }
         }
         .padding(.horizontal, 12)
