@@ -57,6 +57,9 @@ public actor SystemSampler {
 
     public func collect() -> SystemSnapshot {
         let uptime = ProcessInfo.processInfo.systemUptime
+        if cachedVolumes.isEmpty {
+            cachedVolumes = Self.collectMountedVolumes().map(\.info)
+        }
         if volumeRefreshTask == nil,
            uptime - lastVolumeRefreshUptime >= 30 || cachedVolumes.isEmpty {
             lastVolumeRefreshUptime = uptime
@@ -198,13 +201,52 @@ public actor SystemSampler {
     }
 
     private func finishVolumeRefresh(_ volumes: [VolumeInfo]) {
-        cachedVolumes = volumes
+        if !volumes.isEmpty || cachedVolumes.isEmpty {
+            cachedVolumes = volumes
+        }
         volumeRefreshTask = nil
+    }
+
+    private struct MountedVolume: Sendable {
+        let url: URL
+        let info: VolumeInfo
     }
 
     nonisolated private static func collectVolumes(
         using runner: DiskutilCommandRunner
     ) async -> [VolumeInfo] {
+        let mountedVolumes = collectMountedVolumes()
+        let volumes = await withTaskGroup(of: VolumeInfo.self) { group in
+            for mountedVolume in mountedVolumes {
+                group.addTask {
+                    let info = mountedVolume.info
+                    return VolumeInfo(
+                        id: info.id,
+                        name: info.name,
+                        mountPath: info.mountPath,
+                        totalCapacity: info.totalCapacity,
+                        availableCapacity: info.availableCapacity,
+                        isLocal: info.isLocal,
+                        isWritable: info.isWritable,
+                        hasStableIdentity: info.hasStableIdentity,
+                        isRemovable: info.isRemovable,
+                        physicalDiskBSDNames: await physicalDiskBSDNames(
+                            for: mountedVolume.url,
+                            using: runner
+                        )
+                    )
+                }
+            }
+            var results: [VolumeInfo] = []
+            for await volume in group {
+                results.append(volume)
+            }
+            return results
+        }
+        return volumes.sorted(by: volumeSort)
+    }
+
+    nonisolated private static func collectMountedVolumes() -> [MountedVolume] {
         let keys: Set<URLResourceKey> = [
             .volumeNameKey,
             .volumeTotalCapacityKey,
@@ -219,43 +261,34 @@ public actor SystemSampler {
             includingResourceValuesForKeys: Array(keys),
             options: [.skipHiddenVolumes]
         ) ?? []
+        return urls.map { url in
+            let values = try? url.resourceValues(forKeys: keys)
+            let stableIdentifier = values?.volumeUUIDString
+                ?? values?.volumeIdentifier.map { String(describing: $0) }
+            let fallbackName = url.lastPathComponent.isEmpty ? url.path : url.lastPathComponent
+            return MountedVolume(
+                url: url,
+                info: VolumeInfo(
+                    id: stableIdentifier ?? "unidentified:\(url.path)",
+                    name: values?.volumeName ?? fallbackName,
+                    mountPath: url.standardizedFileURL.path,
+                    totalCapacity: Int64(values?.volumeTotalCapacity ?? 0),
+                    availableCapacity: Int64(values?.volumeAvailableCapacity ?? 0),
+                    isLocal: values?.volumeIsLocal ?? false,
+                    isWritable: !(values?.volumeIsReadOnly ?? true),
+                    hasStableIdentity: stableIdentifier != nil,
+                    isRemovable: values?.volumeIsRemovable ?? false,
+                    physicalDiskBSDNames: []
+                )
+            )
+        }
+        .sorted { volumeSort($0.info, $1.info) }
+    }
 
-        let volumes = await withTaskGroup(of: VolumeInfo?.self) { group in
-            for url in urls {
-                group.addTask {
-                    guard let values = try? url.resourceValues(forKeys: keys) else { return nil }
-                    let total = Int64(values.volumeTotalCapacity ?? 0)
-                    let available = Int64(values.volumeAvailableCapacity ?? 0)
-                    let stableIdentifier = values.volumeUUIDString
-                        ?? values.volumeIdentifier.map { String(describing: $0) }
-                    return VolumeInfo(
-                        id: stableIdentifier ?? "unidentified:\(url.path)",
-                        name: values.volumeName ?? url.lastPathComponent,
-                        mountPath: url.path,
-                        totalCapacity: total,
-                        availableCapacity: available,
-                        isLocal: values.volumeIsLocal ?? false,
-                        isWritable: !(values.volumeIsReadOnly ?? true),
-                        hasStableIdentity: stableIdentifier != nil,
-                        isRemovable: values.volumeIsRemovable ?? false,
-                        physicalDiskBSDNames: await physicalDiskBSDNames(
-                            for: url,
-                            using: runner
-                        )
-                    )
-                }
-            }
-            var results: [VolumeInfo] = []
-            for await volume in group {
-                if let volume { results.append(volume) }
-            }
-            return results
-        }
-        return volumes.sorted { lhs, rhs in
-            if lhs.mountPath == "/" { return true }
-            if rhs.mountPath == "/" { return false }
-            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
-        }
+    nonisolated private static func volumeSort(_ lhs: VolumeInfo, _ rhs: VolumeInfo) -> Bool {
+        if lhs.mountPath == "/" { return true }
+        if rhs.mountPath == "/" { return false }
+        return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
     }
 
     nonisolated private static func physicalDiskBSDNames(

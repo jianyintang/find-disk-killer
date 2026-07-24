@@ -99,8 +99,11 @@ public actor FileChangeWatcher {
 
     public func beginSession(volumes: [VolumeInfo]) -> UUID {
         let lease = UUID()
+        let alreadyHadSession = !activeLeases.isEmpty
         activeLeases.insert(lease)
-        configure(volumes: volumes)
+        if !volumes.isEmpty || !alreadyHadSession {
+            configure(volumes: volumes)
+        }
         return lease
     }
 

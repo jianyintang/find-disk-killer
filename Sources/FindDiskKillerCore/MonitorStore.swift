@@ -233,7 +233,9 @@ public final class MonitorStore {
         let duration = max(0.1, snapshot.uptime - (priorUptime ?? snapshot.uptime))
         priorUptime = snapshot.uptime
         lastUpdatedAt = snapshot.date
-        volumes = snapshot.volumes
+        if !snapshot.volumes.isEmpty || volumes.isEmpty {
+            volumes = snapshot.volumes
+        }
         visibleProcessCount = snapshot.processes.count
         isProcessNetworkAvailable = snapshot.processNetworkAvailable
 

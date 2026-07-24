@@ -32,6 +32,14 @@ struct FileAccessTraceView: View {
         )) { _ in
             store.refreshPermissionStatus()
         }
+        .onAppear {
+            guard onBack != nil else { return }
+            store.start()
+        }
+        .onDisappear {
+            guard onBack != nil else { return }
+            store.endEphemeralSession()
+        }
     }
 
     private var traceWorkspace: some View {

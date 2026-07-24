@@ -653,6 +653,13 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(snapshot.processes.contains { $0.pid == getpid() })
 }
 
+@Test func samplerPublishesMountedVolumeMetadataOnItsFirstCollection() async {
+    let sampler = SystemSampler()
+    let snapshot = await sampler.collect()
+
+    #expect(snapshot.volumes.contains { $0.mountPath == "/" })
+}
+
 @Test func samplerReportsProcessCPUInActivityMonitorUnits() async {
     let first = await SystemSampler.shared.collect()
     guard let firstProcess = first.processes.first(where: { $0.pid == getpid() }) else {
@@ -1227,7 +1234,7 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     let directory = FileManager.default.temporaryDirectory
     let volume = fixtureVolume(id: UUID().uuidString, mountPath: directory.path)
     let firstLease = await watcher.beginSession(volumes: [volume])
-    let secondLease = await watcher.beginSession(volumes: [volume])
+    let secondLease = await watcher.beginSession(volumes: [])
     let before = await watcher.recentChanges(for: [directory.path])
 
     await watcher.endSession(firstLease)
@@ -1393,6 +1400,78 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(!root.contains(path: "relative/path"))
 }
 
+@Test func volumePathResolverUsesTheMostSpecificMountedVolume() {
+    let root = fixtureVolume(id: "root", name: "Macintosh HD", mountPath: "/")
+    let external = fixtureVolume(
+        id: "external-a",
+        name: "JianDisk",
+        mountPath: "/Volumes/JianDisk"
+    )
+
+    let match = VolumePathResolver.bestMatch(
+        for: "/Volumes/JianDisk/code/find-disk-killer",
+        in: [root, external]
+    )
+
+    #expect(match?.id == external.id)
+    #expect(match?.name == "JianDisk")
+}
+
+@Test func volumePathResolverDoesNotCrossPathComponentBoundaries() {
+    let volume = fixtureVolume(id: "foo", name: "Foo", mountPath: "/Volumes/foo")
+
+    #expect(VolumePathResolver.bestMatch(
+        for: "/Volumes/foo/project",
+        in: [volume]
+    )?.id == volume.id)
+    #expect(VolumePathResolver.bestMatch(
+        for: "/Volumes/foobar/project",
+        in: [volume]
+    ) == nil)
+}
+
+@Test func volumePathResolverRecoversWhenVolumesArriveOrRemount() {
+    let path = "/Volumes/JianDisk/code/find-disk-killer"
+    let firstMount = fixtureVolume(
+        id: "external-a",
+        name: "JianDisk",
+        mountPath: "/Volumes/JianDisk"
+    )
+    let remounted = fixtureVolume(
+        id: "external-b",
+        name: "JianDisk",
+        mountPath: "/Volumes/JianDisk"
+    )
+
+    #expect(VolumePathResolver.bestMatch(for: path, in: []) == nil)
+    #expect(VolumePathResolver.bestMatch(for: path, in: [firstMount])?.id == "external-a")
+    #expect(VolumePathResolver.bestMatch(for: path, in: [remounted])?.id == "external-b")
+}
+
+@MainActor
+@Test func monitorStoreKeepsKnownVolumesAcrossATransientEmptySample() {
+    let store = MonitorStore()
+    let external = fixtureVolume(
+        id: "external-a",
+        name: "JianDisk",
+        mountPath: "/Volumes/JianDisk"
+    )
+    let remounted = fixtureVolume(
+        id: "external-b",
+        name: "JianDisk",
+        mountPath: "/Volumes/JianDisk"
+    )
+
+    store.ingest(volumeOnlySnapshot(volumes: [], uptime: 1))
+    #expect(store.volumes.isEmpty)
+    store.ingest(volumeOnlySnapshot(volumes: [external], uptime: 2))
+    #expect(store.volumes.map(\.id) == ["external-a"])
+    store.ingest(volumeOnlySnapshot(volumes: [], uptime: 3))
+    #expect(store.volumes.map(\.id) == ["external-a"])
+    store.ingest(volumeOnlySnapshot(volumes: [remounted], uptime: 4))
+    #expect(store.volumes.map(\.id) == ["external-b"])
+}
+
 private func fixtureHealthSnapshot(
     bsdName: String = "disk9",
     model: String = "Fixture SSD",
@@ -1427,10 +1506,14 @@ private func fixtureHealthSnapshot(
     )
 }
 
-private func fixtureVolume(id: String, mountPath: String) -> VolumeInfo {
+private func fixtureVolume(
+    id: String,
+    name: String = "Fixture",
+    mountPath: String
+) -> VolumeInfo {
     VolumeInfo(
         id: id,
-        name: "Fixture",
+        name: name,
         mountPath: mountPath,
         totalCapacity: 1,
         availableCapacity: 1,
@@ -1439,6 +1522,24 @@ private func fixtureVolume(id: String, mountPath: String) -> VolumeInfo {
         hasStableIdentity: true,
         isRemovable: false,
         physicalDiskBSDNames: []
+    )
+}
+
+private func volumeOnlySnapshot(volumes: [VolumeInfo], uptime: TimeInterval) -> SystemSnapshot {
+    SystemSnapshot(
+        date: Date(timeIntervalSinceReferenceDate: uptime),
+        uptime: uptime,
+        processes: [],
+        disks: [],
+        volumes: volumes,
+        cpuUserTicks: 0,
+        cpuSystemTicks: 0,
+        cpuNiceTicks: 0,
+        cpuIdleTicks: 0,
+        networkInterfaces: [],
+        cpuStatsAvailable: false,
+        networkInterfacesAvailable: false,
+        processNetworkAvailable: false
     )
 }
 

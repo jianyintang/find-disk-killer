@@ -1247,7 +1247,11 @@ private struct ProcessFileActivityView: View {
                 FileAccessTraceView(
                     store: traceStore,
                     contextProcessName: process.localizedDisplayName,
-                    onBack: { tracedPath = nil }
+                    onBack: {
+                        traceStore.endEphemeralSession()
+                        traceStore.removeTarget()
+                        tracedPath = nil
+                    }
                 )
             } else {
                 VStack(spacing: 0) {
@@ -1257,14 +1261,12 @@ private struct ProcessFileActivityView: View {
                 }
             }
         }
-        .task {
-            let lease = await FileChangeWatcher.shared.beginSession(volumes: monitoredVolumes)
-            await refreshLoop()
-            await FileChangeWatcher.shared.endSession(lease)
-        }
         .task(id: volumeTopology) {
             monitoredVolumes = volumes
-            await FileChangeWatcher.shared.configure(volumes: volumes)
+            rebindRows(to: volumes)
+            let lease = await FileChangeWatcher.shared.beginSession(volumes: volumes)
+            await refreshLoop()
+            await FileChangeWatcher.shared.endSession(lease)
         }
         .onChange(of: process.sessions, initial: true) { _, sessions in
             monitoredSessions = sessions
@@ -1425,7 +1427,7 @@ private struct ProcessFileActivityView: View {
     private var volumeTopology: String {
         volumes
             .map {
-                "\($0.id):\($0.mountPath):\($0.isLocal):\($0.isWritable):\($0.hasStableIdentity)"
+                "\($0.id):\($0.name):\($0.mountPath):\($0.isLocal):\($0.isWritable):\($0.hasStableIdentity)"
             }
             .sorted()
             .joined(separator: ",")
@@ -1871,7 +1873,10 @@ private struct ProcessFileActivityView: View {
                     now: next.capturedAt
                 )
                 guard currentRow != nil || lastChangedAt != nil else { return nil }
-                let row = currentRow ?? tracked.row
+                let row = Self.rebindingVolume(
+                    currentRow ?? tracked.row,
+                    volumes: currentVolumes
+                )
                 return FileAccessDirectory(
                     path: row.path,
                     displayName: row.displayName,
@@ -1944,9 +1949,7 @@ private struct ProcessFileActivityView: View {
             grouped[directory] = value
         }
         return grouped.map { path, value in
-            let volume = volumes
-                .filter { $0.contains(path: path) }
-                .max { $0.mountPath.count < $1.mountPath.count }
+            let volume = VolumePathResolver.bestMatch(for: path, in: volumes)
             return FileAccessDirectory(
                 path: path,
                 displayName: URL(fileURLWithPath: path).lastPathComponent.isEmpty
@@ -1964,6 +1967,36 @@ private struct ProcessFileActivityView: View {
             if $0.fileCount != $1.fileCount { return $0.fileCount > $1.fileCount }
             return $0.path.localizedStandardCompare($1.path) == .orderedAscending
         }
+    }
+
+    private func rebindRows(to volumes: [VolumeInfo]) {
+        guard !volumes.isEmpty else { return }
+        rows = rows.map { Self.rebindingVolume($0, volumes: volumes) }
+        trackedLocations = trackedLocations.mapValues { tracked in
+            TrackedFileLocation(
+                row: Self.rebindingVolume(tracked.row, volumes: volumes),
+                lastSeenOpenAt: tracked.lastSeenOpenAt
+            )
+        }
+    }
+
+    nonisolated private static func rebindingVolume(
+        _ row: FileAccessDirectory,
+        volumes: [VolumeInfo]
+    ) -> FileAccessDirectory {
+        guard let volume = VolumePathResolver.bestMatch(for: row.path, in: volumes) else {
+            return row
+        }
+        return FileAccessDirectory(
+            path: row.path,
+            displayName: row.displayName,
+            volumeName: volume.name,
+            modes: row.modes,
+            fileCount: row.fileCount,
+            lastChangedAt: row.lastChangedAt,
+            changeObservationStatus: row.changeObservationStatus,
+            isCurrentlyOpen: row.isCurrentlyOpen
+        )
     }
 
     private func partialStatus(_ snapshot: OpenFileSnapshot) -> String {

@@ -422,6 +422,22 @@ final class FileAccessTraceStore {
         state = selection == nil ? .noTarget : stateForHelper()
     }
 
+    func endEphemeralSession() {
+        cancelPendingStart()
+        let activeSessionID = sessionID
+        drainTask?.cancel()
+        drainTask = nil
+        sessionID = nil
+        engine = nil
+        resetMeasurements()
+        state = selection == nil ? .noTarget : stateForHelper()
+        if let activeSessionID {
+            Task {
+                try? await helper.stopTrace(sessionID: activeSessionID)
+            }
+        }
+    }
+
     func removeTarget() {
         guard !isRunning else { return }
         cancelPendingStart()

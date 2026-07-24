@@ -93,8 +93,32 @@ public struct VolumeInfo: Identifiable, Sendable {
     }
 
     public func contains(path: String) -> Bool {
-        if mountPath == "/" { return path.hasPrefix("/") }
+        VolumePathResolver.contains(path: path, in: mountPath)
+    }
+}
+
+public enum VolumePathResolver {
+    public static func bestMatch(
+        for path: String,
+        in volumes: [VolumeInfo]
+    ) -> VolumeInfo? {
+        guard path.hasPrefix("/") else { return nil }
+        let path = canonicalPath(path)
+        return volumes
+            .filter { contains(path: path, in: $0.mountPath) }
+            .max { canonicalPath($0.mountPath).count < canonicalPath($1.mountPath).count }
+    }
+
+    public static func contains(path: String, in mountPath: String) -> Bool {
+        guard path.hasPrefix("/"), mountPath.hasPrefix("/") else { return false }
+        let path = canonicalPath(path)
+        let mountPath = canonicalPath(mountPath)
+        if mountPath == "/" { return true }
         return path == mountPath || path.hasPrefix(mountPath + "/")
+    }
+
+    private static func canonicalPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.path
     }
 }
 
