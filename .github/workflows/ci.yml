@@ -13,15 +13,27 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Toolchain
         run: |
           xcodebuild -version
           swift --version
       - name: Test
         run: swift test
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install pinned XcodeGen
+        env:
+          XCODEGEN_VERSION: 2.42.0
+          XCODEGEN_SHA256: a760b4bf97460341316a2c00d8c87b2946c6c2729eb57e9a72abb3ef7bc0ef82
+        run: |
+          archive="$RUNNER_TEMP/xcodegen.zip"
+          install_root="$RUNNER_TEMP/xcodegen-install"
+          curl --fail --location --silent --show-error \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip" \
+            --output "$archive"
+          echo "$XCODEGEN_SHA256  $archive" | shasum -a 256 --check
+          unzip -q "$archive" -d "$install_root"
+          echo "$install_root/xcodegen/bin" >> "$GITHUB_PATH"
+          "$install_root/xcodegen/bin/xcodegen" --version
       - name: Build the app and trace helper
         run: |
           xcodegen generate
