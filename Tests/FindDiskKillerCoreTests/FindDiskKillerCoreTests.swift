@@ -214,16 +214,27 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     ))
 }
 
-@Test func fileAccessTraceStreamRequiresAKnownHeaderAndFailsClosed() {
+@Test func fileAccessTraceStreamAcceptsAValidatedRowWhenPipedOutputOmitsTheHeader() {
     let day = Date(timeIntervalSinceReferenceDate: 70_000)
     let line = "01:02:03.000001 read F=4 B=32 /tmp/trace 0.000010 Tool.7"
     var missingHeader = FileAccessTraceStreamParser()
-    #expect(missingHeader.consume(line: line, on: day) == .unsupportedFormat)
-    #expect(missingHeader.state == .unsupportedFormat)
     #expect(missingHeader.consume(
-        line: "TIMESTAMP CALL FILE DESCRIPTOR BYTE COUNT PATHNAME TIME PROCESS",
+        line: "01:02:03.000000 open F=4 /tmp/trace 0.000005 Tool.7",
+        on: day
+    ) == .ignored)
+    #expect(missingHeader.state == .awaitingHeader)
+    guard case .event = missingHeader.consume(line: line, on: day) else {
+        Issue.record("Expected a validated row to establish the piped format")
+        return
+    }
+    #expect(missingHeader.state == .parsing)
+
+    var malformedData = FileAccessTraceStreamParser()
+    #expect(malformedData.consume(
+        line: "01:02:03.000001 read F=4 B=unknown /tmp/trace 0.000010 Tool.7",
         on: day
     ) == .unsupportedFormat)
+    #expect(malformedData.state == .unsupportedFormat)
 
     var recognized = FileAccessTraceStreamParser()
     #expect(recognized.consume(line: "fs_usage fixture", on: day) == .ignored)

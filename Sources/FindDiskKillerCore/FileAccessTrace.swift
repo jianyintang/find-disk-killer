@@ -233,13 +233,32 @@ public struct FileAccessTraceStreamParser: Sendable {
                 state = .parsing
                 return .ignored
             }
+            let result = FileAccessTraceParser.parse(
+                line: line,
+                on: day,
+                calendar: calendar
+            )
+            switch result {
+            case .event, .failedCall:
+                // fs_usage does not guarantee a header when stdout is a pipe.
+                // A fully validated read/write row is an equally strong format gate.
+                state = .parsing
+                return result
+            case .unsupportedFormat:
+                state = .unsupportedFormat
+                return .unsupportedFormat
+            case .ignored:
+                break
+            }
             let uppercase = line.uppercased()
             if uppercase.contains("TIMESTAMP")
-                || uppercase.contains("CALL")
-                || line.trimmingCharacters(in: .whitespaces).first?.isNumber == true {
+                || uppercase.contains("CALL") {
                 state = .unsupportedFormat
                 return .unsupportedFormat
             }
+            // Valid fs_usage output often begins with unrelated filesystem calls
+            // such as open or stat. Keep looking for a row whose byte semantics we
+            // support instead of treating that ordering as a format error.
             return .ignored
         case .parsing:
             let result = FileAccessTraceParser.parse(
