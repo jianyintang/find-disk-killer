@@ -298,8 +298,33 @@ final class TraceHelperController {
         SMAppService.openSystemSettingsLoginItems()
     }
 
-    func repairService() throws {
-        try replaceOutdatedService()
+    func repairService() async throws {
+        try await replaceOutdatedService()
+    }
+
+    func waitUntilAuthorizedAndReady(maximumWait: Duration = .seconds(180)) async throws {
+        let deadline = ContinuousClock.now.advanced(by: maximumWait)
+        while ContinuousClock.now < deadline {
+            refreshStatus()
+            switch state {
+            case .enabled, .ready, .connecting:
+                do {
+                    try await ping(timeout: .seconds(1))
+                    return
+                } catch TraceHelperClientError.protocolMismatch {
+                    throw TraceHelperClientError.protocolMismatch
+                } catch {
+                    invalidateConnection()
+                    try await Task.sleep(for: .milliseconds(250))
+                }
+            case .requiresApproval:
+                try await Task.sleep(for: .milliseconds(500))
+            case .notRegistered, .notFound, .protocolMismatch,
+                    .connectionUnavailable, .operationFailed:
+                throw TraceHelperClientError.unavailable
+            }
+        }
+        throw TraceHelperClientError.unavailable
     }
 
     func ping() async throws {
@@ -346,23 +371,25 @@ final class TraceHelperController {
         )
     }
 
-    private func replaceOutdatedService() throws {
+    private func replaceOutdatedService() async throws {
         invalidateConnection()
         do {
             if service.status != .notRegistered && service.status != .notFound {
-                try service.unregister()
+                try await service.unregister()
             }
             try service.register()
             refreshStatus()
         } catch {
             refreshStatus()
             if service.status == .requiresApproval {
-                throw TraceHelperClientError.approvalRequired
+                state = .requiresApproval
+                return
             }
             throw error
         }
         if service.status == .requiresApproval {
-            throw TraceHelperClientError.approvalRequired
+            state = .requiresApproval
+            return
         }
         guard service.status == .enabled else {
             throw TraceHelperClientError.unavailable
