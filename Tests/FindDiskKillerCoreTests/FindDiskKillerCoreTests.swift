@@ -233,6 +233,10 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(FileAccessTraceParser.parse(line: failed, on: day) == .failedCall)
     let failedWithoutByteCount = "01:02:03.000001 read F=4 [ 2] 0.000010 Tool.7"
     #expect(FileAccessTraceParser.parse(line: failedWithoutByteCount, on: day) == .failedCall)
+    let failedWithAttachedErrno = "01:02:03.000001 writev F=120[ 35] 0.000010 Tool.7"
+    #expect(FileAccessTraceParser.parse(line: failedWithAttachedErrno, on: day) == .failedCall)
+    let failedWithCompactErrno = "01:02:03.000001 read F=35 [35] 0.000010 Tool.7"
+    #expect(FileAccessTraceParser.parse(line: failedWithCompactErrno, on: day) == .failedCall)
 
     let truncated = "01:02:03.000001 read F=4 B=32 .../tail/file 0.000010 Tool.7"
     guard case .event(let truncatedEvent) = FileAccessTraceParser.parse(
@@ -293,6 +297,17 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
         line: "01:02:03.000002 read F=4 [ 2] 0.000010 Tool.7",
         on: day
     ) == .failedCall)
+    #expect(missingHeader.state == .parsing)
+
+    #expect(missingHeader.consume(
+        line: "01:02:03.000003 read F=4 B=unknown /tmp/trace 0.000010 Tool.7",
+        on: day
+    ) == .unparseableEvent)
+    #expect(missingHeader.state == .parsing)
+    guard case .event = missingHeader.consume(line: line, on: day) else {
+        Issue.record("Expected a valid row to recover after one malformed row")
+        return
+    }
     #expect(missingHeader.state == .parsing)
 
     var malformedData = FileAccessTraceStreamParser()
@@ -367,6 +382,71 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
             isCaseSensitive: true
         )
     }
+}
+
+@Test func codexFSUsageFixtureResolvesFDAndContinuesAfterAttachedErrno() throws {
+    let day = Date(timeIntervalSinceReferenceDate: 60_000)
+    let process = FileAccessTraceProcessIdentity(
+        pid: 85_623,
+        startAbstime: 123,
+        displayName: "codex"
+    )
+    let target = try FileAccessTraceTarget(
+        path: "/Volumes/JianDisk/.codex-cc/sessions/2026/07/23",
+        volumeIdentifier: "volume-a",
+        kind: .directory,
+        isCaseSensitive: true
+    )
+    var descriptors = FileAccessTraceDescriptorIndex()
+    descriptors.register(
+        path: "/Volumes/JianDisk/.codex-cc/sessions/2026/07/23/rollout.jsonl",
+        process: process,
+        fileDescriptor: 39
+    )
+    var parser = FileAccessTraceStreamParser()
+    let lines = [
+        "14:10:45.100000 pread F=39 B=0x1000 O=0x1000 0.000002 codex.51508301",
+        "14:10:45.200000 writev F=120[ 35] 0.000001 codex.49781806",
+        "14:10:45.300000 pwrite F=39 B=0x40 O=0x2000 0.000003 codex.51508301"
+    ]
+    var events: [FileAccessTraceParsedEvent] = []
+    for line in lines {
+        switch parser.consume(line: line, on: day) {
+        case .event(let event):
+            events.append(event)
+        case .failedCall:
+            continue
+        default:
+            Issue.record("Unexpected parser result for Codex fixture: \(line)")
+        }
+    }
+    #expect(parser.state == .parsing)
+    #expect(events.count == 2)
+
+    var aggregator = FileAccessTraceAggregator(
+        target: target,
+        startedAt: (events.first?.timestamp ?? day).addingTimeInterval(-1)
+    )
+    for event in events {
+        let path = event.path ?? event.fileDescriptor.flatMap {
+            descriptors.path(process: process, fileDescriptor: $0)
+        }
+        aggregator.ingest(FileAccessTraceEvent(
+            timestamp: event.timestamp,
+            direction: event.direction,
+            requestedBytes: event.requestedBytes,
+            path: path,
+            volumeIdentifier: "volume-a",
+            process: process
+        ))
+    }
+    let snapshot = aggregator.snapshot(
+        at: (events.last?.timestamp ?? day).addingTimeInterval(1)
+    )
+    #expect(snapshot.coverage == .complete)
+    #expect(snapshot.requestedReadBytes == 4_096)
+    #expect(snapshot.requestedWriteBytes == 64)
+    #expect(snapshot.files.first?.path.hasSuffix("rollout.jsonl") == true)
 }
 
 @Test func fileAccessTraceAggregatorSeparatesReadWriteFilesAndProcessSessions() throws {

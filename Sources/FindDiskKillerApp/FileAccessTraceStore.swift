@@ -142,6 +142,8 @@ private actor FileAccessTraceEngine {
                 ))
             case .unsupportedFormat:
                 aggregator.markUnsupportedFormat()
+            case .unparseableEvent:
+                aggregator.markDroppedEvents()
             case .ignored, .failedCall:
                 continue
             }
@@ -203,12 +205,7 @@ private actor FileAccessTraceEngine {
     }
 
     private func volumeIdentifier(for path: String?) -> String? {
-        guard case .included = target.match(
-            path: path,
-            volumeIdentifier: target.volumeIdentifier
-        )
-        else { return nil }
-        return target.volumeIdentifier
+        path == nil ? nil : target.volumeIdentifier
     }
 }
 

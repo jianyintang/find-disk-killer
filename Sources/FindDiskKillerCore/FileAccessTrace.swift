@@ -33,6 +33,7 @@ public enum FileAccessTraceLineResult: Equatable, Sendable {
     case event(FileAccessTraceParsedEvent)
     case ignored
     case failedCall
+    case unparseableEvent
     case unsupportedFormat
 }
 
@@ -184,22 +185,30 @@ public enum FileAccessTraceParser {
 
     private static func containsStandaloneErrno(fields: [String]) -> Bool {
         guard fields.count > 2 else { return false }
-        for index in 2..<fields.count {
-            guard index > 0,
-                  fields[index - 1].hasPrefix("F=") || fields[index - 1].hasPrefix("B=")
-            else { continue }
-            let field = fields[index]
-            if field.first == "[", field.last == "]",
-               !field.dropFirst().dropLast().isEmpty,
-               field.dropFirst().dropLast().allSatisfy(\.isNumber) {
-                return true
+        for index in 2..<fields.count where fields[index].hasPrefix("F=")
+            || fields[index].hasPrefix("B=") {
+            var candidate = fields[index]
+            var nextIndex: Int
+            if !candidate.contains("[") {
+                guard index + 1 < fields.count,
+                      fields[index + 1].hasPrefix("[")
+                else { continue }
+                candidate = fields[index + 1]
+                nextIndex = index + 2
+            } else {
+                candidate = String(candidate[candidate.firstIndex(of: "[")!...])
+                nextIndex = index + 1
             }
-            if field == "[", index + 1 < fields.count {
-                let suffix = fields[index + 1]
-                if suffix.last == "]", !suffix.dropLast().isEmpty,
-                   suffix.dropLast().allSatisfy(\.isNumber) {
-                    return true
-                }
+            while !candidate.contains("]"), nextIndex < fields.count,
+                  nextIndex <= index + 2 {
+                candidate += " " + fields[nextIndex]
+                nextIndex += 1
+            }
+            guard candidate.first == "[", candidate.last == "]" else { continue }
+            let code = candidate.dropFirst().dropLast()
+                .trimmingCharacters(in: .whitespaces)
+            if !code.isEmpty, code.allSatisfy(\.isNumber) {
+                return true
             }
         }
         return false
@@ -354,7 +363,9 @@ public enum FileAccessTraceStreamState: Equatable, Sendable {
 }
 
 public struct FileAccessTraceStreamParser: Sendable {
+    private static let unsupportedRowThreshold = 8
     public private(set) var state: FileAccessTraceStreamState = .awaitingHeader
+    private var consecutiveUnsupportedRows = 0
 
     public init() {}
 
@@ -380,6 +391,8 @@ public struct FileAccessTraceStreamParser: Sendable {
                 // A fully validated read/write row is an equally strong format gate.
                 state = .parsing
                 return result
+            case .unparseableEvent:
+                return .ignored
             case .unsupportedFormat:
                 state = .unsupportedFormat
                 return .unsupportedFormat
@@ -402,10 +415,20 @@ public struct FileAccessTraceStreamParser: Sendable {
                 on: day,
                 calendar: calendar
             )
-            if result == .unsupportedFormat {
+            switch result {
+            case .event, .failedCall:
+                consecutiveUnsupportedRows = 0
+                return result
+            case .unsupportedFormat:
+                consecutiveUnsupportedRows += 1
+                guard consecutiveUnsupportedRows >= Self.unsupportedRowThreshold else {
+                    return .unparseableEvent
+                }
                 state = .unsupportedFormat
+                return .unsupportedFormat
+            case .ignored, .unparseableEvent:
+                return result
             }
-            return result
         case .unsupportedFormat:
             return .unsupportedFormat
         }
