@@ -78,10 +78,13 @@ final class TraceHelperXPCTransport: @unchecked Sendable {
         self.helperCodeSigningRequirement = helperCodeSigningRequirement
     }
 
-    func ping(clientProtocolVersion: Int) async throws -> (Int, String) {
+    func ping(
+        clientProtocolVersion: Int,
+        timeout: Duration = .seconds(5)
+    ) async throws -> (Int, String) {
         try await withCheckedThrowingContinuation { continuation in
             let relay = TraceHelperContinuation(continuation)
-            relay.failAfter(.seconds(5))
+            relay.failAfter(timeout)
             do {
                 let helper = try remoteProxy(relay: relay)
                 helper.ping(clientProtocolVersion: NSNumber(value: clientProtocolVersion)) {
@@ -300,11 +303,16 @@ final class TraceHelperController {
     }
 
     func ping() async throws {
+        try await ping(timeout: .seconds(3))
+    }
+
+    private func ping(timeout: Duration) async throws {
         state = .connecting
         let result: (Int, String)
         do {
             result = try await transport.ping(
-                clientProtocolVersion: TraceHelperProtocolConfiguration.version
+                clientProtocolVersion: TraceHelperProtocolConfiguration.version,
+                timeout: timeout
             )
         } catch {
             state = .connectionUnavailable
@@ -324,20 +332,13 @@ final class TraceHelperController {
         processIdentifiers: [Int32]
     ) async throws -> String {
         do {
-            try await ping()
-        } catch TraceHelperClientError.protocolMismatch {
-            try replaceOutdatedService()
-            try await ping()
-        } catch TraceHelperClientError.unavailable {
-            // Retry once with a fresh XPC connection before replacing an enabled
-            // but stale or incorrectly signed helper from an older build.
-            invalidateConnection()
-            do {
-                try await ping()
-            } catch TraceHelperClientError.unavailable {
-                try replaceOutdatedService()
-                try await ping()
+            try await ping(timeout: .seconds(2))
+        } catch {
+            refreshStatus()
+            if service.status == .requiresApproval {
+                throw TraceHelperClientError.approvalRequired
             }
+            throw error
         }
         return try await transport.startTrace(
             maximumDurationSeconds: maximumDurationSeconds,

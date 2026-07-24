@@ -204,7 +204,7 @@ struct FileAccessTraceView: View {
             Button(L10n.text("打开登录项设置"), action: store.openApprovalSettings)
                 .buttonStyle(.borderedProminent)
         case .failed:
-            Button(L10n.text("重新检查"), action: store.refreshPermissionStatus)
+            Button(L10n.text("重新连接"), action: store.start)
         default:
             EmptyView()
         }

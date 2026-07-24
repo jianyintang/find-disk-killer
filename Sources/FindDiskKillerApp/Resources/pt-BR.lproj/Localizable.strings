@@ -362,6 +362,7 @@
 "选择要追踪的文件或目录" = "Selecione um arquivo ou uma pasta para rastrear";
 "重新开始" = "Iniciar novamente";
 "重新检查" = "Verificar novamente";
+"重新连接" = "Reconectar";
 "需要启用文件访问追踪" = "É necessário ativar o rastreamento de acesso a arquivos";
 "需要处理" = "Requer atenção";
 "系统追踪提前结束，已有结果可能不完整" = "O rastreamento do sistema terminou antes do esperado. Os resultados existentes podem estar incompletos.";

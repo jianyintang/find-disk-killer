@@ -362,6 +362,7 @@
 "选择要追踪的文件或目录" = "Aufzuzeichnende Datei oder Ordner auswählen";
 "重新开始" = "Erneut starten";
 "重新检查" = "Erneut prüfen";
+"重新连接" = "Erneut verbinden";
 "需要启用文件访问追踪" = "Die Aufzeichnung von Dateizugriffen muss aktiviert werden";
 "需要处理" = "Aktion erforderlich";
 "系统追踪提前结束，已有结果可能不完整" = "Die Systemaufzeichnung wurde vorzeitig beendet. Vorhandene Ergebnisse können unvollständig sein.";

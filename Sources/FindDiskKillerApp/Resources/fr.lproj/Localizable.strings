@@ -362,6 +362,7 @@
 "选择要追踪的文件或目录" = "Choisissez un fichier ou un dossier à suivre";
 "重新开始" = "Recommencer";
 "重新检查" = "Vérifier à nouveau";
+"重新连接" = "Se reconnecter";
 "需要启用文件访问追踪" = "Le suivi des accès aux fichiers doit être activé";
 "需要处理" = "Action requise";
 "系统追踪提前结束，已有结果可能不完整" = "Le suivi système s’est arrêté prématurément. Les résultats existants peuvent être incomplets.";
