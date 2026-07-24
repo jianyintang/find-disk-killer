@@ -73,10 +73,30 @@ private actor FileAccessTraceEngine {
     private var parser = FileAccessTraceStreamParser()
     private var aggregator: FileAccessTraceAggregator
     private let target: FileAccessTraceTarget
+    private var descriptors = FileAccessTraceDescriptorIndex()
 
-    init(target: FileAccessTraceTarget, startedAt: Date) {
+    init(
+        target: FileAccessTraceTarget,
+        startedAt: Date,
+        sessions: [ProcessSession],
+        openFiles: [OpenFileRecord]
+    ) {
         self.target = target
         aggregator = FileAccessTraceAggregator(target: target, startedAt: startedAt)
+        let sessionsByPID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.pid, $0) })
+        for file in openFiles {
+            guard let session = sessionsByPID[file.pid] else { continue }
+            let process = FileAccessTraceProcessIdentity(
+                pid: session.pid,
+                startAbstime: session.startAbstime,
+                displayName: ""
+            )
+            descriptors.register(
+                path: file.path,
+                process: process,
+                fileDescriptor: file.fileDescriptor
+            )
+        }
     }
 
     func consume(
@@ -87,23 +107,38 @@ private actor FileAccessTraceEngine {
             aggregator.markDroppedEvents(payload.droppedRecordCount)
         }
         for record in payload.records {
+            let process = record.process.map {
+                FileAccessTraceProcessIdentity(
+                    pid: $0.pid,
+                    startAbstime: $0.startAbstime,
+                    displayName: $0.displayName
+                )
+            }
+            if let process,
+               let descriptorChange = FileAccessTraceDescriptorParser.parse(line: record.line) {
+                apply(descriptorChange, process: process)
+            }
             switch parser.consume(line: record.line, on: now) {
             case .event(let parsed):
-                let volumeIdentifier = volumeIdentifier(for: parsed.path)
-                let process = record.process.map {
+                let resolvedProcess = process.map {
                     FileAccessTraceProcessIdentity(
                         pid: $0.pid,
                         startAbstime: $0.startAbstime,
                         displayName: $0.displayName.isEmpty ? parsed.processLabel : $0.displayName
                     )
                 }
+                let path = parsed.path ?? descriptorPath(
+                    process: resolvedProcess,
+                    fileDescriptor: parsed.fileDescriptor
+                )
+                let volumeIdentifier = volumeIdentifier(for: path)
                 aggregator.ingest(FileAccessTraceEvent(
                     timestamp: parsed.timestamp,
                     direction: parsed.direction,
                     requestedBytes: parsed.requestedBytes,
-                    path: parsed.path,
+                    path: path,
                     volumeIdentifier: volumeIdentifier,
-                    process: process
+                    process: resolvedProcess
                 ))
             case .unsupportedFormat:
                 aggregator.markUnsupportedFormat()
@@ -124,20 +159,56 @@ private actor FileAccessTraceEngine {
         aggregator.snapshot(at: now)
     }
 
+    func refreshDescriptors(sessions: [ProcessSession], openFiles: [OpenFileRecord]) {
+        let sessionsByPID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.pid, $0) })
+        let refreshedPIDs = Set(openFiles.map(\.pid))
+        descriptors.removeAll(processIdentifiers: refreshedPIDs)
+        for file in openFiles {
+            guard let session = sessionsByPID[file.pid] else { continue }
+            let process = FileAccessTraceProcessIdentity(
+                pid: session.pid,
+                startAbstime: session.startAbstime,
+                displayName: ""
+            )
+            descriptors.register(
+                path: file.path,
+                process: process,
+                fileDescriptor: file.fileDescriptor
+            )
+        }
+    }
+
+    private func descriptorPath(
+        process: FileAccessTraceProcessIdentity?,
+        fileDescriptor: Int32?
+    ) -> String? {
+        guard let process, let fileDescriptor else { return nil }
+        return descriptors.path(process: process, fileDescriptor: fileDescriptor)
+    }
+
+    private func apply(
+        _ change: FileAccessTraceDescriptorChange,
+        process: FileAccessTraceProcessIdentity
+    ) {
+        switch change {
+        case .opened(let fileDescriptor, let path):
+            descriptors.register(
+                path: path,
+                process: process,
+                fileDescriptor: fileDescriptor
+            )
+        case .closed(let fileDescriptor):
+            descriptors.close(process: process, fileDescriptor: fileDescriptor)
+        }
+    }
+
     private func volumeIdentifier(for path: String?) -> String? {
         guard case .included = target.match(
             path: path,
             volumeIdentifier: target.volumeIdentifier
-        ), let path
+        )
         else { return nil }
-        do {
-            let values = try URL(fileURLWithPath: path).resourceValues(
-                forKeys: [.volumeIdentifierKey]
-            )
-            return values.volumeIdentifier.map(String.init(describing:))
-        } catch {
-            return nil
-        }
+        return target.volumeIdentifier
     }
 }
 
@@ -168,8 +239,16 @@ final class FileAccessTraceStore {
     @ObservationIgnored private var lastChartPoint = Date.distantPast
     @ObservationIgnored private var hasPendingStartIntent = false
     @ObservationIgnored private var attemptedRegistrationForIntent = false
+    @ObservationIgnored private var monitoredSessions: [ProcessSession] = []
 
     var isRunning: Bool { state == .running || state == .starting }
+
+    func setProcessSessions(_ sessions: [ProcessSession]) {
+        guard !isRunning else { return }
+        monitoredSessions = Array(sessions.prefix(
+            TraceHelperProtocolConfiguration.maximumProcessIdentifierCount
+        ))
+    }
 
     func refreshPermissionStatus() {
         helper.refreshStatus()
@@ -258,6 +337,13 @@ final class FileAccessTraceStore {
 
     private func launchTrace() {
         guard let selection, hasPendingStartIntent, !isRunning else { return }
+        let sessions = monitoredSessions
+        let processIdentifiers = sessions.map(\.pid)
+        guard !processIdentifiers.isEmpty else {
+            state = .failed(L10n.text("应用已经结束"))
+            cancelPendingStart()
+            return
+        }
         hasPendingStartIntent = false
         attemptedRegistrationForIntent = false
         resetMeasurements()
@@ -274,22 +360,39 @@ final class FileAccessTraceStore {
             readBytesPerSecond: 0,
             writeBytesPerSecond: 0
         )]
-        engine = FileAccessTraceEngine(target: selection.target, startedAt: now)
         state = .starting
         drainTask?.cancel()
         drainTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let sessionID = try await helper.startTrace(maximumDurationSeconds: 900)
+                let sessionID = try await helper.startTrace(
+                    maximumDurationSeconds: 900,
+                    processIdentifiers: processIdentifiers
+                )
                 guard !Task.isCancelled else {
                     try? await helper.stopTrace(sessionID: sessionID)
                     return
                 }
                 self.sessionID = sessionID
+                let baseline = await OpenFileSampler.shared.sample(sessions: sessions)
+                guard !Task.isCancelled else {
+                    try? await helper.stopTrace(sessionID: sessionID)
+                    return
+                }
+                self.engine = FileAccessTraceEngine(
+                    target: selection.target,
+                    startedAt: now,
+                    sessions: sessions,
+                    openFiles: baseline.records
+                )
                 self.state = .running
                 await self.drain(sessionID: sessionID)
             } catch is CancellationError {
                 return
+            } catch TraceHelperClientError.approvalRequired {
+                self.hasPendingStartIntent = true
+                self.state = .waitingForApproval
+                self.helper.openLoginItemsSettings()
             } catch {
                 self.state = .failed(self.message(for: error))
             }
@@ -329,13 +432,31 @@ final class FileAccessTraceStore {
     }
 
     private func drain(sessionID: String) async {
+        var lastDescriptorRefresh = Date()
+        var lastPublished = Date.distantPast
         while !Task.isCancelled {
             do {
-                let payload = try await helper.drainTrace(sessionID: sessionID)
+                let payload = try await helper.drainTrace(
+                    sessionID: sessionID,
+                    maximumRecordCount: TraceHelperProtocolConfiguration.maximumDrainRecordCount
+                )
                 let now = Date()
                 guard let engine else { return }
+                if now.timeIntervalSince(lastDescriptorRefresh) >= 2 {
+                    let sessions = monitoredSessions
+                    let snapshot = await OpenFileSampler.shared.sample(sessions: sessions)
+                    await engine.refreshDescriptors(
+                        sessions: sessions,
+                        openFiles: snapshot.records
+                    )
+                    lastDescriptorRefresh = now
+                }
                 let update = await engine.consume(payload, at: now)
-                publish(update.snapshot, at: now)
+                if now.timeIntervalSince(lastPublished) >= 0.25
+                    || update.terminalFailure || payload.isFinished {
+                    publish(update.snapshot, at: now)
+                    lastPublished = now
+                }
                 if update.terminalFailure {
                     self.sessionID = nil
                     state = .failed(L10n.text("系统追踪提前结束，已有结果可能不完整"))
@@ -346,7 +467,11 @@ final class FileAccessTraceStore {
                     state = .stopped
                     return
                 }
-                try await Task.sleep(for: .milliseconds(250))
+                if payload.hasMoreRecords {
+                    await Task.yield()
+                } else {
+                    try await Task.sleep(for: .milliseconds(100))
+                }
             } catch is CancellationError {
                 return
             } catch {
@@ -414,6 +539,8 @@ final class FileAccessTraceStore {
         switch error as? TraceHelperClientError {
         case .protocolMismatch:
             L10n.text("追踪组件版本不匹配，请重新安装应用")
+        case .approvalRequired:
+            L10n.text("需要启用文件访问追踪")
         case .rejected(let status):
             L10n.format("追踪组件未能开始：%@", status)
         case .invalidPayload:

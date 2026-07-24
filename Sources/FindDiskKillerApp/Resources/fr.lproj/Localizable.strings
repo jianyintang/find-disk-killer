@@ -374,3 +374,4 @@
 "追踪此目录" = "Suivre ce dossier";
 "查看此目录内具体的请求读写、活跃文件和访问应用" = "Afficher les demandes détaillées, les fichiers actifs et les apps ayant accédé au dossier";
 "请先停止当前目录的追踪" = "Arrêtez d’abord le suivi du dossier actuel";
+"这里仅统计 %@ 当前进程组在此目录内向系统请求的读写。" = "Seules les demandes de lecture et d’écriture adressées au système dans ce dossier par %@ et ses processus actuels sont comptabilisées.";

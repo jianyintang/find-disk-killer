@@ -22,6 +22,7 @@ public struct FileAccessTraceParsedEvent: Equatable, Sendable {
     public let operation: String
     public let direction: FileAccessTraceDirection
     public let requestedBytes: UInt64
+    public let fileDescriptor: Int32?
     public let path: String?
     public let pathWasTruncated: Bool
     public let processLabel: String
@@ -86,6 +87,8 @@ public enum FileAccessTraceParser {
         guard let byteIndex = fields.firstIndex(where: { $0.hasPrefix("B=") }),
               let requestedBytes = parseUnsigned(String(fields[byteIndex].dropFirst(2)))
         else { return .unsupportedFormat }
+        let fileDescriptor = fields.first(where: { $0.hasPrefix("F=") })
+            .flatMap { parseFileDescriptor(String($0.dropFirst(2))) }
 
         guard let durationIndex = fields.indices.reversed().first(where: {
                 $0 > byteIndex && $0 < fields.count - 1 && isDuration(fields[$0])
@@ -119,6 +122,7 @@ public enum FileAccessTraceParser {
             operation: operation,
             direction: direction,
             requestedBytes: requestedBytes,
+            fileDescriptor: fileDescriptor,
             path: path,
             pathWasTruncated: pathWasTruncated,
             processLabel: process.label,
@@ -173,6 +177,11 @@ public enum FileAccessTraceParser {
         return UInt64(value)
     }
 
+    private static func parseFileDescriptor(_ value: String) -> Int32? {
+        guard let parsed = parseUnsigned(value), parsed <= UInt64(Int32.max) else { return nil }
+        return Int32(parsed)
+    }
+
     private static func containsStandaloneErrno(fields: [String]) -> Bool {
         guard fields.count > 2 else { return false }
         for index in 2..<fields.count {
@@ -220,6 +229,121 @@ public enum FileAccessTraceParser {
         let key = value[..<equals]
         return key.allSatisfy { $0.isASCII && $0.isUppercase }
             && !["A", "D", "O", "S"].contains(String(key))
+    }
+}
+
+public enum FileAccessTraceDescriptorChange: Equatable, Sendable {
+    case opened(fileDescriptor: Int32, path: String)
+    case closed(fileDescriptor: Int32)
+}
+
+public enum FileAccessTraceDescriptorParser {
+    private static let openCalls: Set<String> = [
+        "open", "openat", "open_nocancel", "openat_nocancel"
+    ]
+    private static let closeCalls: Set<String> = ["close", "close_nocancel"]
+
+    public static func parse(line: String) -> FileAccessTraceDescriptorChange? {
+        let fields = line.split(whereSeparator: \Character.isWhitespace).map(String.init)
+        guard fields.count >= 4 else { return nil }
+        let operation = fields[1].trimmingCharacters(
+            in: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_")).inverted
+        ).lowercased()
+        guard openCalls.contains(operation) || closeCalls.contains(operation),
+              let descriptorIndex = fields.firstIndex(where: { $0.hasPrefix("F=") }),
+              let descriptor = parseFileDescriptor(String(fields[descriptorIndex].dropFirst(2)))
+        else { return nil }
+
+        if closeCalls.contains(operation) {
+            return .closed(fileDescriptor: descriptor)
+        }
+        guard let durationIndex = fields.indices.reversed().first(where: {
+            $0 > descriptorIndex && $0 < fields.count - 1 && isDuration(fields[$0])
+        }) else { return nil }
+        let details = fields[(descriptorIndex + 1)..<durationIndex]
+        guard let pathStart = details.firstIndex(where: {
+            $0.hasPrefix("/") || $0.hasPrefix("private/")
+                || $0.hasPrefix("...") || $0.hasPrefix("<truncated>")
+        }) else { return nil }
+        let pathFields = fields[pathStart..<durationIndex].filter {
+            !$0.hasPrefix("(") && $0 != "W" && !isMetadata($0)
+        }
+        var path = pathFields.joined(separator: " ")
+        if path.hasPrefix("private/") {
+            path = "/" + path
+        }
+        guard path.hasPrefix("/") else { return nil }
+        return .opened(fileDescriptor: descriptor, path: path)
+    }
+
+    private static func parseFileDescriptor(_ value: String) -> Int32? {
+        let parsed: UInt64?
+        if value.lowercased().hasPrefix("0x") {
+            parsed = UInt64(value.dropFirst(2), radix: 16)
+        } else {
+            parsed = UInt64(value)
+        }
+        guard let parsed, parsed <= UInt64(Int32.max) else { return nil }
+        return Int32(parsed)
+    }
+
+    private static func isDuration(_ value: String) -> Bool {
+        let candidate = value.hasSuffix("W") ? String(value.dropLast()) : value
+        return candidate.contains(".") && Double(candidate) != nil
+    }
+
+    private static func isMetadata(_ value: String) -> Bool {
+        ["A=", "B=", "D=", "O=", "S="].contains { value.hasPrefix($0) }
+    }
+}
+
+public struct FileAccessTraceDescriptorIndex: Sendable {
+    private struct Key: Hashable, Sendable {
+        let pid: Int32
+        let startAbstime: UInt64
+        let fileDescriptor: Int32
+    }
+
+    private var paths: [Key: String] = [:]
+
+    public init() {}
+
+    public mutating func register(
+        path: String,
+        process: FileAccessTraceProcessIdentity,
+        fileDescriptor: Int32
+    ) {
+        paths[Key(
+            pid: process.pid,
+            startAbstime: process.startAbstime,
+            fileDescriptor: fileDescriptor
+        )] = path
+    }
+
+    public mutating func close(
+        process: FileAccessTraceProcessIdentity,
+        fileDescriptor: Int32
+    ) {
+        paths.removeValue(forKey: Key(
+            pid: process.pid,
+            startAbstime: process.startAbstime,
+            fileDescriptor: fileDescriptor
+        ))
+    }
+
+    public func path(
+        process: FileAccessTraceProcessIdentity,
+        fileDescriptor: Int32
+    ) -> String? {
+        paths[Key(
+            pid: process.pid,
+            startAbstime: process.startAbstime,
+            fileDescriptor: fileDescriptor
+        )]
+    }
+
+    public mutating func removeAll(processIdentifiers: Set<Int32>) {
+        paths = paths.filter { !processIdentifiers.contains($0.key.pid) }
     }
 }
 

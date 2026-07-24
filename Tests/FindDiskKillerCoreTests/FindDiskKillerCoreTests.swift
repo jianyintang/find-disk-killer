@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Testing
+import CFindDiskKillerTrace
 import FindDiskKillerTraceProtocol
 @testable import FindDiskKillerCore
 
@@ -108,12 +109,47 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
 
     #expect(read.direction == .read)
     #expect(read.requestedBytes == 16_384)
+    #expect(read.fileDescriptor == 3)
     #expect(read.path == "/Users/example/My Project/源文件.swift")
     #expect(read.processLabel == "Google Chrome")
     #expect(read.threadID == 9_988)
     #expect(write.direction == .write)
     #expect(write.requestedBytes == 4_096)
     #expect(write.path == "/Users/example/My Project/output.bin")
+}
+
+@Test func fileAccessTraceDescriptorParserMaintainsOnlyCompletePaths() {
+    let opened = "12:34:56.250000 open F=17 (R___________) /Users/example/My Project/file.swift 0.000120 Tool.9988"
+    #expect(FileAccessTraceDescriptorParser.parse(line: opened) == .opened(
+        fileDescriptor: 17,
+        path: "/Users/example/My Project/file.swift"
+    ))
+    #expect(FileAccessTraceDescriptorParser.parse(
+        line: "12:34:57.250000 close F=17 0.000010 Tool.9988"
+    ) == .closed(fileDescriptor: 17))
+    #expect(FileAccessTraceDescriptorParser.parse(
+        line: "12:34:58.250000 open F=18 (R___________) .../file.swift 0.000010 Tool.9988"
+    ) == nil)
+    #expect(FileAccessTraceDescriptorParser.parse(
+        line: "12:34:59.250000 open F=19 (RW_____________) private/tmp/file.bin 0.000010 Tool.9988"
+    ) == .opened(fileDescriptor: 19, path: "/private/tmp/file.bin"))
+}
+
+@Test func fileAccessTraceDescriptorIndexIsolatesProcessAndFDReuse() {
+    let first = FileAccessTraceProcessIdentity(pid: 42, startAbstime: 100, displayName: "Tool")
+    let replacement = FileAccessTraceProcessIdentity(
+        pid: 42,
+        startAbstime: 200,
+        displayName: "Tool"
+    )
+    var index = FileAccessTraceDescriptorIndex()
+    index.register(path: "/tmp/first", process: first, fileDescriptor: 7)
+    #expect(index.path(process: first, fileDescriptor: 7) == "/tmp/first")
+    #expect(index.path(process: replacement, fileDescriptor: 7) == nil)
+    index.close(process: first, fileDescriptor: 7)
+    #expect(index.path(process: first, fileDescriptor: 7) == nil)
+    index.register(path: "/tmp/reused", process: first, fileDescriptor: 7)
+    #expect(index.path(process: first, fileDescriptor: 7) == "/tmp/reused")
 }
 
 @Test func fileAccessTraceParserDoesNotTreatBracketedPathComponentsAsErrno() {
@@ -135,6 +171,12 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(TraceHelperProtocolConfiguration.boundedDrainRecordCount(0) == 1)
     #expect(TraceHelperProtocolConfiguration.boundedDrainRecordCount(9_999) == 2_048)
     #expect(TraceHelperProtocolConfiguration.maximumDrainSourceBytes == 256 * 1_024)
+    #expect(TraceHelperProtocolConfiguration.validatedProcessIdentifiers([1, 2, 2]) == [1, 2])
+    #expect(TraceHelperProtocolConfiguration.validatedProcessIdentifiers([]) == nil)
+    #expect(TraceHelperProtocolConfiguration.validatedProcessIdentifiers([0]) == nil)
+    #expect(TraceHelperProtocolConfiguration.validatedProcessIdentifiers(
+        Array(repeating: NSNumber(value: 1), count: 65)
+    ) == nil)
 
     let payload = TraceHelperDrainPayload(
         records: [
@@ -154,6 +196,22 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     )
     let data = try JSONEncoder().encode(payload)
     #expect(try JSONDecoder().decode(TraceHelperDrainPayload.self, from: data) == payload)
+}
+
+@Test func traceThreadResolverUsesTheFSUsageThreadIDNamespace() {
+    var threadID: UInt64 = 0
+    #expect(pthread_threadid_np(nil, &threadID) == 0)
+    var processIdentifier = Int32(getpid())
+    var identity = FDKTraceProcessIdentity()
+    let resolved = fdk_trace_resolve_thread_in_processes(
+        threadID,
+        &processIdentifier,
+        1,
+        &identity
+    )
+    #expect(resolved == 1)
+    #expect(identity.pid == processIdentifier)
+    #expect(identity.start_abstime > 0)
 }
 
 @Test func fileAccessTraceParserHandlesCallsErrorsAndCoverageGaps() {

@@ -1268,6 +1268,7 @@ private struct ProcessFileActivityView: View {
         }
         .onChange(of: process.sessions, initial: true) { _, sessions in
             monitoredSessions = sessions
+            traceStore.setProcessSessions(sessions)
         }
         .onChange(of: filteredRows.map(\.id)) { _, identifiers in
             if let selectedPath, identifiers.contains(selectedPath) { return }

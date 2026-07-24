@@ -374,3 +374,4 @@
 "追踪此目录" = "Diesen Ordner aufzeichnen";
 "查看此目录内具体的请求读写、活跃文件和访问应用" = "Detaillierte Lese- und Schreibanforderungen, aktive Dateien und zugreifende Apps anzeigen";
 "请先停止当前目录的追踪" = "Beenden Sie zuerst die aktuelle Ordneraufzeichnung";
+"这里仅统计 %@ 当前进程组在此目录内向系统请求的读写。" = "Hier werden nur Lese- und Schreibanforderungen erfasst, die %@ und die zugehörigen aktuellen Prozesse in diesem Ordner an das System stellen.";

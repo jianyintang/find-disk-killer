@@ -1,13 +1,14 @@
 import Foundation
 
 public enum TraceHelperProtocolConfiguration {
-    public static let version = 2
+    public static let version = 4
     public static let machServiceName = "com.jianyintang.FindDiskKiller.TraceHelper"
     public static let launchDaemonPlistName = "com.jianyintang.FindDiskKiller.TraceHelper.plist"
     public static let minimumDurationSeconds = 10
     public static let maximumDurationSeconds = 3_600
     public static let maximumDrainRecordCount = 2_048
     public static let maximumDrainSourceBytes = 256 * 1_024
+    public static let maximumProcessIdentifierCount = 64
 
     public static func validatedDuration(_ value: Int) -> Int? {
         (minimumDurationSeconds...maximumDurationSeconds).contains(value) ? value : nil
@@ -15,6 +16,21 @@ public enum TraceHelperProtocolConfiguration {
 
     public static func boundedDrainRecordCount(_ value: Int) -> Int {
         min(max(value, 1), maximumDrainRecordCount)
+    }
+
+    public static func validatedProcessIdentifiers(_ values: [NSNumber]) -> [Int32]? {
+        guard !values.isEmpty, values.count <= maximumProcessIdentifierCount else { return nil }
+        var identifiers: [Int32] = []
+        var seen: Set<Int32> = []
+        for value in values {
+            let raw = value.int64Value
+            guard raw > 0, raw <= Int64(Int32.max) else { return nil }
+            let identifier = Int32(raw)
+            if seen.insert(identifier).inserted {
+                identifiers.append(identifier)
+            }
+        }
+        return identifiers.isEmpty ? nil : identifiers
     }
 
     public static let appCodeSigningRequirement = """
@@ -53,17 +69,20 @@ public struct TraceHelperRecord: Codable, Equatable, Sendable {
 public struct TraceHelperDrainPayload: Codable, Equatable, Sendable {
     public let records: [TraceHelperRecord]
     public let droppedRecordCount: UInt64
+    public let hasMoreRecords: Bool
     public let isFinished: Bool
     public let exitCode: Int32?
 
     public init(
         records: [TraceHelperRecord],
         droppedRecordCount: UInt64,
+        hasMoreRecords: Bool = false,
         isFinished: Bool,
         exitCode: Int32?
     ) {
         self.records = records
         self.droppedRecordCount = droppedRecordCount
+        self.hasMoreRecords = hasMoreRecords
         self.isFinished = isFinished
         self.exitCode = exitCode
     }
@@ -78,6 +97,7 @@ public protocol TraceHelperXPCProtocol {
 
     func startTrace(
         maximumDurationSeconds: NSNumber,
+        processIdentifiers: NSArray,
         withReply reply: @escaping (NSString, NSString) -> Void
     )
 

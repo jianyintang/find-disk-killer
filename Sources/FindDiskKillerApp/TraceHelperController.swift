@@ -18,6 +18,7 @@ enum TraceHelperServiceState: Equatable {
 enum TraceHelperClientError: Error, Equatable {
     case unavailable
     case protocolMismatch
+    case approvalRequired
     case rejected(String)
     case invalidPayload
 }
@@ -103,15 +104,24 @@ final class TraceHelperController {
         state = .ready
     }
 
-    func startTrace(maximumDurationSeconds: Int) async throws -> String {
-        try await ping()
+    func startTrace(
+        maximumDurationSeconds: Int,
+        processIdentifiers: [Int32]
+    ) async throws -> String {
+        do {
+            try await ping()
+        } catch TraceHelperClientError.protocolMismatch {
+            try replaceOutdatedService()
+            try await ping()
+        }
         return try await withCheckedThrowingContinuation { continuation in
             do {
                 let helper = try remoteProxy { _ in
                     continuation.resume(throwing: TraceHelperClientError.unavailable)
                 }
                 helper.startTrace(
-                    maximumDurationSeconds: NSNumber(value: maximumDurationSeconds)
+                    maximumDurationSeconds: NSNumber(value: maximumDurationSeconds),
+                    processIdentifiers: processIdentifiers.map(NSNumber.init(value:)) as NSArray
                 ) { sessionID, status in
                     let status = status as String
                     guard status == "started" else {
@@ -123,6 +133,27 @@ final class TraceHelperController {
             } catch {
                 continuation.resume(throwing: error)
             }
+        }
+    }
+
+    private func replaceOutdatedService() throws {
+        invalidateConnection()
+        do {
+            try service.unregister()
+            try service.register()
+            refreshStatus()
+        } catch {
+            refreshStatus()
+            if service.status == .requiresApproval {
+                throw TraceHelperClientError.approvalRequired
+            }
+            throw error
+        }
+        if service.status == .requiresApproval {
+            throw TraceHelperClientError.approvalRequired
+        }
+        guard service.status == .enabled else {
+            throw TraceHelperClientError.unavailable
         }
     }
 

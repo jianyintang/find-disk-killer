@@ -16,4 +16,11 @@ int fdk_trace_resolve_thread(
     FDKTraceProcessIdentity *identity
 );
 
+int fdk_trace_resolve_thread_in_processes(
+    uint64_t thread_id,
+    const int32_t *process_ids,
+    int32_t process_count,
+    FDKTraceProcessIdentity *identity
+);
+
 #endif

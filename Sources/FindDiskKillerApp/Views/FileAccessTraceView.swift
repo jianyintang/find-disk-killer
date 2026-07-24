@@ -73,7 +73,7 @@ struct FileAccessTraceView: View {
             Image(systemName: "scope")
                 .foregroundStyle(Color.accentColor)
             Text(L10n.format(
-                "这里会记录此目录内所有应用向系统请求的读写，不只限于 %@；请在下方“访问应用”中确认实际参与者。",
+                "这里仅统计 %@ 当前进程组在此目录内向系统请求的读写。",
                 contextProcessName ?? ""
             ))
             .font(.caption)

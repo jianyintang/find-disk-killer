@@ -42,7 +42,11 @@ let package = Package(
         ),
         .testTarget(
             name: "FindDiskKillerCoreTests",
-            dependencies: ["FindDiskKillerCore", "FindDiskKillerTraceProtocol"]
+            dependencies: [
+                "FindDiskKillerCore",
+                "FindDiskKillerTraceProtocol",
+                "CFindDiskKillerTrace"
+            ]
         )
     ]
 )

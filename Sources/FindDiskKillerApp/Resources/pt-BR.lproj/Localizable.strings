@@ -374,3 +374,4 @@
 "追踪此目录" = "Rastrear esta pasta";
 "查看此目录内具体的请求读写、活跃文件和访问应用" = "Ver solicitações detalhadas, arquivos ativos e apps com acesso à pasta";
 "请先停止当前目录的追踪" = "Interrompa primeiro o rastreamento da pasta atual";
+"这里仅统计 %@ 当前进程组在此目录内向系统请求的读写。" = "Aqui são contabilizadas apenas as solicitações de leitura e gravação feitas ao sistema nesta pasta por %@ e pelos processos atuais relacionados.";

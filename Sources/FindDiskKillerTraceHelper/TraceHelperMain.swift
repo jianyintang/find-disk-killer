@@ -22,6 +22,11 @@ private final class TraceProcessResolver: @unchecked Sendable {
     private let lock = NSLock()
     private var cache: [UInt64: CachedIdentity] = [:]
     private let clock = ContinuousClock()
+    private let processIdentifiers: [Int32]
+
+    init(processIdentifiers: [Int32]) {
+        self.processIdentifiers = processIdentifiers
+    }
 
     func identity(for threadID: UInt64) -> TraceHelperProcessIdentity? {
         let now = clock.now
@@ -33,7 +38,14 @@ private final class TraceProcessResolver: @unchecked Sendable {
         lock.unlock()
 
         var raw = FDKTraceProcessIdentity()
-        let resolved = fdk_trace_resolve_thread(threadID, &raw) == 1
+        let resolved = processIdentifiers.withUnsafeBufferPointer { identifiers in
+            fdk_trace_resolve_thread_in_processes(
+                threadID,
+                identifiers.baseAddress,
+                Int32(identifiers.count),
+                &raw
+            ) == 1
+        }
         let identity: TraceHelperProcessIdentity? = if resolved {
             TraceHelperProcessIdentity(
                 pid: raw.pid,
@@ -73,7 +85,7 @@ private final class TraceSession: @unchecked Sendable {
     let id = UUID().uuidString
     let process: Process
     private let output: Pipe
-    private let resolver = TraceProcessResolver()
+    private let resolver: TraceProcessResolver
     private let lock = NSLock()
     private var pendingBytes = Data()
     private var records: [TraceHelperRecord] = []
@@ -83,13 +95,14 @@ private final class TraceSession: @unchecked Sendable {
     private var finished = false
     private var exitCode: Int32?
 
-    init(maximumDurationSeconds: Int) throws {
+    init(maximumDurationSeconds: Int, processIdentifiers: [Int32]) throws {
         process = Process()
         output = Pipe()
+        resolver = TraceProcessResolver(processIdentifiers: processIdentifiers)
         process.executableURL = URL(fileURLWithPath: "/usr/bin/fs_usage")
         process.arguments = [
             "-w", "-f", "filesys", "-t", String(maximumDurationSeconds)
-        ]
+        ] + processIdentifiers.map(String.init)
         process.environment = [
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
             "LANG": "C",
@@ -153,6 +166,7 @@ private final class TraceSession: @unchecked Sendable {
         return TraceHelperDrainPayload(
             records: drained,
             droppedRecordCount: dropped,
+            hasMoreRecords: recordHead < records.count,
             isFinished: finished && recordHead == records.count,
             exitCode: exitCode
         )
@@ -256,12 +270,15 @@ private final class TraceHelperService: NSObject, TraceHelperXPCProtocol {
 
     func startTrace(
         maximumDurationSeconds: NSNumber,
+        processIdentifiers: NSArray,
         withReply reply: @escaping (NSString, NSString) -> Void
     ) {
         queue.async {
             guard let duration = TraceHelperProtocolConfiguration.validatedDuration(
                 maximumDurationSeconds.intValue
-            ) else {
+            ), let identifiers = TraceHelperProtocolConfiguration.validatedProcessIdentifiers(
+                processIdentifiers.compactMap { $0 as? NSNumber }
+            ), identifiers.count == processIdentifiers.count else {
                 reply("" as NSString, TraceHelperStatus.invalidRequest as NSString)
                 return
             }
@@ -271,7 +288,10 @@ private final class TraceHelperService: NSObject, TraceHelperXPCProtocol {
             }
             self.session?.stop()
             do {
-                let session = try TraceSession(maximumDurationSeconds: duration)
+                let session = try TraceSession(
+                    maximumDurationSeconds: duration,
+                    processIdentifiers: identifiers
+                )
                 self.session = session
                 reply(session.id as NSString, TraceHelperStatus.started as NSString)
             } catch {

@@ -374,3 +374,4 @@
 "追踪此目录" = "Trace this folder";
 "查看此目录内具体的请求读写、活跃文件和访问应用" = "View detailed read and write requests, active files, and apps accessing this folder";
 "请先停止当前目录的追踪" = "Stop the current folder trace first";
+"这里仅统计 %@ 当前进程组在此目录内向系统请求的读写。" = "Only read and write requests made in this folder by %@ and its current processes are counted here.";
