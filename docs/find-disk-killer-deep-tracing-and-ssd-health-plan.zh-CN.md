@@ -645,10 +645,11 @@ FindDiskKiller 不发送系统通知、不自动弹窗。用户打开应用时�
 | 最近路径变化 | 已实现按本地可写且身份稳定的卷启动的 FSEvents 内存流、卷拓扑更新、能力状态、缺口重建与有界历史 | 事件风暴和真实热插拔矩阵仍按 13.2 验收；不保存路径历史，不归因到进程 |
 | 磁盘健康 | 已实现 whole-disk `diskutil -plist` provider、可选字段能力模型、128 位计数、设备实例校验、超时/输出上限和完整 UI 状态；卷到物理盘的 `diskutil` 映射也使用后台并发、有界输出和硬超时，不阻塞基础采样 | 真实设备矩阵、强身份持久化及 7/30/90 天趋势尚未通过 SSD-DATA，因此当前界面只显示本次或上次成功快照 |
 | 文件访问追踪 Core 原型 | 已实现受控宽格式行解析、read/write 请求量方向、未知格式 fail closed、卷身份与路径组件目标匹配、有界 250 ms 桶、最近 5 秒速率、1 秒峰值、文件/进程会话聚合和显式 dropped-event 覆盖状态；仅由测试调用 | 尚未用 root 实机流验证输出格式、路径召回和线程到 PID 身份映射，不构成 TRACE-DATA 通过 |
-| 文件访问追踪正式功能 | 未接入 runner、helper、XPC 或 UI | 阶段 C 的真实 App 打包、签名、公证、安全、数据和性能 Gate 全部通过后才可实现；届时允许在用户主动开始时出现管理员确认、后台项目批准和按需完全磁盘访问引导 |
+| 文件访问追踪安全承载层 | 已转换为真实 macOS App 工程：SwiftPM 保留 Core/测试，Xcode 生成 Developer ID 签名的 universal2 `.app`；包内包含 Hardened Runtime helper、LaunchDaemon plist、双向 signing requirement、仅版本握手的 XPC 协议和只读 `SMAppService.status` 控制器；启动不注册、不申请权限 | 尚未接入 `fs_usage` runner、目标路径、追踪命令或正式 UI；空握手仍需完成公证、干净机首装/批准/升级/卸载验证 |
+| 文件访问追踪正式功能 | 未接入 runner 或 UI，也不会展示入口 | 阶段 C 的真实数据、安全和性能 Gate 以及 DISTRIBUTION-0 全部通过后才可实现；届时只允许在用户主动开始追踪后出现管理员确认、后台项目批准和按需完全磁盘访问引导 |
 | smartctl 兼容层 | 未接入 | 仅在阶段 E 的许可证与设备适配评审通过后考虑 |
 
-因此当前产品不会出现“启用归因”“开始深度追踪”“追踪文件或目录”或 smartctl 入口，也不会触发无行动价值的授权流程。已经实现的文件活动与磁盘健康在能力缺失时直接降级，不阻塞 CPU、磁盘吞吐和网络监控。Core 原型的单元测试通过不代表 helper、真实路径覆盖或发布 Gate 已完成。
+因此当前产品不会出现“启用归因”“开始深度追踪”“追踪文件或目录”或 smartctl 入口，也不会触发无行动价值的授权流程。App 目前只读取 helper 状态，不调用 `register()`，空握手协议也不接受路径、命令、底层参数或追踪请求。已经实现的文件活动与磁盘健康在能力缺失时直接降级，不阻塞 CPU、磁盘吞吐和网络监控。Core 原型与 App 包构建通过不代表 helper 已获批、真实路径覆盖已验证或发布 Gate 已完成。
 
 ### 阶段 A：无权限文件活动（2 个工程周）
 
@@ -667,9 +668,10 @@ FindDiskKiller 不发送系统通知、不自动弹窗。用户打开应用时�
 
 ### 阶段 C：限时深度追踪可行性原型（2 个工程周，不构成产品交付承诺）
 
-- 完成 SMAppService helper、XPC、`fs_usage` 监管和版本自检。
+- 已完成真实 `.app`、LaunchDaemon/helper targets、包内安装布局、Developer ID 本地签名、Hardened Runtime、universal2、双向代码签名约束、最小化共享协议模块、`SMAppService` 状态读取和版本空握手；未自动注册 helper。
+- 后续完成公证/stapling、干净机 helper 生命周期、`fs_usage` 监管和真实版本自检。
 - 建立受控 I/O 夹具和各 macOS 格式样本。
-- 先建立真实 `.app`、LaunchDaemon/helper/XPC targets、plist 安装布局、Developer ID、Hardened Runtime、universal2、公证与 stapling 的空握手原型；SwiftPM 单一可执行产物不能直接进入 helper 实现。
+- 空握手原型完成公证与 stapling 后，才进入可控追踪 runner；SwiftPM 裸可执行产物不承担 helper 生命周期。
 
 退出条件：管理员批准状态机、安全模型、请求字节与真实工作负载路径覆盖达到第 13 章门槛；不达标则停止，不进入 UI 集成，也不在正式界面或路线图中承诺目录请求量。
 

@@ -9,6 +9,8 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
+        .library(name: "FindDiskKillerCore", targets: ["FindDiskKillerCore"]),
+        .library(name: "FindDiskKillerTraceProtocol", targets: ["FindDiskKillerTraceProtocol"]),
         .executable(name: "FindDiskKiller", targets: ["FindDiskKillerApp"])
     ],
     targets: [
@@ -25,9 +27,10 @@ let package = Package(
             name: "FindDiskKillerCore",
             dependencies: ["CFindDiskKiller"]
         ),
+        .target(name: "FindDiskKillerTraceProtocol"),
         .executableTarget(
             name: "FindDiskKillerApp",
-            dependencies: ["FindDiskKillerCore"],
+            dependencies: ["FindDiskKillerCore", "FindDiskKillerTraceProtocol"],
             resources: [
                 .process("Resources")
             ]

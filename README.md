@@ -51,20 +51,33 @@ not a fabricated causal link.
 
 - macOS 14 or later
 - Swift 6 toolchain (Xcode 16 or a compatible command-line toolchain)
+- XcodeGen 2.42 or later when regenerating the Xcode project
 
-## Run From Source
+## Build the macOS App
 
 ```bash
 git clone git@github.com:jianyintang/find-disk-killer.git
 cd find-disk-killer
-swift run FindDiskKiller
+xcodegen generate
+xcodebuild \
+  -project FindDiskKiller.xcodeproj \
+  -scheme FindDiskKillerApp \
+  -configuration Release \
+  -derivedDataPath .derivedData \
+  build
+open .derivedData/Build/Products/Release/FindDiskKiller.app
 ```
 
-For an optimized local build:
+The Xcode build produces the real signed app bundle. It embeds the dormant trace
+helper and its LaunchDaemon property list at the locations required by
+`SMAppService`. The app only checks helper status at launch. It does not register
+the helper or request administrator approval automatically.
+
+The SwiftPM executable remains available for Core development, but it does not
+contain the app-bundle helper layout:
 
 ```bash
-swift build -c release
-open .build/release/FindDiskKiller
+swift run FindDiskKiller
 ```
 
 ## Test
@@ -81,8 +94,11 @@ timeouts, and localization consistency.
 ## Privacy and Permissions
 
 FindDiskKiller processes monitoring data locally. The current codebase does not
-send telemetry, upload file paths, or install an Endpoint Security extension or
-privileged helper.
+send telemetry, upload file paths, or install an Endpoint Security extension.
+The Xcode app bundle contains a signed privileged helper with a version-only XPC
+handshake, but it is not registered automatically and cannot run arbitrary
+commands, receive paths, or start `fs_usage`. A later tracing workflow must only
+request registration after an explicit user action.
 
 macOS may restrict visibility into protected processes and paths. The interface
 reports partial or unavailable coverage explicitly. Recent file changes come
@@ -96,10 +112,16 @@ Sources/
   CFindDiskKiller/       Low-level macOS sampling bridge
   FindDiskKillerCore/    Sampling, aggregation, and health models
   FindDiskKillerApp/     SwiftUI application and localized resources
+  FindDiskKillerTraceProtocol/  Minimal shared XPC contract
+  FindDiskKillerTraceHelper/  Signed, version-only XPC helper entry point
+AppConfig/               App, helper, signing, and LaunchDaemon metadata
 Tests/
   FindDiskKillerCoreTests/
 docs/
 ```
+
+`project.yml` is the source of truth for the generated Xcode project. SwiftPM
+continues to own the Core library and unit tests.
 
 The current product and implementation plans are available in Chinese:
 

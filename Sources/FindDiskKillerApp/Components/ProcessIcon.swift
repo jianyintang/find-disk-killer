@@ -42,7 +42,7 @@ private final class ProcessIconCache {
         case .codex: "codex-openai"
         case .claude: "claude-code"
         }
-        return Bundle.module.url(forResource: resourceName, withExtension: "png")
+        return AppResourceBundle.value.url(forResource: resourceName, withExtension: "png")
     }
 }
 

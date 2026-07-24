@@ -1,0 +1,112 @@
+name: FindDiskKiller
+
+options:
+  bundleIdPrefix: com.jianyintang
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "14.0"
+
+configs:
+  Debug: debug
+  Release: release
+
+packages:
+  FindDiskKillerPackage:
+    path: .
+
+settings:
+  base:
+    CLANG_ENABLE_MODULES: YES
+    ENABLE_HARDENED_RUNTIME: YES
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    SWIFT_VERSION: "6.0"
+  configs:
+    Debug:
+      CODE_SIGN_STYLE: Manual
+      CODE_SIGN_IDENTITY: Developer ID Application
+      DEVELOPMENT_TEAM: Y3A8BJ4475
+      ONLY_ACTIVE_ARCH: YES
+    Release:
+      CODE_SIGN_STYLE: Manual
+      CODE_SIGN_IDENTITY: Developer ID Application
+      DEVELOPMENT_TEAM: Y3A8BJ4475
+      ONLY_ACTIVE_ARCH: NO
+
+targets:
+  FindDiskKillerApp:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/FindDiskKillerApp
+        excludes:
+          - Resources
+      - path: Sources/FindDiskKillerApp/Resources
+        buildPhase: resources
+      - path: AppConfig/com.jianyintang.FindDiskKiller.TraceHelper.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchDaemons
+    info:
+      path: AppConfig/FindDiskKiller-Info.plist
+      properties:
+        CFBundleDevelopmentRegion: zh-Hans
+        CFBundleDisplayName: FindDiskKiller
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.utilities
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSHighResolutionCapable: true
+        NSPrincipalClass: NSApplication
+        NSSupportsAutomaticGraphicsSwitching: true
+    entitlements:
+      path: AppConfig/FindDiskKiller.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jianyintang.FindDiskKiller
+        PRODUCT_NAME: FindDiskKiller
+        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: 0.1.0
+    dependencies:
+      - package: FindDiskKillerPackage
+        product: FindDiskKillerCore
+      - package: FindDiskKillerPackage
+        product: FindDiskKillerTraceProtocol
+      - target: FindDiskKillerTraceHelper
+        link: false
+        embed: true
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Library/LaunchServices
+    scheme:
+      gatherCoverageData: false
+      testTargets: []
+
+  FindDiskKillerTraceHelper:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Sources/FindDiskKillerTraceHelper
+    info:
+      path: AppConfig/FindDiskKillerTraceHelper-Info.plist
+      properties:
+        CFBundleDevelopmentRegion: en
+        CFBundleIdentifier: com.jianyintang.FindDiskKiller.TraceHelper
+        CFBundleName: FindDiskKiller Trace Helper
+        CFBundlePackageType: BNDL
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+    entitlements:
+      path: AppConfig/FindDiskKillerTraceHelper.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jianyintang.FindDiskKiller.TraceHelper
+        PRODUCT_NAME: com.jianyintang.FindDiskKiller.TraceHelper
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
+        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: 0.1.0
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: FindDiskKillerPackage
+        product: FindDiskKillerTraceProtocol

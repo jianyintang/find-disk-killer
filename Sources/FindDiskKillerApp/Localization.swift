@@ -90,18 +90,28 @@ enum L10n {
     }
 
     private static var languageBundle: Bundle {
-        languageBundles[effectiveLanguage.rawValue.lowercased()] ?? .module
+        languageBundles[effectiveLanguage.rawValue.lowercased()] ?? AppResourceBundle.value
     }
 
     private static let languageBundles: [String: Bundle] = {
         Dictionary(uniqueKeysWithValues: AppLanguage.allCases.compactMap { language in
             guard language != .system else { return nil }
             let resourceName = language.rawValue.lowercased()
-            guard let path = Bundle.module.path(forResource: resourceName, ofType: "lproj"),
+            guard let path = AppResourceBundle.value.path(forResource: resourceName, ofType: "lproj"),
                   let bundle = Bundle(path: path) else {
                 return nil
             }
             return (resourceName, bundle)
         })
     }()
+}
+
+enum AppResourceBundle {
+    static var value: Bundle {
+        #if SWIFT_PACKAGE
+        .module
+        #else
+        .main
+        #endif
+    }
 }

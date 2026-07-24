@@ -7,6 +7,7 @@ struct FindDiskKillerApp: App {
     @NSApplicationDelegateAdaptor(FindDiskKillerApplicationDelegate.self) private var appDelegate
     @State private var store = MonitorStore()
     @State private var processDetailWindows = ProcessDetailWindowCoordinator()
+    @State private var traceHelper = TraceHelperController()
     @AppStorage("showRateInMenuBar") private var showRateInMenuBar = true
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.system.rawValue
 
@@ -16,7 +17,10 @@ struct FindDiskKillerApp: App {
                 .frame(minWidth: 920, minHeight: 620)
                 .environment(\.locale, Locale(identifier: selectedLanguage.localeIdentifier))
                 .id(appLanguage)
-                .task { store.start() }
+                .task {
+                    traceHelper.refreshStatus()
+                    store.start()
+                }
         }
         .defaultSize(width: 1180, height: 760)
         .commands {

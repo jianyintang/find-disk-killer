@@ -1,0 +1,666 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 54;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		1499823B10B0CC6D47F29166 /* codex-openai.svg in Resources */ = {isa = PBXBuildFile; fileRef = 557B99818141A5F6C7641804 /* codex-openai.svg */; };
+		149AD03F0F95F5953BC2472D /* THIRD_PARTY_ASSETS.md in Resources */ = {isa = PBXBuildFile; fileRef = DEAF50A4052D9A28723D4E58 /* THIRD_PARTY_ASSETS.md */; };
+		1BFD6A0C548294189B5161F1 /* FindDiskKillerCore in Frameworks */ = {isa = PBXBuildFile; productRef = DF40BF11AB711252275ECD86 /* FindDiskKillerCore */; };
+		20DE10DF67C9B9AF86A4F08A /* ProcessKnowledge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03A020A758E12C4DAB2BFC75 /* ProcessKnowledge.swift */; };
+		25F5F0D9B0CF83F5DF35FAB8 /* OverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B45AA78FCDDF1D3E2E56551 /* OverviewView.swift */; };
+		3A0561811B6D242B8FDAC73C /* MonitorChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = 095D33516AF500CF80F1DB90 /* MonitorChart.swift */; };
+		58317958E5A70F2938AF8B08 /* ProcessesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 457028605863AA4C13E784A4 /* ProcessesView.swift */; };
+		5DF5AAA84094D4331DDAF9BC /* TraceHelperMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7F04CF503EF4C19FA578DA5 /* TraceHelperMain.swift */; };
+		5E24EACD1AFFADC97204287F /* DisksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F13AE24E17E72270635D523 /* DisksView.swift */; };
+		60FBDF8CE690926784724D9B /* codex-openai.png in Resources */ = {isa = PBXBuildFile; fileRef = D8EBB20F5BF3CF0CE623067C /* codex-openai.png */; };
+		61564FA8A1037BE920518107 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 195FD2EA225982A5C2A7D542 /* RootView.swift */; };
+		780A5E1EC904EA5BFF7138E3 /* claude-code.svg in Resources */ = {isa = PBXBuildFile; fileRef = 19522173F0ADEF7848BBB1F9 /* claude-code.svg */; };
+		85D2BDA3102CAF467C9F77BA /* Localization.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8784670E78734B9A225A4E8 /* Localization.swift */; };
+		99192C06F8FEEAE121E9322F /* claude-code.png in Resources */ = {isa = PBXBuildFile; fileRef = 68194E3D67F4FC76209C94C2 /* claude-code.png */; };
+		9E3B6D513AAF6D1ECFA54F73 /* FindDiskKillerTraceHelper in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = 129601FEC7DAF3B684090C81 /* FindDiskKillerTraceHelper */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A1A5A345383AD5797E0A9A9D /* FindDiskKillerTraceProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = F12401CDA817FB03FD601CF3 /* FindDiskKillerTraceProtocol */; };
+		BC3E000C2202C14A4B4919C6 /* FindDiskKillerTraceProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = C4C6752601A90F75FCAC330C /* FindDiskKillerTraceProtocol */; };
+		C17D460138BAAD4608FB55FC /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 397BF22044FB3F231AE3EF11 /* SettingsView.swift */; };
+		C58B53F593260693F3CBADD7 /* ProcessHoverCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C5B6D633FF601F496BFED97 /* ProcessHoverCard.swift */; };
+		CB385437F19C8B95DB52B8A0 /* FindDiskKillerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5425128EC43659859EFFB0 /* FindDiskKillerApp.swift */; };
+		D13AE54F2957B4238E2008D4 /* com.jianyintang.FindDiskKiller.TraceHelper.plist in CopyFiles */ = {isa = PBXBuildFile; fileRef = 0EC9EF0D9A07E6D818C8D2BF /* com.jianyintang.FindDiskKiller.TraceHelper.plist */; };
+		D8E39C8B0F6523922443851B /* MenuBarPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5CA4BCE3E2500A9F4B1027 /* MenuBarPanel.swift */; };
+		E25BC097CC890DF89F578E08 /* ProcessIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10F875FFF3EC9D9FECC30CD /* ProcessIcon.swift */; };
+		EC249E190109F76E7790D340 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 710BED35EF73FDAAD7FBB024 /* Localizable.strings */; };
+		F5E7955B1A19F150460C4A82 /* SharedComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B41A166BB33A1EC2CC01A3B7 /* SharedComponents.swift */; };
+		FA64CAF12CFFF37C9F591513 /* TraceHelperController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51F7C0EAECA734CA262A07EC /* TraceHelperController.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		F1879C79261B3CEBA6B94C9D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E67B6419F73612FC91A5CF82 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5E57A8815A65D4F48D636F03;
+			remoteInfo = FindDiskKillerTraceHelper;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		8494076B6381A9E244136A49 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/LaunchDaemons;
+			dstSubfolderSpec = 1;
+			files = (
+				D13AE54F2957B4238E2008D4 /* com.jianyintang.FindDiskKiller.TraceHelper.plist in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EF8A0DAD366D2321393EC137 /* Embed Dependencies */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/LaunchServices;
+			dstSubfolderSpec = 1;
+			files = (
+				9E3B6D513AAF6D1ECFA54F73 /* FindDiskKillerTraceHelper in Embed Dependencies */,
+			);
+			name = "Embed Dependencies";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		03A020A758E12C4DAB2BFC75 /* ProcessKnowledge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessKnowledge.swift; sourceTree = "<group>"; };
+		0498F8A849C9CC809CFD1580 /* zh-Hant */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hant"; path = "zh-Hant.lproj/Localizable.strings"; sourceTree = "<group>"; };
+		095D33516AF500CF80F1DB90 /* MonitorChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorChart.swift; sourceTree = "<group>"; };
+		0EC9EF0D9A07E6D818C8D2BF /* com.jianyintang.FindDiskKiller.TraceHelper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = com.jianyintang.FindDiskKiller.TraceHelper.plist; sourceTree = "<group>"; };
+		129601FEC7DAF3B684090C81 /* FindDiskKillerTraceHelper */ = {isa = PBXFileReference; includeInIndex = 0; path = FindDiskKillerTraceHelper; sourceTree = BUILT_PRODUCTS_DIR; };
+		19522173F0ADEF7848BBB1F9 /* claude-code.svg */ = {isa = PBXFileReference; path = "claude-code.svg"; sourceTree = "<group>"; };
+		195FD2EA225982A5C2A7D542 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		397BF22044FB3F231AE3EF11 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		3C5B6D633FF601F496BFED97 /* ProcessHoverCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessHoverCard.swift; sourceTree = "<group>"; };
+		457028605863AA4C13E784A4 /* ProcessesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessesView.swift; sourceTree = "<group>"; };
+		4B5425128EC43659859EFFB0 /* FindDiskKillerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FindDiskKillerApp.swift; sourceTree = "<group>"; };
+		51F7C0EAECA734CA262A07EC /* TraceHelperController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraceHelperController.swift; sourceTree = "<group>"; };
+		557B99818141A5F6C7641804 /* codex-openai.svg */ = {isa = PBXFileReference; path = "codex-openai.svg"; sourceTree = "<group>"; };
+		5B5CA4BCE3E2500A9F4B1027 /* MenuBarPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarPanel.swift; sourceTree = "<group>"; };
+		5C80852A723D2988E259456C /* ru */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ru; path = ru.lproj/Localizable.strings; sourceTree = "<group>"; };
+		68194E3D67F4FC76209C94C2 /* claude-code.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "claude-code.png"; sourceTree = "<group>"; };
+		6E35F5D951DD72C76FB62E50 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		73A1B95E2CC7DE4E5687DCDC /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/Localizable.strings; sourceTree = "<group>"; };
+		7B45AA78FCDDF1D3E2E56551 /* OverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewView.swift; sourceTree = "<group>"; };
+		7BB11F2EFC76CFC186F5A935 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
+		7F13AE24E17E72270635D523 /* DisksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisksView.swift; sourceTree = "<group>"; };
+		A2D149CD762D0BFD8DD8359E /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = de.lproj/Localizable.strings; sourceTree = "<group>"; };
+		A53F0E89B523716633119DE0 /* FindDiskKillerApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FindDiskKillerApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A8784670E78734B9A225A4E8 /* Localization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Localization.swift; sourceTree = "<group>"; };
+		B2AC3BDB45CF49DAF90CDD96 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/Localizable.strings; sourceTree = "<group>"; };
+		B41A166BB33A1EC2CC01A3B7 /* SharedComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedComponents.swift; sourceTree = "<group>"; };
+		C7F04CF503EF4C19FA578DA5 /* TraceHelperMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraceHelperMain.swift; sourceTree = "<group>"; };
+		CACD199CD7651747F61EBE06 /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = ko.lproj/Localizable.strings; sourceTree = "<group>"; };
+		D1C625637CCA25345124CE92 /* pt-BR */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "pt-BR"; path = "pt-BR.lproj/Localizable.strings"; sourceTree = "<group>"; };
+		D8EBB20F5BF3CF0CE623067C /* codex-openai.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "codex-openai.png"; sourceTree = "<group>"; };
+		D9C47FDB065E7C4161197A8B /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/Localizable.strings; sourceTree = "<group>"; };
+		DEAF50A4052D9A28723D4E58 /* THIRD_PARTY_ASSETS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_ASSETS.md; sourceTree = "<group>"; };
+		E10F875FFF3EC9D9FECC30CD /* ProcessIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessIcon.swift; sourceTree = "<group>"; };
+		F0158A1AD1320B490CC04EBD /* find-disk-killer */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "find-disk-killer"; path = .; sourceTree = SOURCE_ROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A7A9C53473370BCDF9BC38E5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1A5A345383AD5797E0A9A9D /* FindDiskKillerTraceProtocol in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B8B4DFF6AF11134F931CC003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1BFD6A0C548294189B5161F1 /* FindDiskKillerCore in Frameworks */,
+				BC3E000C2202C14A4B4919C6 /* FindDiskKillerTraceProtocol in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		06371809CAAB4D69E2CA353B /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				68194E3D67F4FC76209C94C2 /* claude-code.png */,
+				19522173F0ADEF7848BBB1F9 /* claude-code.svg */,
+				D8EBB20F5BF3CF0CE623067C /* codex-openai.png */,
+				557B99818141A5F6C7641804 /* codex-openai.svg */,
+				710BED35EF73FDAAD7FBB024 /* Localizable.strings */,
+				DEAF50A4052D9A28723D4E58 /* THIRD_PARTY_ASSETS.md */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		07E4C84B97D3B58CCBF2D4A7 /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				095D33516AF500CF80F1DB90 /* MonitorChart.swift */,
+				3C5B6D633FF601F496BFED97 /* ProcessHoverCard.swift */,
+				E10F875FFF3EC9D9FECC30CD /* ProcessIcon.swift */,
+				B41A166BB33A1EC2CC01A3B7 /* SharedComponents.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+		31732817356D2EB3ED683351 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A53F0E89B523716633119DE0 /* FindDiskKillerApp.app */,
+				129601FEC7DAF3B684090C81 /* FindDiskKillerTraceHelper */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		3502764C176F21545B7794AE /* FindDiskKillerTraceHelper */ = {
+			isa = PBXGroup;
+			children = (
+				C7F04CF503EF4C19FA578DA5 /* TraceHelperMain.swift */,
+			);
+			path = FindDiskKillerTraceHelper;
+			sourceTree = "<group>";
+		};
+		63BA19D707D349B5342C5F42 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				F9613D93D9FC215A8A2D089D /* FindDiskKillerApp */,
+				3502764C176F21545B7794AE /* FindDiskKillerTraceHelper */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		8AE0D5862A6A544A027A5547 = {
+			isa = PBXGroup;
+			children = (
+				DF749020649060E41AC0B5D3 /* AppConfig */,
+				ADC8128EAF213ACF0F089EDC /* Packages */,
+				63BA19D707D349B5342C5F42 /* Sources */,
+				31732817356D2EB3ED683351 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		9A50B8DA304DE29885F70CEB /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				7F13AE24E17E72270635D523 /* DisksView.swift */,
+				5B5CA4BCE3E2500A9F4B1027 /* MenuBarPanel.swift */,
+				7B45AA78FCDDF1D3E2E56551 /* OverviewView.swift */,
+				457028605863AA4C13E784A4 /* ProcessesView.swift */,
+				397BF22044FB3F231AE3EF11 /* SettingsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		ADC8128EAF213ACF0F089EDC /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				F0158A1AD1320B490CC04EBD /* find-disk-killer */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		DF749020649060E41AC0B5D3 /* AppConfig */ = {
+			isa = PBXGroup;
+			children = (
+				0EC9EF0D9A07E6D818C8D2BF /* com.jianyintang.FindDiskKiller.TraceHelper.plist */,
+			);
+			path = AppConfig;
+			sourceTree = "<group>";
+		};
+		F9613D93D9FC215A8A2D089D /* FindDiskKillerApp */ = {
+			isa = PBXGroup;
+			children = (
+				4B5425128EC43659859EFFB0 /* FindDiskKillerApp.swift */,
+				A8784670E78734B9A225A4E8 /* Localization.swift */,
+				03A020A758E12C4DAB2BFC75 /* ProcessKnowledge.swift */,
+				195FD2EA225982A5C2A7D542 /* RootView.swift */,
+				51F7C0EAECA734CA262A07EC /* TraceHelperController.swift */,
+				07E4C84B97D3B58CCBF2D4A7 /* Components */,
+				06371809CAAB4D69E2CA353B /* Resources */,
+				9A50B8DA304DE29885F70CEB /* Views */,
+			);
+			path = FindDiskKillerApp;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		5E57A8815A65D4F48D636F03 /* FindDiskKillerTraceHelper */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B565506899E8E9A31C6468B9 /* Build configuration list for PBXNativeTarget "FindDiskKillerTraceHelper" */;
+			buildPhases = (
+				AC0D875C4F4C12E0634548CC /* Sources */,
+				A7A9C53473370BCDF9BC38E5 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FindDiskKillerTraceHelper;
+			packageProductDependencies = (
+				F12401CDA817FB03FD601CF3 /* FindDiskKillerTraceProtocol */,
+			);
+			productName = FindDiskKillerTraceHelper;
+			productReference = 129601FEC7DAF3B684090C81 /* FindDiskKillerTraceHelper */;
+			productType = "com.apple.product-type.tool";
+		};
+		A69E3BE0FF66A793CCA3C173 /* FindDiskKillerApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = ACC73B92AF783D8DB16C4608 /* Build configuration list for PBXNativeTarget "FindDiskKillerApp" */;
+			buildPhases = (
+				AA8F9A78E9F755AD2CDFA0D9 /* Sources */,
+				B610E21D02509D046AEF3823 /* Resources */,
+				8494076B6381A9E244136A49 /* CopyFiles */,
+				B8B4DFF6AF11134F931CC003 /* Frameworks */,
+				EF8A0DAD366D2321393EC137 /* Embed Dependencies */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DBD3E4A7D3900A5D39288D1C /* PBXTargetDependency */,
+			);
+			name = FindDiskKillerApp;
+			packageProductDependencies = (
+				DF40BF11AB711252275ECD86 /* FindDiskKillerCore */,
+				C4C6752601A90F75FCAC330C /* FindDiskKillerTraceProtocol */,
+			);
+			productName = FindDiskKillerApp;
+			productReference = A53F0E89B523716633119DE0 /* FindDiskKillerApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E67B6419F73612FC91A5CF82 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					5E57A8815A65D4F48D636F03 = {
+						DevelopmentTeam = Y3A8BJ4475;
+						ProvisioningStyle = Manual;
+					};
+					A69E3BE0FF66A793CCA3C173 = {
+						DevelopmentTeam = Y3A8BJ4475;
+						ProvisioningStyle = Manual;
+					};
+				};
+			};
+			buildConfigurationList = 19C1D950E6FE91EB9C3A897E /* Build configuration list for PBXProject "FindDiskKiller" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				de,
+				en,
+				es,
+				fr,
+				ja,
+				ko,
+				"pt-BR",
+				ru,
+				"zh-Hans",
+				"zh-Hant",
+			);
+			mainGroup = 8AE0D5862A6A544A027A5547;
+			packageReferences = (
+				C69B2DE5357ED997757EABFA /* XCLocalSwiftPackageReference "." */,
+			);
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A69E3BE0FF66A793CCA3C173 /* FindDiskKillerApp */,
+				5E57A8815A65D4F48D636F03 /* FindDiskKillerTraceHelper */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		B610E21D02509D046AEF3823 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EC249E190109F76E7790D340 /* Localizable.strings in Resources */,
+				149AD03F0F95F5953BC2472D /* THIRD_PARTY_ASSETS.md in Resources */,
+				99192C06F8FEEAE121E9322F /* claude-code.png in Resources */,
+				780A5E1EC904EA5BFF7138E3 /* claude-code.svg in Resources */,
+				60FBDF8CE690926784724D9B /* codex-openai.png in Resources */,
+				1499823B10B0CC6D47F29166 /* codex-openai.svg in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AA8F9A78E9F755AD2CDFA0D9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5E24EACD1AFFADC97204287F /* DisksView.swift in Sources */,
+				CB385437F19C8B95DB52B8A0 /* FindDiskKillerApp.swift in Sources */,
+				85D2BDA3102CAF467C9F77BA /* Localization.swift in Sources */,
+				D8E39C8B0F6523922443851B /* MenuBarPanel.swift in Sources */,
+				3A0561811B6D242B8FDAC73C /* MonitorChart.swift in Sources */,
+				25F5F0D9B0CF83F5DF35FAB8 /* OverviewView.swift in Sources */,
+				C58B53F593260693F3CBADD7 /* ProcessHoverCard.swift in Sources */,
+				E25BC097CC890DF89F578E08 /* ProcessIcon.swift in Sources */,
+				20DE10DF67C9B9AF86A4F08A /* ProcessKnowledge.swift in Sources */,
+				58317958E5A70F2938AF8B08 /* ProcessesView.swift in Sources */,
+				61564FA8A1037BE920518107 /* RootView.swift in Sources */,
+				C17D460138BAAD4608FB55FC /* SettingsView.swift in Sources */,
+				F5E7955B1A19F150460C4A82 /* SharedComponents.swift in Sources */,
+				FA64CAF12CFFF37C9F591513 /* TraceHelperController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AC0D875C4F4C12E0634548CC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5DF5AAA84094D4331DDAF9BC /* TraceHelperMain.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		DBD3E4A7D3900A5D39288D1C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 5E57A8815A65D4F48D636F03 /* FindDiskKillerTraceHelper */;
+			targetProxy = F1879C79261B3CEBA6B94C9D /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXVariantGroup section */
+		710BED35EF73FDAAD7FBB024 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				A2D149CD762D0BFD8DD8359E /* de */,
+				6E35F5D951DD72C76FB62E50 /* en */,
+				B2AC3BDB45CF49DAF90CDD96 /* es */,
+				D9C47FDB065E7C4161197A8B /* fr */,
+				73A1B95E2CC7DE4E5687DCDC /* ja */,
+				CACD199CD7651747F61EBE06 /* ko */,
+				D1C625637CCA25345124CE92 /* pt-BR */,
+				5C80852A723D2988E259456C /* ru */,
+				7BB11F2EFC76CFC186F5A935 /* zh-Hans */,
+				0498F8A849C9CC809CFD1580 /* zh-Hant */,
+			);
+			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
+/* Begin XCBuildConfiguration section */
+		166F94F588F7503FB93D8E9D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = AppConfig/FindDiskKillerTraceHelper.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = "AppConfig/FindDiskKillerTraceHelper-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jianyintang.FindDiskKiller.TraceHelper;
+				PRODUCT_NAME = com.jianyintang.FindDiskKiller.TraceHelper;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		83337EB51E4852E4E12E32F7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = AppConfig/FindDiskKiller.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = "AppConfig/FindDiskKiller-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jianyintang.FindDiskKiller;
+				PRODUCT_NAME = FindDiskKiller;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		83E7EFA39F13CED3CB6EACE1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = AppConfig/FindDiskKillerTraceHelper.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = "AppConfig/FindDiskKillerTraceHelper-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jianyintang.FindDiskKiller.TraceHelper;
+				PRODUCT_NAME = com.jianyintang.FindDiskKiller.TraceHelper;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
+		9520DD0C495E713A86A4DDAD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = Y3A8BJ4475;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		AF8907EAC6DB470D1EB25E24 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = AppConfig/FindDiskKiller.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = "AppConfig/FindDiskKiller-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jianyintang.FindDiskKiller;
+				PRODUCT_NAME = FindDiskKiller;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		E44E151FB9BF81CCAB98FF18 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = Y3A8BJ4475;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		19C1D950E6FE91EB9C3A897E /* Build configuration list for PBXProject "FindDiskKiller" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9520DD0C495E713A86A4DDAD /* Debug */,
+				E44E151FB9BF81CCAB98FF18 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		ACC73B92AF783D8DB16C4608 /* Build configuration list for PBXNativeTarget "FindDiskKillerApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AF8907EAC6DB470D1EB25E24 /* Debug */,
+				83337EB51E4852E4E12E32F7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B565506899E8E9A31C6468B9 /* Build configuration list for PBXNativeTarget "FindDiskKillerTraceHelper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				166F94F588F7503FB93D8E9D /* Debug */,
+				83E7EFA39F13CED3CB6EACE1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		C69B2DE5357ED997757EABFA /* XCLocalSwiftPackageReference "." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = .;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C4C6752601A90F75FCAC330C /* FindDiskKillerTraceProtocol */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = FindDiskKillerTraceProtocol;
+		};
+		DF40BF11AB711252275ECD86 /* FindDiskKillerCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = FindDiskKillerCore;
+		};
+		F12401CDA817FB03FD601CF3 /* FindDiskKillerTraceProtocol */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = FindDiskKillerTraceProtocol;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = E67B6419F73612FC91A5CF82 /* Project object */;
+}
