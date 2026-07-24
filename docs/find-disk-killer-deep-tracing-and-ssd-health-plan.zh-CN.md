@@ -1,6 +1,6 @@
 # FindDiskKiller 深度文件追踪与 SSD 健康方案（无特殊 entitlement）
 
-> 文档状态：方案已签发；A/B 基线与文件访问追踪 Core 原型完成，发布与深度 Gate 待执行<br>
+> 文档状态：方案已签发；A/B 基线与文件访问追踪工程实现完成，发布与深度 Gate 待执行<br>
 > 制定日期：2026-07-23<br>
 > 最近修订：2026-07-24<br>
 > 目标平台：macOS 14 及以上，Apple Silicon 与 Intel 进入支持矩阵<br>
@@ -132,9 +132,9 @@ FindDiskKiller 已经能够回答“哪个应用正在消耗磁盘、CPU 和网�
 
 这些数字始终是应用向系统调用提交的请求量。缓存命中读取可能不产生物理盘读取；APFS 缓存、压缩、CoW、元数据和延迟写回会让设备实际写入不同；`mmap` / page fault 也不保证以可定位的 read/write 记录出现。因此该页面不得与设备吞吐配平，不得推导 NAND 写入量，也不得把 FSEvents 变化数量换算为字节。
 
-当前 `fs_usage` 没有路径过滤参数。指定目录若要发现所有访问应用，helper 必须读取全机文件系统事件流，在 root 进程内完成目标匹配，只向 App 发送目标内的结构化聚合记录；不得把无关完整路径通过 XPC 发送给主 App。全机流的事件速率、隐私范围和 CPU 成本明显高于按 PID 追踪，必须单独通过 TRACE-SECURITY、TRACE-DATA 和 TRACE-PERF。
+当前 `fs_usage` 没有路径过滤参数。指定目录若要发现所有访问应用，helper 必须读取全机文件系统事件流。现实现选择更小的 root 攻击面：App 不把目标路径传给 helper；helper 只执行固定命令并通过有界 XPC 批次返回内存中的原始行与已经验证的进程身份，路径规范化、卷身份校验和目标匹配全部在普通用户权限的 App 进程完成。原始行不落盘、不进入普通日志，停止、超时、App 断开或缓冲过载时立即终止或标记缺口。全机流的事件速率、隐私范围和 CPU 成本仍明显高于按 PID 追踪，必须单独通过 TRACE-SECURITY、TRACE-DATA 和 TRACE-PERF。
 
-`fs_usage` 手册明确宽格式进程字段附加的是线程 ID，不能把末尾数字直接解释为 PID。访问应用列表只有在 helper 能将记录重新映射到 `PID + 启动时间` 并验证身份时才显示；只有进程名或线程 ID 时标记为身份覆盖缺口，不生成看似精确的进程排行。本机当前无 root helper，无法执行受控 spike，因此现有 fixtures 只证明解析器对预期格式 fail closed，不能替代真实系统版本格式 Gate。
+`fs_usage` 手册明确宽格式进程字段附加的是线程 ID，不能把末尾数字直接解释为 PID。现 helper 使用 `PROC_PIDLISTTHREADS` 映射线程，并通过 `proc_pid_rusage(... RUSAGE_INFO_V4 ...)` 固化 `PID + 启动时间`；映射失败时只增加身份覆盖缺口，不生成伪进程排行。受控 fixtures 已覆盖协议与 fail closed，但仍不能替代安装 helper 后的真实系统版本格式、路径召回和事件风暴 Gate。
 
 目标由系统选择器产生，并在主 App 与 helper 两侧验证为绝对文件 URL、稳定卷身份和文件/目录类型。目录匹配使用路径组件，不使用字符串 `hasPrefix`；`/foo` 不能匹配 `/foobar`。符号链接只在选择时和事件处理时都取得可验证解析路径时合并；硬链接通过目标树之外的另一路径访问时不猜测为同一文件。rename、unlink、无路径 FD、截断路径或卷身份缺失均进入覆盖缺口，不能计入目标总量。
 
@@ -364,11 +364,11 @@ FindDiskKiller App
 - 使用 `SMAppService` 注册随应用签名的 privileged helper。
 - 宿主与 helper 使用同一 Team ID、Hardened Runtime 和版本协议。
 - XPC 服务验证连接方 audit token、代码签名与协议版本。
-- helper 只接受固定时长、固定追踪类型、已验证 PID 列表，或由系统选择器产生并经双方复核的单个目标文件身份；不接受任意命令、任意 `fs_usage` 参数或未经卷身份验证的裸路径。
+- helper 只接受固定时长与固定追踪类型；指定目标模式下不接收任何目标路径、任意命令或任意 `fs_usage` 参数，路径与卷身份验证由普通权限 App 完成。
 - helper 从 XPC audit token 解析调用用户 UID，并自行确认每个 PID 属于该用户。
 - helper 在 root 侧重新读取并核对 `PID + 启动时间`，不能信任宿主提供的“已验证”结论。
 - 固定限制单次 PID 数、会话时长、并发数、输出速率、缓冲区和 XPC 消息大小；超限时 fail closed。
-- 进程退出、用户停止、超时、宿主断开或系统睡眠时终止 `fs_usage` 子进程。
+- 进程退出、用户停止、超时或宿主断开时终止 `fs_usage` 子进程；系统睡眠/唤醒回收仍属于 TRACE-SECURITY 实机 Gate，验证前不宣称已覆盖。
 - 注销、快速用户切换和另一用户请求追踪时结束现有会话，不跨用户共享 PID、路径或结果。
 - helper 不写普通日志中的完整路径，不建立长期原始事件数据库。
 
@@ -569,7 +569,7 @@ FindDiskKiller 不发送系统通知、不自动弹窗。用户打开应用时�
 ### 11.2 深度追踪
 
 - 追踪期间 FindDiskKiller + helper 的额外 CPU P95 目标小于 8%，内存小于 200 MB。
-- 解析使用有界缓冲；UI 最多每秒接收一次聚合快照，不逐事件刷新 SwiftUI。
+- 解析使用有界缓冲；UI 数值最多 4 Hz，图表与明细列表最多 1 Hz，不逐事件刷新 SwiftUI。
 - 事件积压超过预算时优先停止文件级明细，保留目录聚合；仍无法跟上则结束会话并标记结果不完整。
 - 任何追踪故障不得阻塞或拖慢被观察进程。
 - 停止操作 300 ms 内给出反馈，2 秒内完成子进程回收与可查看结果固化。
@@ -637,19 +637,19 @@ FindDiskKiller 不发送系统通知、不自动弹窗。用户打开应用时�
 
 ### 14.0 本轮工程实现边界
 
-截至 2026-07-23，代码已完成不需要管理员授权的阶段 A/B 基线，但“代码已接入”不等于对应发布 Gate 已通过：
+截至 2026-07-24，代码已完成阶段 A/B 基线与文件访问追踪工程实现，但“代码已接入”不等于对应发布 Gate 已通过：
 
 | 能力 | 当前实现 | 仍需 Gate 或后续实现 |
 | --- | --- | --- |
 | 当前打开位置 | 已实现按需 `libproc` 快照、PID 会话校验、读写打开方式、单进程 FD 上限与跨 syscall 时间预算 | 支持矩阵、24 小时性能、EPERM/FD 复用系统夹具仍按 13.1/11.1 验收 |
 | 最近路径变化 | 已实现按本地可写且身份稳定的卷启动的 FSEvents 内存流、卷拓扑更新、能力状态、缺口重建与有界历史 | 事件风暴和真实热插拔矩阵仍按 13.2 验收；不保存路径历史，不归因到进程 |
 | 磁盘健康 | 已实现 whole-disk `diskutil -plist` provider、可选字段能力模型、128 位计数、设备实例校验、超时/输出上限和完整 UI 状态；卷到物理盘的 `diskutil` 映射也使用后台并发、有界输出和硬超时，不阻塞基础采样 | 真实设备矩阵、强身份持久化及 7/30/90 天趋势尚未通过 SSD-DATA，因此当前界面只显示本次或上次成功快照 |
-| 文件访问追踪 Core 原型 | 已实现受控宽格式行解析、read/write 请求量方向、未知格式 fail closed、卷身份与路径组件目标匹配、有界 250 ms 桶、最近 5 秒速率、1 秒峰值、文件/进程会话聚合和显式 dropped-event 覆盖状态；仅由测试调用 | 尚未用 root 实机流验证输出格式、路径召回和线程到 PID 身份映射，不构成 TRACE-DATA 通过 |
-| 文件访问追踪安全承载层 | 已转换为真实 macOS App 工程：SwiftPM 保留 Core/测试，Xcode 生成 Developer ID 签名的 universal2 `.app`；包内包含 Hardened Runtime helper、LaunchDaemon plist、双向 signing requirement、仅版本握手的 XPC 协议和只读 `SMAppService.status` 控制器；启动不注册、不申请权限 | 尚未接入 `fs_usage` runner、目标路径、追踪命令或正式 UI；空握手仍需完成公证、干净机首装/批准/升级/卸载验证 |
-| 文件访问追踪正式功能 | 未接入 runner 或 UI，也不会展示入口 | 阶段 C 的真实数据、安全和性能 Gate 以及 DISTRIBUTION-0 全部通过后才可实现；届时只允许在用户主动开始追踪后出现管理员确认、后台项目批准和按需完全磁盘访问引导 |
+| 文件访问追踪 Core | 已实现受控宽格式行解析、read/write 请求量方向、errno 与路径区分、未知格式 fail closed、卷身份与路径组件匹配、有界 250 ms 桶、最近 5 秒速率、1 秒峰值、文件/进程会话聚合和显式 dropped-event 覆盖状态 | 尚未用已安装 root helper 的实机流验证所有受支持 macOS 版本格式与路径召回，不构成 TRACE-DATA 通过 |
+| 文件访问追踪安全承载层 | 正式 `.app` 包含 Hardened Runtime helper、LaunchDaemon plist、双向 signing requirement 和会话型 XPC；helper 仅能运行固定 `/usr/bin/fs_usage -w -f filesys -t <10...3600>`，单行 32 KB、总缓冲 4 MB、单批 2048 条，App 断开/停止/超时均回收；线程 ID 在 root 侧映射并固化进程启动身份；目标路径不进入 root 请求 | 仍需公证、干净机首装/批准/拒绝/升级/卸载、睡眠与强杀验证，TRACE-SECURITY 和 DISTRIBUTION-0 保持待执行 |
+| 文件访问追踪工作区 | 已接入系统文件/目录选择器、用户名路径遮挡、inline 管理员批准状态、累计读写请求、5 秒实时速率、会话峰值、折线 tooltip、可排序可调列宽的文件/应用表格，以及停止/重启/更换/清除；高频状态由独立 Store 承载，导航不被阻塞 | 真实工作负载理解率、最小窗口、VoiceOver、长翻译、性能与 FDA 授权主体仍按 UX-TASK/ACCESS/TRACE-PERF 验收；未确认 TCC 缺口前不展示 FDA 引导 |
 | smartctl 兼容层 | 未接入 | 仅在阶段 E 的许可证与设备适配评审通过后考虑 |
 
-因此当前产品不会出现“启用归因”“开始深度追踪”“追踪文件或目录”或 smartctl 入口，也不会触发无行动价值的授权流程。App 目前只读取 helper 状态，不调用 `register()`，空握手协议也不接受路径、命令、底层参数或追踪请求。已经实现的文件活动与磁盘健康在能力缺失时直接降级，不阻塞 CPU、磁盘吞吐和网络监控。Core 原型与 App 包构建通过不代表 helper 已获批、真实路径覆盖已验证或发布 Gate 已完成。
+当前产品已提供“文件访问追踪”入口，但只有用户选择目标并明确点击“启用追踪”后才调用 `register()`；启动和普通磁盘监控不会申请权限。helper 不接受路径、shell、任意命令或底层参数，完全磁盘访问也不会在缺口未经实测确认时出现。工作区可运行不代表 helper 已在干净系统通过批准/升级/卸载矩阵，也不代表真实路径覆盖、长期性能或发布 Gate 已完成。
 
 ### 阶段 A：无权限文件活动（2 个工程周）
 
@@ -668,10 +668,10 @@ FindDiskKiller 不发送系统通知、不自动弹窗。用户打开应用时�
 
 ### 阶段 C：限时深度追踪可行性原型（2 个工程周，不构成产品交付承诺）
 
-- 已完成真实 `.app`、LaunchDaemon/helper targets、包内安装布局、Developer ID 本地签名、Hardened Runtime、universal2、双向代码签名约束、最小化共享协议模块、`SMAppService` 状态读取和版本空握手；未自动注册 helper。
-- 后续完成公证/stapling、干净机 helper 生命周期、`fs_usage` 监管和真实版本自检。
+- 已完成真实 `.app`、LaunchDaemon/helper targets、包内安装布局、Developer ID 本地签名、Hardened Runtime、universal2、双向代码签名约束、会话型协议、按用户动作注册、固定 `fs_usage` 监管、有界缓冲和断连回收；仍不自动注册 helper。
+- 后续完成公证/stapling、干净机 helper 生命周期和真实版本自检。
 - 建立受控 I/O 夹具和各 macOS 格式样本。
-- 空握手原型完成公证与 stapling 后，才进入可控追踪 runner；SwiftPM 裸可执行产物不承担 helper 生命周期。
+- SwiftPM 裸可执行产物不承担 helper 生命周期；只有正式签名 `.app` 参与权限和数据 Gate。
 
 退出条件：管理员批准状态机、安全模型、请求字节与真实工作负载路径覆盖达到第 13 章门槛；不达标则停止，不进入 UI 集成，也不在正式界面或路线图中承诺目录请求量。
 
@@ -731,7 +731,7 @@ Gate 顺序固定为 `DISTRIBUTION-0 → TRACE-SECURITY → TRACE-DATA → TRACE
 | macOS 平台独立评审 | 已签发 | 已复核 libproc 身份/预算、FSEvents 生命周期与卷能力、SMART optional/UInt128/设备代次及所有有界 `diskutil` 调用；无剩余 P0/P1 |
 | 产品体验独立评审 | 已签发 | 已复核磁盘健康状态、断开恢复、文件变化能力、证据文案、布局层级与 10 种语言；无剩余 P0/P1 |
 | 交付与安全独立评审 | 已签发 | 已复核资源上限、异步换盘、热插拔/溢出降级、未授权能力边界和 Gate；无剩余 P0/P1 |
-| 最终工程验证 | 完成 | `swift test` 44/44、`swift build -c release` 成功，10 个 `Localizable.strings` 均通过 `plutil -lint` |
+| 最终工程验证 | 完成 | `swift test` 58/58、Xcode Release App/Helper 构建成功；主 App 与 helper 均为 Developer ID + Hardened Runtime 的 universal2 产物并通过 `codesign --deep --strict`，10 个 `Localizable.strings` 均通过 `plutil -lint` |
 
 本次签发只覆盖方案及第 14.0 节已经实现的 A/B 基线。第 15 章所有真实设备、长期性能、分发、安全与深度追踪 Gate 仍保持“待执行”；不得用本次单元测试和静态复审替代它们。
 

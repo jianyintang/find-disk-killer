@@ -21,6 +21,7 @@ enum AppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
 struct RootView: View {
     let store: MonitorStore
     let processDetailWindows: ProcessDetailWindowCoordinator
+    let fileAccessTrace: FileAccessTraceStore
     @State private var requestedSection: AppSection = .overview
     @State private var loadedSection: AppSection = .overview
     @State private var sectionSnapshots: [AppSection: SectionPreviewSnapshot] = [:]
@@ -62,7 +63,7 @@ struct RootView: View {
         case .overview:
             OverviewView(store: store, processDetailWindows: processDetailWindows)
         case .disks:
-            DisksView(store: store)
+            DisksView(store: store, fileAccessTrace: fileAccessTrace)
         case .processes:
             ProcessesView(
                 store: store,

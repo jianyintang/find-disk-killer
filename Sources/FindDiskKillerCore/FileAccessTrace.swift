@@ -82,10 +82,10 @@ public enum FileAccessTraceParser {
             return .ignored
         }
 
-        if containsErrno(trimmed) { return .failedCall }
         guard let byteIndex = fields.firstIndex(where: { $0.hasPrefix("B=") }),
               let requestedBytes = parseUnsigned(String(fields[byteIndex].dropFirst(2)))
         else { return .unsupportedFormat }
+        if containsErrno(fields: fields, after: byteIndex) { return .failedCall }
 
         guard let durationIndex = fields.indices.reversed().first(where: {
                 $0 > byteIndex && $0 < fields.count - 1 && isDuration(fields[$0])
@@ -155,7 +155,15 @@ public enum FileAccessTraceParser {
             value: hour * 3_600 + minute * 60 + min(second, 59),
             to: start
         ) else { return nil }
-        return wholeSeconds.addingTimeInterval(fraction + (second == 60 ? 1 : 0))
+        let candidate = wholeSeconds.addingTimeInterval(fraction + (second == 60 ? 1 : 0))
+        let distance = candidate.timeIntervalSince(day)
+        if distance > 12 * 60 * 60 {
+            return calendar.date(byAdding: .day, value: -1, to: candidate)
+        }
+        if distance < -12 * 60 * 60 {
+            return calendar.date(byAdding: .day, value: 1, to: candidate)
+        }
+        return candidate
     }
 
     private static func parseUnsigned(_ value: String) -> UInt64? {
@@ -165,10 +173,15 @@ public enum FileAccessTraceParser {
         return UInt64(value)
     }
 
-    private static func containsErrno(_ value: String) -> Bool {
+    private static func containsErrno(fields: [String], after byteIndex: Int) -> Bool {
         guard let expression = errnoExpression else { return true }
+        let start = byteIndex + 1
+        guard start < fields.count else { return false }
+        let end = min(fields.count, start + 2)
+        let value = fields[start..<end].joined(separator: " ")
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
-        return expression.firstMatch(in: value, range: range) != nil
+        guard let match = expression.firstMatch(in: value, range: range) else { return false }
+        return match.range.location == 0
     }
 
     private static func parseProcessField(_ value: String) -> (label: String, threadID: UInt64)? {

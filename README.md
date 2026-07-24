@@ -26,6 +26,8 @@ questions such as:
   minutes after they are observed.
 - Mounted-volume names mapped to physical-device throughput.
 - Physical-drive health and available NVMe/SMART evidence from `diskutil`.
+- On-demand file or folder access tracing with requested read/write totals,
+  five-second rates, session peaks, active files, and verified process sessions.
 - Ten interface languages.
 - Menu bar status for lightweight monitoring.
 
@@ -41,6 +43,7 @@ precise-looking number never implies more certainty than the system provides.
 | CPU | Per-process CPU time in Activity Monitor units, where one fully occupied logical core is 100%. |
 | Network | Per-process and system counters with download and upload kept separate. Missing coverage is shown as unavailable, not as zero. |
 | File activity | Open file descriptors for the selected application, combined with macOS FSEvents observations. A file-system change cannot be conclusively attributed to that application. |
+| File access trace | Successful read/write system-call requests observed by the signed helper. These requested bytes can differ from physical device I/O because of caching, APFS writeback, compression, copy-on-write, mmap, and coverage gaps. |
 | Drive health | The fields macOS exposes through `diskutil -plist`; unsupported values remain unavailable. |
 
 The current implementation does **not** claim exact process-to-volume write
@@ -68,10 +71,10 @@ xcodebuild \
 open .derivedData/Build/Products/Release/FindDiskKiller.app
 ```
 
-The Xcode build produces the real signed app bundle. It embeds the dormant trace
-helper and its LaunchDaemon property list at the locations required by
-`SMAppService`. The app only checks helper status at launch. It does not register
-the helper or request administrator approval automatically.
+The Xcode build produces the real signed app bundle. It embeds the on-demand
+trace helper and its LaunchDaemon property list at the locations required by
+`SMAppService`. The app checks helper status at launch but does not register the
+helper or request administrator approval automatically.
 
 The SwiftPM executable remains available for Core development, but it does not
 contain the app-bundle helper layout:
@@ -88,17 +91,20 @@ swift test
 
 The test suite covers sampling arithmetic, Activity Monitor CPU semantics,
 network gaps, process hover state, open-file limits, FSEvents retention,
-multi-window observation leases, volume identity, disk-health parsing, command
-timeouts, and localization consistency.
+multi-window observation leases, volume identity, disk-health parsing, bounded
+trace contracts and parsing, command timeouts, and localization consistency.
 
 ## Privacy and Permissions
 
 FindDiskKiller processes monitoring data locally. The current codebase does not
 send telemetry, upload file paths, or install an Endpoint Security extension.
-The Xcode app bundle contains a signed privileged helper with a version-only XPC
-handshake, but it is not registered automatically and cannot run arbitrary
-commands, receive paths, or start `fs_usage`. A later tracing workflow must only
-request registration after an explicit user action.
+The Xcode app bundle contains a signed privileged helper dedicated to bounded
+file-access trace sessions. It is never registered automatically. Registration
+is requested only after the user chooses a target and explicitly enables
+tracing. The helper can only launch `/usr/bin/fs_usage` with a fixed argument
+shape and bounded duration; it cannot run shell commands or accept paths and
+command-line arguments from the app. Target matching and aggregation happen in
+the unprivileged app process.
 
 macOS may restrict visibility into protected processes and paths. The interface
 reports partial or unavailable coverage explicitly. Recent file changes come
@@ -110,10 +116,11 @@ which process caused the change.
 ```text
 Sources/
   CFindDiskKiller/       Low-level macOS sampling bridge
+  CFindDiskKillerTrace/  Thread-to-process identity bridge for the helper
   FindDiskKillerCore/    Sampling, aggregation, and health models
   FindDiskKillerApp/     SwiftUI application and localized resources
-  FindDiskKillerTraceProtocol/  Minimal shared XPC contract
-  FindDiskKillerTraceHelper/  Signed, version-only XPC helper entry point
+  FindDiskKillerTraceProtocol/  Bounded shared XPC contract
+  FindDiskKillerTraceHelper/  Signed, fixed-purpose trace helper
 AppConfig/               App, helper, signing, and LaunchDaemon metadata
 Tests/
   FindDiskKillerCoreTests/

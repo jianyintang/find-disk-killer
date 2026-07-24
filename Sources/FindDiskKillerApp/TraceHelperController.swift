@@ -15,11 +15,18 @@ enum TraceHelperServiceState: Equatable {
     case operationFailed(String)
 }
 
+enum TraceHelperClientError: Error, Equatable {
+    case unavailable
+    case protocolMismatch
+    case rejected(String)
+    case invalidPayload
+}
+
 @MainActor
 @Observable
 final class TraceHelperController {
     private(set) var state: TraceHelperServiceState = .notRegistered
-    private var connection: NSXPCConnection?
+    @ObservationIgnored private var connection: NSXPCConnection?
 
     private let service = SMAppService.daemon(
         plistName: TraceHelperProtocolConfiguration.launchDaemonPlistName
@@ -35,7 +42,7 @@ final class TraceHelperController {
         }
     }
 
-    // Call only from an explicit user action in the future tracing workspace.
+    // Registration is only called from the tracing workspace's explicit action.
     func requestRegistration() {
         do {
             try service.register()
@@ -59,56 +66,158 @@ final class TraceHelperController {
         SMAppService.openSystemSettingsLoginItems()
     }
 
-    func ping() {
-        invalidateConnection()
-        state = .connecting
+    func ping() async throws {
+        let result: (Int, String) = try await withCheckedThrowingContinuation { continuation in
+            do {
+                let helper = try remoteProxy { _ in
+                    continuation.resume(throwing: TraceHelperClientError.unavailable)
+                }
+                helper.ping(
+                    clientProtocolVersion: NSNumber(value: TraceHelperProtocolConfiguration.version)
+                ) { version, status in
+                    continuation.resume(returning: (version.intValue, status as String))
+                }
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+        guard result.0 == TraceHelperProtocolConfiguration.version,
+              result.1 == "ready"
+        else {
+            state = .protocolMismatch
+            throw TraceHelperClientError.protocolMismatch
+        }
+        state = .ready
+    }
 
-        let connection = NSXPCConnection(
-            machServiceName: TraceHelperProtocolConfiguration.machServiceName,
-            options: .privileged
-        )
-        connection.remoteObjectInterface = NSXPCInterface(with: TraceHelperXPCProtocol.self)
-        connection.setCodeSigningRequirement(
-            TraceHelperProtocolConfiguration.helperCodeSigningRequirement
-        )
-        connection.invalidationHandler = { [weak self] in
-            Task { @MainActor in
-                guard let self, self.connection === connection else { return }
-                self.connection = nil
-                if self.state == .connecting {
-                    self.state = .connectionUnavailable
+    func startTrace(maximumDurationSeconds: Int) async throws -> String {
+        try await ping()
+        return try await withCheckedThrowingContinuation { continuation in
+            do {
+                let helper = try remoteProxy { _ in
+                    continuation.resume(throwing: TraceHelperClientError.unavailable)
+                }
+                helper.startTrace(
+                    maximumDurationSeconds: NSNumber(value: maximumDurationSeconds)
+                ) { sessionID, status in
+                    let status = status as String
+                    guard status == "started" else {
+                        continuation.resume(throwing: TraceHelperClientError.rejected(status))
+                        return
+                    }
+                    continuation.resume(returning: sessionID as String)
+                }
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    func drainTrace(
+        sessionID: String,
+        maximumRecordCount: Int = 1_024
+    ) async throws -> TraceHelperDrainPayload {
+        return try await withCheckedThrowingContinuation { continuation in
+            do {
+                let helper = try remoteProxy { _ in
+                    continuation.resume(throwing: TraceHelperClientError.unavailable)
+                }
+                helper.drainTrace(
+                    sessionID: sessionID as NSString,
+                    maximumRecordCount: NSNumber(value: maximumRecordCount)
+                ) { data, status in
+                    guard status == "ready" else {
+                        continuation.resume(
+                            throwing: TraceHelperClientError.rejected(status as String)
+                        )
+                        return
+                    }
+                    do {
+                        continuation.resume(
+                            returning: try JSONDecoder().decode(
+                                TraceHelperDrainPayload.self,
+                                from: data as Data
+                            )
+                        )
+                    } catch {
+                        continuation.resume(throwing: TraceHelperClientError.invalidPayload)
+                    }
+                }
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    func stopTrace(sessionID: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            do {
+                let helper = try remoteProxy { _ in
+                    continuation.resume(throwing: TraceHelperClientError.unavailable)
+                }
+                helper.stopTrace(sessionID: sessionID as NSString) { status in
+                    guard status == "stopped" else {
+                        continuation.resume(
+                            throwing: TraceHelperClientError.rejected(status as String)
+                        )
+                        return
+                    }
+                    continuation.resume(returning: ())
+                }
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    private func remoteProxy(
+        errorHandler: @escaping @Sendable (Error) -> Void
+    ) throws -> TraceHelperXPCProtocol {
+        let connection: NSXPCConnection
+        if let existing = self.connection {
+            connection = existing
+        } else {
+            state = .connecting
+            let created = NSXPCConnection(
+                machServiceName: TraceHelperProtocolConfiguration.machServiceName,
+                options: .privileged
+            )
+            created.remoteObjectInterface = NSXPCInterface(with: TraceHelperXPCProtocol.self)
+            created.setCodeSigningRequirement(
+                TraceHelperProtocolConfiguration.helperCodeSigningRequirement
+            )
+            created.invalidationHandler = { [weak self, weak created] in
+                Task { @MainActor in
+                    guard let self, let created, self.connection === created else { return }
+                    self.connection = nil
+                    if self.state == .connecting {
+                        self.state = .connectionUnavailable
+                    }
                 }
             }
-        }
-        self.connection = connection
-        connection.activate()
-
-        let proxy = connection.remoteObjectProxyWithErrorHandler { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.connection === connection else { return }
-                self.state = .connectionUnavailable
-                self.invalidateConnection()
+            created.interruptionHandler = { [weak self] in
+                Task { @MainActor in
+                    self?.state = .connectionUnavailable
+                }
             }
+            self.connection = created
+            created.activate()
+            connection = created
         }
 
+        let proxy = connection.remoteObjectProxyWithErrorHandler { [weak self] error in
+            Task { @MainActor in
+                self?.state = .connectionUnavailable
+                self?.invalidateConnection()
+            }
+            errorHandler(error)
+        }
         guard let helper = proxy as? TraceHelperXPCProtocol else {
             state = .connectionUnavailable
             invalidateConnection()
-            return
+            throw TraceHelperClientError.unavailable
         }
-
-        helper.ping(
-            clientProtocolVersion: NSNumber(value: TraceHelperProtocolConfiguration.version)
-        ) { [weak self] helperVersion, status in
-            Task { @MainActor in
-                guard let self, self.connection === connection else { return }
-                self.state = helperVersion.intValue == TraceHelperProtocolConfiguration.version
-                    && status == "ready"
-                    ? .ready
-                    : .protocolMismatch
-                self.invalidateConnection()
-            }
-        }
+        return helper
     }
 
     private func invalidateConnection() {

@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Testing
+import FindDiskKillerTraceProtocol
 @testable import FindDiskKillerCore
 
 private actor SwitchingDiskHealthProvider: DiskHealthProviding {
@@ -113,6 +114,46 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(write.direction == .write)
     #expect(write.requestedBytes == 4_096)
     #expect(write.path == "/Users/example/My Project/output.bin")
+}
+
+@Test func fileAccessTraceParserDoesNotTreatBracketedPathComponentsAsErrno() {
+    let day = Date(timeIntervalSinceReferenceDate: 50_000)
+    let line = "12:34:56.250000 read F=3 B=64 /tmp/[123]/data.bin O=0x0 0.000120 Tool.9988"
+    guard case .event(let event) = FileAccessTraceParser.parse(line: line, on: day) else {
+        Issue.record("A bracketed path component must remain a successful event")
+        return
+    }
+    #expect(event.path == "/tmp/[123]/data.bin")
+    #expect(event.requestedBytes == 64)
+}
+
+@Test func traceHelperContractBoundsRequestsAndRoundTripsOptionalIdentity() throws {
+    #expect(TraceHelperProtocolConfiguration.validatedDuration(9) == nil)
+    #expect(TraceHelperProtocolConfiguration.validatedDuration(10) == 10)
+    #expect(TraceHelperProtocolConfiguration.validatedDuration(3_600) == 3_600)
+    #expect(TraceHelperProtocolConfiguration.validatedDuration(3_601) == nil)
+    #expect(TraceHelperProtocolConfiguration.boundedDrainRecordCount(0) == 1)
+    #expect(TraceHelperProtocolConfiguration.boundedDrainRecordCount(9_999) == 2_048)
+    #expect(TraceHelperProtocolConfiguration.maximumDrainSourceBytes == 256 * 1_024)
+
+    let payload = TraceHelperDrainPayload(
+        records: [
+            TraceHelperRecord(line: "header", process: nil),
+            TraceHelperRecord(
+                line: "event",
+                process: TraceHelperProcessIdentity(
+                    pid: 42,
+                    startAbstime: 99,
+                    displayName: "Builder"
+                )
+            )
+        ],
+        droppedRecordCount: 7,
+        isFinished: false,
+        exitCode: nil
+    )
+    let data = try JSONEncoder().encode(payload)
+    #expect(try JSONDecoder().decode(TraceHelperDrainPayload.self, from: data) == payload)
 }
 
 @Test func fileAccessTraceParserHandlesCallsErrorsAndCoverageGaps() {

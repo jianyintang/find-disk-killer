@@ -110,3 +110,5 @@ targets:
     dependencies:
       - package: FindDiskKillerPackage
         product: FindDiskKillerTraceProtocol
+      - package: FindDiskKillerPackage
+        product: CFindDiskKillerTrace

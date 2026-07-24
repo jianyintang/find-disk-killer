@@ -11,6 +11,7 @@ let package = Package(
     products: [
         .library(name: "FindDiskKillerCore", targets: ["FindDiskKillerCore"]),
         .library(name: "FindDiskKillerTraceProtocol", targets: ["FindDiskKillerTraceProtocol"]),
+        .library(name: "CFindDiskKillerTrace", targets: ["CFindDiskKillerTrace"]),
         .executable(name: "FindDiskKiller", targets: ["FindDiskKillerApp"])
     ],
     targets: [
@@ -28,6 +29,10 @@ let package = Package(
             dependencies: ["CFindDiskKiller"]
         ),
         .target(name: "FindDiskKillerTraceProtocol"),
+        .target(
+            name: "CFindDiskKillerTrace",
+            publicHeadersPath: "include"
+        ),
         .executableTarget(
             name: "FindDiskKillerApp",
             dependencies: ["FindDiskKillerCore", "FindDiskKillerTraceProtocol"],
@@ -37,7 +42,7 @@ let package = Package(
         ),
         .testTarget(
             name: "FindDiskKillerCoreTests",
-            dependencies: ["FindDiskKillerCore"]
+            dependencies: ["FindDiskKillerCore", "FindDiskKillerTraceProtocol"]
         )
     ]
 )

@@ -383,7 +383,7 @@ struct ProcessMetricChart: View {
     }
 }
 
-private extension View {
+extension View {
     func resourceTimeAxis() -> some View {
         chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 5)) { value in
