@@ -556,6 +556,12 @@ struct ProcessTable: View {
                             .onContinuousHover { phase in
                                 updateContinuousHover(for: process, phase: phase)
                             }
+                            .background {
+                                ProcessRowMouseDownMonitor(
+                                    isEnabled: hoverCoordinator.presentation?.process.id == process.id,
+                                    onMouseDown: { select(process) }
+                                )
+                            }
                             .popover(
                                 isPresented: popoverBinding(for: process.id),
                                 attachmentAnchor: .rect(.bounds)
@@ -805,6 +811,58 @@ struct ProcessTable: View {
             "\(L10n.text("读取")): \(ByteRateFormatter.rate(process.currentReadBytesPerSecond))",
             "\(L10n.text("写入")): \(ByteRateFormatter.rate(process.currentWriteBytesPerSecond))"
         ].joined(separator: ". ")
+    }
+}
+
+private struct ProcessRowMouseDownMonitor: NSViewRepresentable {
+    let isEnabled: Bool
+    let onMouseDown: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.view = view
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.view = nsView
+        context.coordinator.onMouseDown = onMouseDown
+        context.coordinator.setEnabled(isEnabled)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.setEnabled(false)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        weak var view: NSView?
+        var onMouseDown: (() -> Void)?
+        private var monitor: Any?
+
+        func setEnabled(_ isEnabled: Bool) {
+            if isEnabled, monitor == nil {
+                monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) {
+                    [weak self] event in
+                    guard let self, let view = self.view,
+                          event.window === view.window,
+                          view.bounds.contains(view.convert(event.locationInWindow, from: nil))
+                    else { return event }
+
+                    self.setEnabled(false)
+                    let action = self.onMouseDown
+                    Task { @MainActor in action?() }
+                    return nil
+                }
+            } else if !isEnabled, let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
     }
 }
 

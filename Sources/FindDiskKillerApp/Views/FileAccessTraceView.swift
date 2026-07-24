@@ -274,11 +274,11 @@ struct FileAccessTraceView: View {
     private var traceTables: some View {
         HSplitView {
             TraceFileTable(items: store.files)
-                .frame(minWidth: 340, idealWidth: 470, minHeight: 300)
+                .frame(minWidth: 440, idealWidth: 590, minHeight: 320)
             TraceProcessTable(items: store.processes)
-                .frame(minWidth: 340, idealWidth: 430, minHeight: 300)
+                .frame(minWidth: 300, idealWidth: 360, minHeight: 320)
         }
-        .frame(height: 330)
+        .frame(height: 360)
     }
 
     private var semanticsNote: some View {
@@ -655,15 +655,22 @@ private struct TraceChartTooltip: View {
 private struct TraceFileRow: Identifiable, Equatable {
     let id: String
     let name: String
-    let path: String
+    let rawPath: String
+    let displayPath: String
+    let directory: String
+    let fileExtension: String
     let read: UInt64
     let write: UInt64
     let total: UInt64
 
     init(_ item: FileAccessTraceFileSummary) {
+        let url = URL(fileURLWithPath: item.path)
         id = item.id
-        name = URL(fileURLWithPath: item.path).lastPathComponent
-        path = privateTracePath(item.path)
+        name = url.lastPathComponent
+        rawPath = item.path
+        displayPath = privateTracePath(item.path)
+        directory = privateTracePath(url.deletingLastPathComponent().path)
+        fileExtension = url.pathExtension.lowercased()
         read = item.requestedReadBytes
         write = item.requestedWriteBytes
         total = read.addingReportingOverflow(write).overflow ? UInt64.max : read + write
@@ -701,24 +708,17 @@ private struct TraceFileTable: View {
             Divider()
             Table(rows, sortOrder: $sortOrder) {
                 TableColumn(L10n.text("文件"), value: \.name) { row in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(row.name).lineLimit(1)
-                        Text(row.path)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
+                    TraceFileIdentityCell(row: row)
                 }
-                .width(min: 140, ideal: 220)
+                .width(min: 220, ideal: 320)
                 TableColumn(L10n.text("请求读取"), value: \.read) { row in
-                    Text(ByteRateFormatter.bytes(row.read)).monospacedDigit()
+                    TraceTransferCell(value: row.read, color: .teal)
                 }
-                .width(min: 78, ideal: 96)
+                .width(min: 82, ideal: 98)
                 TableColumn(L10n.text("请求写入"), value: \.write) { row in
-                    Text(ByteRateFormatter.bytes(row.write)).monospacedDigit()
+                    TraceTransferCell(value: row.write, color: .orange)
                 }
-                .width(min: 78, ideal: 96)
+                .width(min: 82, ideal: 98)
             }
             .overlay {
                 if rows.isEmpty {
@@ -740,6 +740,107 @@ private struct TraceFileTable: View {
         }
         .onChange(of: sortOrder) { _, newValue in
             rows.sort(using: newValue)
+        }
+    }
+}
+
+private struct TraceFileIdentityCell: View {
+    let row: TraceFileRow
+    @State private var isHovered = false
+    @State private var copied = false
+    @State private var resetTask: Task<Void, Never>?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: fileSymbol)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(fileColor)
+                .frame(width: 30, height: 30)
+                .background(fileColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(row.name)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(row.directory)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 6)
+
+            Button(action: copyPath) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(copied ? Color.green : Color.secondary)
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .opacity(isHovered || copied ? 1 : 0.48)
+            .help(L10n.text("复制路径"))
+            .accessibilityLabel(L10n.text("复制路径"))
+        }
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .help(row.displayPath)
+        .contextMenu {
+            Button(action: copyPath) {
+                Label(L10n.text("复制路径"), systemImage: "doc.on.doc")
+            }
+        }
+        .onDisappear {
+            resetTask?.cancel()
+        }
+    }
+
+    private func copyPath() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(row.rawPath, forType: .string)
+        copied = true
+        resetTask?.cancel()
+        resetTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.2))
+            guard !Task.isCancelled else { return }
+            copied = false
+        }
+    }
+
+    private var fileSymbol: String {
+        switch row.fileExtension {
+        case "sqlite", "sqlite3", "db": "cylinder.split.1x2"
+        case "json", "jsonl", "log": "doc.text"
+        case "wal", "shm": "arrow.triangle.2.circlepath"
+        default: "doc"
+        }
+    }
+
+    private var fileColor: Color {
+        switch row.fileExtension {
+        case "sqlite", "sqlite3", "db", "wal", "shm": .indigo
+        case "json", "jsonl", "log": .blue
+        default: .secondary
+        }
+    }
+}
+
+private struct TraceTransferCell: View {
+    let value: UInt64
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 7) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(color.opacity(value == 0 ? 0.18 : 0.82))
+                .frame(width: 3, height: 18)
+            Text(ByteRateFormatter.bytes(value))
+                .font(.callout.monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
         }
     }
 }
