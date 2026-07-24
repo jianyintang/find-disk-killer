@@ -11,10 +11,13 @@
     <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.ru.md">Русский</a>
   </p>
   <p><strong>macOS 14+ · Puces Apple et Intel · Traitement local · Interface en 10 langues</strong></p>
-  <p><a href="https://github.com/jianyintang/find-disk-killer/releases/latest">Télécharger</a> · <a href="docs/find-disk-killer-product-and-technical-plan.md">Modèle du produit</a> · <a href="SUPPORT.md">Assistance</a> · <a href="PRIVACY.md">Confidentialité</a></p>
+  <p><a href="https://finddiskkiller.com/fr/download/">Télécharger</a> · <a href="https://finddiskkiller.com/fr/">Site officiel</a> · <a href="docs/find-disk-killer-product-and-technical-plan.md">Modèle du produit</a> · <a href="SUPPORT.md">Assistance</a> · <a href="PRIVACY.md">Confidentialité</a></p>
 </div>
 
 ---
+
+<p align="center"><img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="Espace Aujourd’hui de FindDiskKiller montrant une activité disque soutenue, les tendances de ressources et les apps principales."></p>
+<p align="center"><sub>Repérez une activité disque soutenue et les apps qui en sont à l’origine.</sub></p>
 
 Lorsque votre Mac chauffe et que le disque reste actif, une simple liste de
 processus ne suffit pas toujours à en expliquer la cause. FindDiskKiller organise
@@ -34,6 +37,24 @@ et son contexte de stockage au même endroit.
 | **Disques** | Débit des périphériques physiques présenté avec le nom lisible des volumes montés, y compris les supports externes |
 | **État du disque** | Température, écritures hôte, usure, réserve, historique d’alimentation et erreurs lorsque macOS les expose |
 | **Barre des menus** | Un aperçu discret de l’activité actuelle, sans notifications répétitives |
+
+## Une vue complète, de l’app au disque
+
+### Commencer par l’app responsable
+
+<p align="center"><img src="docs/assets/screenshots/app-codex-overview.webp" width="100%" alt="Détails de l’app Codex avec chronologies séparées pour le processeur, les E/S disque et le réseau."></p>
+
+### Examiner ensuite les emplacements et les accès bornés
+
+<p align="center"><img src="docs/assets/screenshots/app-codex-file-activity.webp" width="100%" alt="Activité des fichiers de Codex montrant les emplacements associés, les dossiers accessibles en écriture et les changements récents."></p>
+
+<p align="center"><img src="docs/assets/screenshots/folder-access-trace.webp" width="100%" alt="Suivi de dossier limité dans le temps montrant les débits demandés, les fichiers actifs et les processus qui y accèdent."></p>
+
+### Terminer par le stockage et son état
+
+<p align="center"><img src="docs/assets/screenshots/disk-live-activity.webp" width="100%" alt="Espace Disques montrant le débit des périphériques physiques, les volumes montés et les diagnostics matériels."></p>
+
+<p align="center"><img src="docs/assets/screenshots/disk-health.webp" width="100%" alt="État du disque montrant le statut SMART, l’usure, la température, les écritures hôte, l’historique d’alimentation et les erreurs média."></p>
 
 ## Une enquête dans un contexte unique
 
@@ -61,7 +82,7 @@ suspendu : la ligne reste cliquable. Les détails s’ouvrent dans leur propre f
 ## Aucune fausse précision
 
 - Les **E/S disque de l’app** proviennent des compteurs du processus et couvrent tous les supports qu’il utilise.
-- Le **débit du périphérique** provient des compteurs physiques et apparaît sous des noms compréhensibles comme `Macintosh HD` ou `JianDisk`.
+- Le **débit du périphérique** provient des compteurs physiques et apparaît sous des noms compréhensibles comme `Macintosh HD` ou `ExternalSSD`.
 - Les **modifications récentes** signifient que macOS a observé un changement ; elles n’identifient pas à elles seules le processus responsable.
 - Le **suivi des accès** mesure les octets demandés par les appels système réussis. Cache, écritures différées APFS, compression, copie sur écriture, mappage mémoire et lacunes de couverture expliquent l’écart avec les écritures physiques ou NAND.
 - L’**état du disque** ne contient que les champs réellement fournis par macOS. Une valeur absente reste indisponible au lieu de devenir zéro.
@@ -89,9 +110,9 @@ Consultez la [Politique de confidentialité](PRIVACY.md) et la [Politique de sé
 - Mac avec puce Apple ou processeur Intel
 - Compte administrateur uniquement pour activer le suivi des accès à la demande
 
-Les versions officielles sont distribuées sous forme de DMG universal2 signé avec un Developer ID et notarié par Apple.
+Lorsqu'elles sont disponibles, les versions officielles sont distribuées sous forme de DMG universal2 signé avec un Developer ID et notarié par Apple.
 
-1. Téléchargez la dernière version depuis [Releases](https://github.com/jianyintang/find-disk-killer/releases/latest).
+1. Téléchargez la dernière version depuis le [site officiel](https://finddiskkiller.com/fr/download/).
 2. Ouvrez le DMG et faites glisser FindDiskKiller dans Applications.
 3. Lancez FindDiskKiller depuis Applications.
 
@@ -99,15 +120,25 @@ Chaque version officielle publie une somme SHA-256. Ne contournez jamais Gatekee
 
 ## Compilation et tests
 
+Le développement nécessite Xcode 16 ou version ultérieure et XcodeGen 2.42.0 ou version ultérieure.
+
 ```bash
-git clone git@github.com:jianyintang/find-disk-killer.git
+git clone https://github.com/jianyintang/find-disk-killer.git
 cd find-disk-killer
 xcodegen generate
 xcodebuild -project FindDiskKiller.xcodeproj \
   -scheme FindDiskKillerApp -configuration Release \
-  -destination 'generic/platform=macOS' build
+  -destination 'generic/platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=NO build
 swift test
 ```
+
+La build de développement non signée permet de valider la surveillance de base,
+mais pas d’exécuter le suivi privilégié d’un fichier ou dossier. L’app et le
+helper s’authentifient mutuellement avec le Team ID du mainteneur ; ce parcours
+doit donc être vérifié avec une build officielle signée. L’approbation du
+composant en arrière-plan et l’accès complet au disque pour les emplacements
+protégés sont deux autorisations macOS distinctes.
 
 Pour créer une version signée et notariée à partir d’un commit propre :
 
@@ -123,10 +154,11 @@ Les artefacts produits avec `SKIP_NOTARIZATION=1` servent uniquement aux répét
 - [Plan produit et technique](docs/find-disk-killer-product-and-technical-plan.md)
 - [Plan de suivi approfondi des fichiers et de santé SSD](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.md)
 - [Liste de contrôle de publication Web](docs/website-release-checklist.md)
+- [Contribuer](CONTRIBUTING.md)
 - [Assistance](SUPPORT.md) · [Confidentialité](PRIVACY.md) · [Sécurité](SECURITY.md) · [Mentions tierces](THIRD_PARTY_NOTICES.md)
 
 Utilisez [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues) pour l’assistance courante.
 Signalez une vulnérabilité en privé avec [GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new).
 
-FindDiskKiller est distribué selon la [licence Tous droits réservés](LICENSE) du dépôt.
+FindDiskKiller est un logiciel libre sous [licence MIT](LICENSE).
 Les marques d’apps tierces servent uniquement à identifier les logiciels observés et n’impliquent aucune affiliation ni recommandation.

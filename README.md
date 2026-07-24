@@ -17,7 +17,8 @@
   </p>
   <p><strong>macOS 14+ · Apple silicon & Intel · Local processing · 10 interface languages</strong></p>
   <p>
-    <a href="https://github.com/jianyintang/find-disk-killer/releases/latest">Download</a> ·
+    <a href="https://finddiskkiller.com/en/download/">Download</a> ·
+    <a href="https://finddiskkiller.com/en/">Website</a> ·
     <a href="docs/find-disk-killer-product-and-technical-plan.md">Product model</a> ·
     <a href="SUPPORT.md">Support</a> ·
     <a href="PRIVACY.md">Privacy</a>
@@ -25,6 +26,11 @@
 </div>
 
 ---
+
+<p align="center">
+  <img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="FindDiskKiller Now workspace showing sustained disk activity, resource trends, and the leading apps.">
+</p>
+<p align="center"><sub>Find sustained disk activity and identify the apps behind it.</sub></p>
 
 FindDiskKiller is built for the moment when your Mac is warm, the disk is busy,
 and a process list alone does not explain why. It keeps the investigation
@@ -45,28 +51,45 @@ without assembling the story across several tools.
 | **Drive health** | Native NVMe/SMART evidence such as temperature, host writes, wear, spare capacity, power history, and errors when macOS exposes it |
 | **Menu bar** | A quiet, lightweight view of current activity without notification noise |
 
-## One Investigation, One Context
+## A Complete Investigation, Visually
 
-```text
-Sustained activity
-        |
-        v
-Leading application  -->  CPU / disk / download / upload
-        |
-        v
-Open files and recent changes
-        |
-        v
-Optional bounded file or folder trace
-        |
-        v
-Physical device and available health evidence
-```
+### Start with the responsible app
 
-The UI is designed for repeated investigation: CPU appears first, reads and
-writes stay separate, download and upload stay separate, current values use the
-latest five seconds, lists pause their visual reordering while you inspect a
-row, and process details open in independent windows.
+CPU, disk I/O, download, and upload remain separate so one busy resource does
+not hide another. Current values use the latest five seconds, and each app can
+open in an independent detail window.
+
+<p align="center">
+  <img src="docs/assets/screenshots/app-codex-overview.webp" width="100%" alt="Codex app detail showing CPU, disk I/O, and network timelines.">
+</p>
+
+### Move from locations to bounded file evidence
+
+See locations an app currently has open and directories changed in the last
+five minutes. When that context is not enough, explicitly start a time-limited
+file or folder trace and inspect requested reads, writes, active files, and
+verified process sessions.
+
+<p align="center">
+  <img src="docs/assets/screenshots/app-codex-file-activity.webp" width="100%" alt="Codex File Activity view showing related locations, writable folders, and recent changes.">
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshots/folder-access-trace.webp" width="100%" alt="Bounded folder trace showing requested read and write rates, active files, and accessing processes.">
+</p>
+
+### Finish with the storage context
+
+Map familiar mounted-volume names to physical-device throughput, then inspect
+the SMART or NVMe health evidence that macOS and the drive actually expose.
+
+<p align="center">
+  <img src="docs/assets/screenshots/disk-live-activity.webp" width="100%" alt="Disks workspace showing physical-device throughput, mounted volumes, and hardware diagnostics.">
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshots/disk-health.webp" width="100%" alt="Disk Health view showing SMART status, wear, temperature, host writes, power history, and media errors.">
+</p>
 
 ## Measurement Without False Precision
 
@@ -75,7 +98,7 @@ FindDiskKiller keeps macOS evidence sources separate:
 - **Application disk I/O** comes from per-process counters and covers all
   storage used by that process.
 - **Device throughput** comes from physical storage counters and is shown
-  through names people recognize, such as `Macintosh HD` or `JianDisk`.
+  through names people recognize, such as `Macintosh HD` or `ExternalSSD`.
 - **Recent changes** show that macOS observed a location changing; they do not
   identify the writer by themselves.
 - **File access traces** measure bytes requested through successful system
@@ -109,10 +132,10 @@ Read the complete [Privacy Policy](PRIVACY.md) and [Security Policy](SECURITY.md
 
 ## Install
 
-Official website releases are distributed as universal2, Developer ID signed,
-Apple-notarized disk images.
+When available, official website releases are distributed as universal2,
+Developer ID signed, Apple-notarized disk images.
 
-1. Download the latest DMG from [Releases](https://github.com/jianyintang/find-disk-killer/releases/latest).
+1. Download the latest DMG from the [official website](https://finddiskkiller.com/en/download/).
 2. Open it and drag FindDiskKiller to Applications.
 3. Launch FindDiskKiller from Applications.
 
@@ -123,8 +146,12 @@ package that fails signature or notarization validation.
 
 XcodeGen is the source of truth for the Xcode project:
 
+Development requires Xcode 16 or later and XcodeGen 2.42.0 or later. The
+following build disables code signing, so it does not require the maintainer's
+Developer ID certificate:
+
 ```bash
-git clone git@github.com:jianyintang/find-disk-killer.git
+git clone https://github.com/jianyintang/find-disk-killer.git
 cd find-disk-killer
 xcodegen generate
 xcodebuild \
@@ -132,6 +159,8 @@ xcodebuild \
   -scheme FindDiskKillerApp \
   -configuration Release \
   -destination 'generic/platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO \
+  ONLY_ACTIVE_ARCH=NO \
   build
 ```
 
@@ -141,7 +170,14 @@ Run the core test suite:
 swift test
 ```
 
-Create a signed, notarized website release from a clean commit:
+The unsigned development build can validate the base monitoring experience,
+but it cannot complete privileged file or folder tracing. The App and helper
+authenticate each other against the maintainer's Team ID, so that workflow must
+be verified with an official signed build. Approving the background component
+and granting Full Disk Access for protected locations are separate macOS
+permissions; one does not imply the other.
+
+Maintainers can create a signed, notarized website release from a clean commit:
 
 ```bash
 make lint test
@@ -177,6 +213,7 @@ executable does not contain the signed helper bundle layout.
 - [Product and Technical Plan](docs/find-disk-killer-product-and-technical-plan.md)
 - [Deep File Tracing and SSD Health Plan](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.md)
 - [Website Release Checklist](docs/website-release-checklist.md)
+- [Contributing](CONTRIBUTING.md)
 - [Support](SUPPORT.md)
 - [Privacy](PRIVACY.md)
 - [Security](SECURITY.md)
@@ -189,6 +226,6 @@ ordinary support. Report vulnerabilities privately through
 [GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new)
 and remove sensitive paths, usernames, and serial numbers from diagnostics.
 
-FindDiskKiller is distributed under the repository's
-[All Rights Reserved license](LICENSE). Third-party application marks are used
-only to identify observed software and do not imply affiliation or endorsement.
+FindDiskKiller is open source under the [MIT License](LICENSE). Third-party
+application marks are used only to identify observed software and do not imply
+affiliation or endorsement.

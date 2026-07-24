@@ -137,7 +137,7 @@ The menu bar is a compact status surface, not a miniature dashboard:
   segments, not smoothing.
 - Chart hover selects the nearest sample and displays an opaque, compact,
   in-bounds callout with exact time and visible series values.
-- Device rows lead with user-facing mounted-volume names such as `JianDisk`.
+- Device rows lead with user-facing mounted-volume names such as `ExternalSSD`.
   BSD names and physical identifiers remain secondary details.
 - Application rows expose native icons, name, current CPU, reads, writes,
   download, and upload. Every metric column supports ascending and descending

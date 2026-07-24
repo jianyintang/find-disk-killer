@@ -55,7 +55,7 @@ targets:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: FindDiskKiller
         CFBundleIconFile: FindDiskKiller
-        NSHumanReadableCopyright: Copyright © 2026 Jianyin Tang. All rights reserved.
+        NSHumanReadableCopyright: Copyright © 2026 Jianyin Tang
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false

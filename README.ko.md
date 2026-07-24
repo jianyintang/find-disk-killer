@@ -11,10 +11,15 @@
     <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.ru.md">Русский</a>
   </p>
   <p><strong>macOS 14 이상 · Apple Silicon 및 Intel · 로컬 처리 · 10개 인터페이스 언어</strong></p>
-  <p><a href="https://github.com/jianyintang/find-disk-killer/releases/latest">다운로드</a> · <a href="docs/find-disk-killer-product-and-technical-plan.md">제품 모델</a> · <a href="SUPPORT.md">지원</a> · <a href="PRIVACY.md">개인정보 보호</a></p>
+  <p><a href="https://finddiskkiller.com/ko/download/">다운로드</a> · <a href="https://finddiskkiller.com/ko/">공식 웹사이트</a> · <a href="docs/find-disk-killer-product-and-technical-plan.md">제품 모델</a> · <a href="SUPPORT.md">지원</a> · <a href="PRIVACY.md">개인정보 보호</a></p>
 </div>
 
 ---
+
+<p align="center">
+  <img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="지속적인 디스크 활동, 리소스 추세, 주요 앱을 보여 주는 FindDiskKiller 현재 작업 공간.">
+</p>
+<p align="center"><sub>지속적인 디스크 활동을 찾고 그 원인이 되는 앱을 확인합니다.</sub></p>
 
 Mac이 뜨거워지고 디스크가 계속 바쁜데 프로세스 목록만으로는 이유를 알 수 없을 때,
 FindDiskKiller는 조사를 앱 중심의 흐름으로 정리합니다. 지속되는 부하를 찾고 해당 앱의 CPU,
@@ -32,6 +37,34 @@ FindDiskKiller는 조사를 앱 중심의 흐름으로 정리합니다. 지속�
 | **디스크** | 사용자가 알아보기 쉬운 마운트 볼륨 이름으로 물리 장치 처리량 표시 |
 | **드라이브 상태** | macOS가 제공하는 온도, 호스트 쓰기, 마모, 예비 공간, 전원 기록, 오류 정보 |
 | **메뉴 막대** | 반복 알림 없이 현재 상태를 조용히 확인 |
+
+## 앱에서 디스크까지 이어지는 전체 보기
+
+### 먼저 원인이 되는 앱 확인
+
+<p align="center">
+  <img src="docs/assets/screenshots/app-codex-overview.webp" width="100%" alt="CPU, 디스크 I/O, 네트워크 타임라인을 분리해 보여 주는 Codex 앱 세부 정보.">
+</p>
+
+### 파일 위치와 범위가 제한된 접근 근거 확인
+
+<p align="center">
+  <img src="docs/assets/screenshots/app-codex-file-activity.webp" width="100%" alt="관련 위치, 쓰기 가능한 폴더, 최근 변경을 보여 주는 Codex 파일 활동 보기.">
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshots/folder-access-trace.webp" width="100%" alt="요청 읽기 및 쓰기 속도, 활성 파일, 접근 프로세스를 보여 주는 시간 제한 폴더 추적.">
+</p>
+
+### 마지막으로 저장 장치와 상태 확인
+
+<p align="center">
+  <img src="docs/assets/screenshots/disk-live-activity.webp" width="100%" alt="물리 장치 처리량, 마운트 볼륨, 하드웨어 진단을 보여 주는 디스크 작업 공간.">
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshots/disk-health.webp" width="100%" alt="SMART 상태, 마모, 온도, 호스트 쓰기, 전원 기록, 미디어 오류를 보여 주는 드라이브 상태 보기.">
+</p>
 
 ## 끊김 없는 조사 흐름
 
@@ -57,7 +90,7 @@ CPU는 항상 첫 번째에 표시되고 읽기와 쓰기, 다운로드와 업�
 ## 그럴듯한 정밀도를 만들지 않습니다
 
 - **앱 디스크 I/O**는 프로세스 카운터에서 가져오며 해당 프로세스가 사용한 모든 저장 장치의 합계입니다.
-- **장치 처리량**은 물리 장치 카운터이며 `Macintosh HD`, `JianDisk`처럼 익숙한 볼륨 이름으로 표시합니다.
+- **장치 처리량**은 물리 장치 카운터이며 `Macintosh HD`, `ExternalSSD`처럼 익숙한 볼륨 이름으로 표시합니다.
 - **최근 변경**은 macOS가 위치 변경을 관찰했다는 뜻이며, 이것만으로 변경한 프로세스를 특정하지 않습니다.
 - **파일 접근 추적**은 성공한 시스템 호출이 요청한 바이트를 측정합니다. 캐시, APFS 지연 쓰기,
   압축, Copy-on-Write, 메모리 매핑, 관측 누락 때문에 물리 디스크나 NAND 쓰기와 다를 수 있습니다.
@@ -82,9 +115,9 @@ macOS가 서명된 백그라운드 구성 요소의 승인을 요청할 수 있�
 - Apple Silicon 또는 Intel Mac
 - 관리자 계정은 필요할 때 파일 접근 추적을 활성화하는 경우에만 필요합니다
 
-정식 버전은 Developer ID 서명과 Apple 공증을 거친 universal2 DMG로 제공됩니다.
+정식 버전은 출시 후 Developer ID 서명과 Apple 공증을 거친 universal2 DMG로 제공됩니다.
 
-1. [Releases](https://github.com/jianyintang/find-disk-killer/releases/latest)에서 최신 버전을 다운로드합니다.
+1. [공식 웹사이트](https://finddiskkiller.com/ko/download/)에서 최신 버전을 다운로드합니다.
 2. DMG를 열고 FindDiskKiller를 응용 프로그램 폴더로 드래그합니다.
 3. 응용 프로그램 폴더에서 FindDiskKiller를 실행합니다.
 
@@ -92,15 +125,23 @@ macOS가 서명된 백그라운드 구성 요소의 승인을 요청할 수 있�
 
 ## 빌드 및 테스트
 
+개발에는 Xcode 16 이상과 XcodeGen 2.42.0 이상이 필요합니다.
+
 ```bash
-git clone git@github.com:jianyintang/find-disk-killer.git
+git clone https://github.com/jianyintang/find-disk-killer.git
 cd find-disk-killer
 xcodegen generate
 xcodebuild -project FindDiskKiller.xcodeproj \
   -scheme FindDiskKillerApp -configuration Release \
-  -destination 'generic/platform=macOS' build
+  -destination 'generic/platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=NO build
 swift test
 ```
+
+서명되지 않은 개발 빌드로 기본 모니터링은 검증할 수 있지만, 권한이 필요한 파일 또는 폴더
+추적은 실행할 수 없습니다. 앱과 helper는 유지 관리자의 Team ID로 서로를 인증하므로 이
+기능은 공식 서명 빌드에서 검증해야 합니다. 백그라운드 구성 요소 승인과 보호된 위치에 대한
+전체 디스크 접근 권한은 서로 다른 macOS 권한입니다.
 
 깨끗한 커밋에서 서명 및 공증된 웹 배포 파일을 만듭니다.
 
@@ -116,10 +157,11 @@ make release VERSION=1.0.0 BUILD_NUMBER=100
 - [제품 및 기술 계획](docs/find-disk-killer-product-and-technical-plan.md)
 - [심층 파일 추적 및 SSD 상태 계획](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.md)
 - [웹 배포 점검표](docs/website-release-checklist.md)
+- [기여 안내](CONTRIBUTING.md)
 - [지원](SUPPORT.md) · [개인정보 보호](PRIVACY.md) · [보안](SECURITY.md) · [타사 고지](THIRD_PARTY_NOTICES.md)
 
 일반 문의는 [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues),
 취약점은 [GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new)를 통해 비공개로 알려 주세요.
 
-FindDiskKiller는 저장소의 [All Rights Reserved 라이선스](LICENSE)에 따라 배포됩니다.
+FindDiskKiller는 [MIT License](LICENSE)로 공개된 오픈 소스 소프트웨어입니다.
 타사 앱 표시는 관찰된 소프트웨어를 식별하기 위한 것이며 제휴나 보증을 의미하지 않습니다.

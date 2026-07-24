@@ -11,10 +11,13 @@
     <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.ru.md">Русский</a>
   </p>
   <p><strong>macOS 14+ · Apple silicon и Intel · Локальная обработка · 10 языков интерфейса</strong></p>
-  <p><a href="https://github.com/jianyintang/find-disk-killer/releases/latest">Скачать</a> · <a href="docs/find-disk-killer-product-and-technical-plan.md">Модель продукта</a> · <a href="SUPPORT.md">Поддержка</a> · <a href="PRIVACY.md">Конфиденциальность</a></p>
+  <p><a href="https://finddiskkiller.com/ru/download/">Скачать</a> · <a href="https://finddiskkiller.com/ru/">Официальный сайт</a> · <a href="docs/find-disk-killer-product-and-technical-plan.md">Модель продукта</a> · <a href="SUPPORT.md">Поддержка</a> · <a href="PRIVACY.md">Конфиденциальность</a></p>
 </div>
 
 ---
+
+<p align="center"><img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="Раздел Сейчас в FindDiskKiller с длительной активностью диска, динамикой ресурсов и ведущими приложениями."></p>
+<p align="center"><sub>Найдите длительную дисковую активность и приложения, которые её вызывают.</sub></p>
 
 Когда Mac нагревается, а диск остаётся занятым, одного списка процессов часто
 недостаточно, чтобы понять причину. FindDiskKiller строит расследование вокруг
@@ -33,6 +36,24 @@
 | **Диски** | Пропускная способность физических устройств под понятными именами подключённых томов, включая внешние накопители |
 | **Состояние накопителя** | Температура, запись хостом, износ, резерв, история питания и ошибки, если macOS предоставляет эти данные |
 | **Строка меню** | Ненавязчивый обзор текущей активности без повторяющихся уведомлений |
+
+## Полная картина от приложения до диска
+
+### Начните с ответственного приложения
+
+<p align="center"><img src="docs/assets/screenshots/app-codex-overview.webp" width="100%" alt="Сведения о приложении Codex с раздельными графиками ЦП, дискового ввода-вывода и сети."></p>
+
+### Перейдите к расположениям и ограниченной трассировке
+
+<p align="center"><img src="docs/assets/screenshots/app-codex-file-activity.webp" width="100%" alt="Файловая активность Codex со связанными расположениями, доступными для записи папками и недавними изменениями."></p>
+
+<p align="center"><img src="docs/assets/screenshots/folder-access-trace.webp" width="100%" alt="Ограниченная по времени трассировка папки с запрошенной скоростью чтения и записи, активными файлами и обращающимися процессами."></p>
+
+### Завершите контекстом накопителя и его состояния
+
+<p align="center"><img src="docs/assets/screenshots/disk-live-activity.webp" width="100%" alt="Раздел Диски с пропускной способностью физических устройств, подключёнными томами и диагностикой оборудования."></p>
+
+<p align="center"><img src="docs/assets/screenshots/disk-health.webp" width="100%" alt="Состояние накопителя со статусом SMART, износом, температурой, записью хостом, историей питания и ошибками носителя."></p>
 
 ## Единый контекст расследования
 
@@ -60,7 +81,7 @@
 ## Без ложной точности
 
 - **Дисковый ввод-вывод приложения** берётся из счётчиков процесса и охватывает все используемые им накопители.
-- **Пропускная способность устройства** берётся из физических счётчиков и отображается под понятными именами вроде `Macintosh HD` или `JianDisk`.
+- **Пропускная способность устройства** берётся из физических счётчиков и отображается под понятными именами вроде `Macintosh HD` или `ExternalSSD`.
 - **Недавние изменения** означают, что macOS заметила изменение; сами по себе они не определяют ответственный процесс.
 - **Трассировка доступа** измеряет байты, запрошенные успешными системными вызовами. Кэш, отложенная запись APFS, сжатие, копирование при записи, отображение памяти и пробелы наблюдения отличают их от физической или NAND-записи.
 - **Состояние накопителя** содержит только поля, которые действительно сообщает macOS. Отсутствующие значения остаются недоступными и не превращаются в ноль.
@@ -87,9 +108,9 @@ FindDiskKiller не утверждает, что способен точно с�
 - Mac с Apple silicon или Intel
 - Учётная запись администратора нужна только для включения трассировки доступа по запросу
 
-Официальные версии распространяются в виде universal2 DMG с подписью Developer ID и нотариальным заверением Apple.
+После выпуска официальные версии распространяются в виде universal2 DMG с подписью Developer ID и нотариальным заверением Apple.
 
-1. Скачайте последнюю версию в разделе [Releases](https://github.com/jianyintang/find-disk-killer/releases/latest).
+1. Скачайте последнюю версию с [официального сайта](https://finddiskkiller.com/ru/download/).
 2. Откройте DMG и перетащите FindDiskKiller в «Программы».
 3. Запустите FindDiskKiller из папки «Программы».
 
@@ -97,15 +118,24 @@ FindDiskKiller не утверждает, что способен точно с�
 
 ## Сборка и тестирование
 
+Для разработки требуются Xcode 16 или новее и XcodeGen 2.42.0 или новее.
+
 ```bash
-git clone git@github.com:jianyintang/find-disk-killer.git
+git clone https://github.com/jianyintang/find-disk-killer.git
 cd find-disk-killer
 xcodegen generate
 xcodebuild -project FindDiskKiller.xcodeproj \
   -scheme FindDiskKillerApp -configuration Release \
-  -destination 'generic/platform=macOS' build
+  -destination 'generic/platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=NO build
 swift test
 ```
+
+Неподписанная сборка для разработки позволяет проверить базовый мониторинг, но
+не привилегированную трассировку файлов или папок. Приложение и helper взаимно
+проверяют Team ID сопровождающего, поэтому этот сценарий нужно тестировать на
+официально подписанной сборке. Одобрение фонового компонента и полный доступ к
+диску для защищённых расположений являются отдельными разрешениями macOS.
 
 Создание подписанной и нотариально заверенной версии из чистого коммита:
 
@@ -121,10 +151,11 @@ make release VERSION=1.0.0 BUILD_NUMBER=100
 - [План продукта и технической реализации](docs/find-disk-killer-product-and-technical-plan.md)
 - [План глубокой трассировки файлов и состояния SSD](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.md)
 - [Контрольный список веб-релиза](docs/website-release-checklist.md)
+- [Участие в разработке](CONTRIBUTING.md)
 - [Поддержка](SUPPORT.md) · [Конфиденциальность](PRIVACY.md) · [Безопасность](SECURITY.md) · [Уведомления третьих сторон](THIRD_PARTY_NOTICES.md)
 
 Для обычных вопросов используйте [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues).
 Об уязвимостях сообщайте приватно через [GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new).
 
-FindDiskKiller распространяется по [лицензии «Все права защищены»](LICENSE) этого репозитория.
+FindDiskKiller — проект с открытым исходным кодом под [лицензией MIT](LICENSE).
 Знаки сторонних приложений используются только для идентификации наблюдаемого ПО и не означают сотрудничества или одобрения.

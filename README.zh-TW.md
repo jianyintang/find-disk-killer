@@ -11,10 +11,15 @@
     <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.ru.md">Русский</a>
   </p>
   <p><strong>macOS 14+ · Apple 晶片與 Intel · 本機處理 · 10 種介面語言</strong></p>
-  <p><a href="https://github.com/jianyintang/find-disk-killer/releases/latest">下載</a> · <a href="docs/find-disk-killer-product-and-technical-plan.md">產品模型</a> · <a href="SUPPORT.md">支援</a> · <a href="PRIVACY.md">隱私權</a></p>
+  <p><a href="https://finddiskkiller.com/zh-tw/download/">下載</a> · <a href="https://finddiskkiller.com/zh-tw/">官網</a> · <a href="docs/find-disk-killer-product-and-technical-plan.md">產品模型</a> · <a href="SUPPORT.md">支援</a> · <a href="PRIVACY.md">隱私權</a></p>
 </div>
 
 ---
+
+<p align="center">
+  <img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="FindDiskKiller 目前狀態工作區，顯示持續磁碟活動、資源趨勢與主要 App。">
+</p>
+<p align="center"><sub>找出持續磁碟活動，以及背後的 App。</sub></p>
 
 當 Mac 發熱、磁碟持續忙碌，而單純的程序列表又無法解釋原因時，FindDiskKiller
 會把調查重新整理成以 App 為中心的流程：先找出持續負載，再查看相關 App 的 CPU、
@@ -32,6 +37,34 @@
 | **磁碟** | 以使用者熟悉的掛載卷宗名稱顯示實體裝置吞吐量，包含外接儲存裝置 |
 | **磁碟健康狀態** | macOS 有提供時，顯示溫度、累計主機寫入、耗損、備用空間、通電記錄與錯誤 |
 | **選單列** | 安靜查看目前狀態，不用重複通知打擾使用者 |
+
+## 從 App 到磁碟的完整視圖
+
+### 先確認負責的 App
+
+<p align="center">
+  <img src="docs/assets/screenshots/app-codex-overview.webp" width="100%" alt="Codex App 詳細資料，分別顯示 CPU、磁碟 I/O 與網路時間趨勢。">
+</p>
+
+### 再查看檔案位置與有範圍限制的存取證據
+
+<p align="center">
+  <img src="docs/assets/screenshots/app-codex-file-activity.webp" width="100%" alt="Codex 檔案活動視圖，顯示相關位置、可寫目錄與最近變更。">
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshots/folder-access-trace.webp" width="100%" alt="有時限的目錄追蹤，顯示請求讀寫速率、活躍檔案與存取程序。">
+</p>
+
+### 最後核對儲存裝置與健康資訊
+
+<p align="center">
+  <img src="docs/assets/screenshots/disk-live-activity.webp" width="100%" alt="磁碟工作區，顯示實體裝置吞吐量、掛載卷宗與硬體診斷。">
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshots/disk-health.webp" width="100%" alt="磁碟健康狀態視圖，顯示 SMART 狀態、耗損、溫度、主機寫入、通電記錄與媒體錯誤。">
+</p>
 
 ## 完整而連貫的調查流程
 
@@ -57,7 +90,7 @@ CPU 固定排在第一項，讀取與寫入分開，下載與上傳分開；即�
 ## 不製造虛假的精確度
 
 - **App 磁碟 I/O** 來自程序計數器，代表該程序使用所有儲存裝置的總量。
-- **裝置吞吐量** 來自實體裝置計數器，並以 `Macintosh HD`、`JianDisk` 等卷宗名稱呈現。
+- **裝置吞吐量** 來自實體裝置計數器，並以 `Macintosh HD`、`ExternalSSD` 等卷宗名稱呈現。
 - **最近變更** 只表示系統觀察到某個位置發生變更，無法單獨確認修改程序。
 - **檔案存取追蹤** 統計成功系統呼叫所請求的位元組。快取、APFS 回寫、壓縮、
   寫入時複製、記憶體映射與覆蓋缺口，都會讓它不同於實體磁碟或 NAND 寫入。
@@ -82,9 +115,9 @@ CPU 固定排在第一項，讀取與寫入分開，下載與上傳分開；即�
 - Apple 晶片或 Intel Mac
 - 只有啟用隨選檔案存取追蹤時才需要管理員帳號
 
-正式版本以 Developer ID 簽署、經 Apple 公證的 universal2 DMG 發佈：
+正式版本發佈後，將以 Developer ID 簽署、經 Apple 公證的 universal2 DMG 提供：
 
-1. 從 [Releases](https://github.com/jianyintang/find-disk-killer/releases/latest) 下載最新版。
+1. 從[官網](https://finddiskkiller.com/zh-tw/download/)下載最新版。
 2. 開啟 DMG，將 FindDiskKiller 拖入「應用程式」。
 3. 從「應用程式」啟動 FindDiskKiller。
 
@@ -92,15 +125,22 @@ CPU 固定排在第一項，讀取與寫入分開，下載與上傳分開；即�
 
 ## 建置與測試
 
+開發需要 Xcode 16 或更新版本，以及 XcodeGen 2.42.0 或更新版本。
+
 ```bash
-git clone git@github.com:jianyintang/find-disk-killer.git
+git clone https://github.com/jianyintang/find-disk-killer.git
 cd find-disk-killer
 xcodegen generate
 xcodebuild -project FindDiskKiller.xcodeproj \
   -scheme FindDiskKillerApp -configuration Release \
-  -destination 'generic/platform=macOS' build
+  -destination 'generic/platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=NO build
 swift test
 ```
+
+未簽署的開發建置可驗證基礎監控，但無法完成需要特權的檔案或資料夾追蹤。App 與 helper
+會透過維護者的 Team ID 相互驗證，因此該流程必須使用官方簽署的建置驗證。核准背景元件
+與為受保護位置授予「完整磁碟存取權」是兩項獨立的 macOS 權限，前者不會自動授予後者。
 
 從乾淨的提交建立已簽署並公證的官網發佈套件：
 
@@ -116,11 +156,12 @@ make release VERSION=1.0.0 BUILD_NUMBER=100
 - [產品與技術方案](docs/find-disk-killer-product-and-technical-plan.md)
 - [深度檔案追蹤與 SSD 健康方案](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.md)
 - [官網發佈檢查表](docs/website-release-checklist.md)
+- [參與貢獻](CONTRIBUTING.md)
 - [支援](SUPPORT.md) · [隱私權](PRIVACY.md) · [安全性](SECURITY.md) · [第三方聲明](THIRD_PARTY_NOTICES.md)
 
 一般問題請使用 [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues)。
 安全漏洞請透過 [GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new)
 私下回報，並遮蔽診斷資料中的路徑、使用者名稱與序號。
 
-FindDiskKiller 採用儲存庫中的 [All Rights Reserved 授權](LICENSE)。第三方 App 標誌僅用於
+FindDiskKiller 採用 [MIT License](LICENSE) 開放原始碼。第三方 App 標誌僅用於
 識別觀察到的軟體，不代表合作、認可或背書。

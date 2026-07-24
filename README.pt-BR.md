@@ -11,10 +11,13 @@
     <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.ru.md">Русский</a>
   </p>
   <p><strong>macOS 14+ · Apple Silicon e Intel · Processamento local · Interface em 10 idiomas</strong></p>
-  <p><a href="https://github.com/jianyintang/find-disk-killer/releases/latest">Baixar</a> · <a href="docs/find-disk-killer-product-and-technical-plan.md">Modelo do produto</a> · <a href="SUPPORT.md">Suporte</a> · <a href="PRIVACY.md">Privacidade</a></p>
+  <p><a href="https://finddiskkiller.com/pt-br/download/">Baixar</a> · <a href="https://finddiskkiller.com/pt-br/">Site oficial</a> · <a href="docs/find-disk-killer-product-and-technical-plan.md">Modelo do produto</a> · <a href="SUPPORT.md">Suporte</a> · <a href="PRIVACY.md">Privacidade</a></p>
 </div>
 
 ---
+
+<p align="center"><img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="Área Agora do FindDiskKiller mostrando atividade contínua do disco, tendências de recursos e os principais apps."></p>
+<p align="center"><sub>Encontre atividade contínua do disco e identifique os apps responsáveis.</sub></p>
 
 Quando o Mac esquenta e o disco continua ocupado, uma simples lista de processos
 nem sempre explica a causa. O FindDiskKiller organiza a investigação em torno
@@ -33,6 +36,24 @@ disco, rede, arquivos e contexto de armazenamento no mesmo lugar.
 | **Discos** | Vazão dos dispositivos físicos com nomes de volumes fáceis de reconhecer, inclusive armazenamento externo |
 | **Integridade da unidade** | Temperatura, gravações do host, desgaste, reserva, histórico de energia e erros quando o macOS fornece esses dados |
 | **Barra de menus** | Estado atual de forma discreta, sem notificações repetitivas |
+
+## Uma visão completa, do app ao disco
+
+### Comece pelo app responsável
+
+<p align="center"><img src="docs/assets/screenshots/app-codex-overview.webp" width="100%" alt="Detalhes do app Codex com linhas do tempo separadas para CPU, E/S de disco e rede."></p>
+
+### Passe para locais e acessos limitados
+
+<p align="center"><img src="docs/assets/screenshots/app-codex-file-activity.webp" width="100%" alt="Atividade de arquivos do Codex com locais relacionados, pastas graváveis e mudanças recentes."></p>
+
+<p align="center"><img src="docs/assets/screenshots/folder-access-trace.webp" width="100%" alt="Rastreamento temporário de pasta com taxas solicitadas de leitura e gravação, arquivos ativos e processos de acesso."></p>
+
+### Termine com o armazenamento e sua integridade
+
+<p align="center"><img src="docs/assets/screenshots/disk-live-activity.webp" width="100%" alt="Área Discos com vazão dos dispositivos físicos, volumes montados e diagnósticos de hardware."></p>
+
+<p align="center"><img src="docs/assets/screenshots/disk-health.webp" width="100%" alt="Integridade da unidade com SMART, desgaste, temperatura, gravações do host, histórico de energia e erros de mídia."></p>
 
 ## Uma investigação em um só contexto
 
@@ -60,7 +81,7 @@ do processo são abertos em janelas independentes.
 ## Sem falsa precisão
 
 - A **E/S de disco do app** vem dos contadores do processo e inclui todo o armazenamento usado por ele.
-- A **vazão do dispositivo** vem dos contadores físicos e é exibida com nomes como `Macintosh HD` ou `JianDisk`.
+- A **vazão do dispositivo** vem dos contadores físicos e é exibida com nomes como `Macintosh HD` ou `ExternalSSD`.
 - As **mudanças recentes** indicam que o macOS observou uma alteração; sozinhas, elas não identificam o processo responsável.
 - O **rastreamento de acesso** mede os bytes solicitados por chamadas de sistema bem-sucedidas. Cache, gravação adiada do APFS, compactação, copy-on-write, mapeamento de memória e lacunas de cobertura fazem esses valores diferirem das gravações físicas ou NAND.
 - A **integridade da unidade** mostra apenas os campos realmente fornecidos pelo macOS. Um dado ausente continua indisponível, em vez de virar zero.
@@ -87,9 +108,9 @@ Leia a [Política de Privacidade](PRIVACY.md) e a [Política de Segurança](SECU
 - Mac com Apple Silicon ou Intel
 - Conta de administrador apenas para ativar o rastreamento de acesso sob demanda
 
-As versões oficiais são distribuídas como DMG universal2, assinado com Developer ID e notarizado pela Apple.
+Quando disponíveis, as versões oficiais são distribuídas como DMG universal2, assinado com Developer ID e notarizado pela Apple.
 
-1. Baixe a versão mais recente em [Releases](https://github.com/jianyintang/find-disk-killer/releases/latest).
+1. Baixe a versão mais recente no [site oficial](https://finddiskkiller.com/pt-br/download/).
 2. Abra o DMG e arraste o FindDiskKiller para Aplicativos.
 3. Inicie o FindDiskKiller em Aplicativos.
 
@@ -97,15 +118,25 @@ Cada versão oficial publica seu SHA-256. Não ignore o Gatekeeper caso um pacot
 
 ## Compilação e testes
 
+O desenvolvimento requer Xcode 16 ou posterior e XcodeGen 2.42.0 ou posterior.
+
 ```bash
-git clone git@github.com:jianyintang/find-disk-killer.git
+git clone https://github.com/jianyintang/find-disk-killer.git
 cd find-disk-killer
 xcodegen generate
 xcodebuild -project FindDiskKiller.xcodeproj \
   -scheme FindDiskKillerApp -configuration Release \
-  -destination 'generic/platform=macOS' build
+  -destination 'generic/platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=NO build
 swift test
 ```
+
+O build de desenvolvimento sem assinatura permite validar o monitoramento
+básico, mas não executar o rastreamento privilegiado de arquivos ou pastas. O
+app e o helper se autenticam pelo Team ID do mantenedor, portanto esse fluxo
+deve ser verificado com um build oficial assinado. A aprovação do componente em
+segundo plano e o Acesso Total ao Disco para locais protegidos são permissões
+separadas do macOS.
 
 Para criar uma versão assinada e notarizada a partir de um commit limpo:
 
@@ -121,10 +152,11 @@ Artefatos gerados com `SKIP_NOTARIZATION=1` servem apenas para ensaios locais e 
 - [Plano de produto e técnico](docs/find-disk-killer-product-and-technical-plan.md)
 - [Plano de rastreamento profundo de arquivos e integridade do SSD](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.md)
 - [Checklist de lançamento no site](docs/website-release-checklist.md)
+- [Como contribuir](CONTRIBUTING.md)
 - [Suporte](SUPPORT.md) · [Privacidade](PRIVACY.md) · [Segurança](SECURITY.md) · [Avisos de terceiros](THIRD_PARTY_NOTICES.md)
 
 Use o [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues) para dúvidas comuns.
 Relate vulnerabilidades em particular pelo [GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new).
 
-O FindDiskKiller é distribuído conforme a [licença Todos os direitos reservados](LICENSE) do repositório.
+O FindDiskKiller é software de código aberto sob a [licença MIT](LICENSE).
 Marcas de apps de terceiros servem apenas para identificar software observado e não indicam afiliação ou endosso.

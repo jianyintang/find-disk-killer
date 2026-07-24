@@ -332,31 +332,31 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
 
 @Test func fileAccessTraceTargetUsesVolumeAndPathComponents() throws {
     let directory = try FileAccessTraceTarget(
-        path: "/Volumes/JianDisk/code",
-        resolvedPath: "/System/Volumes/Data/Volumes/JianDisk/code",
+        path: "/Volumes/ExternalSSD/code",
+        resolvedPath: "/System/Volumes/Data/Volumes/ExternalSSD/code",
         volumeIdentifier: "volume-a",
         kind: .directory,
         isCaseSensitive: true
     )
     #expect(directory.match(
-        path: "/Volumes/JianDisk/code/project/file.swift",
+        path: "/Volumes/ExternalSSD/code/project/file.swift",
         volumeIdentifier: "volume-a"
     ) == .included(relativePath: "project/file.swift"))
     #expect(directory.match(
-        path: "/Volumes/JianDisk/code-other/file.swift",
+        path: "/Volumes/ExternalSSD/code-other/file.swift",
         volumeIdentifier: "volume-a"
     ) == .excluded)
     #expect(directory.match(
-        path: "/Volumes/JianDisk/code/file.swift",
+        path: "/Volumes/ExternalSSD/code/file.swift",
         volumeIdentifier: "volume-b"
     ) == .excluded)
     #expect(directory.match(
-        path: "/Volumes/JianDisk/code/file.swift",
+        path: "/Volumes/ExternalSSD/code/file.swift",
         volumeIdentifier: nil
     ) == .unverifiable)
     #expect(directory.match(
         path: "/private/var/empty",
-        resolvedPath: "/System/Volumes/Data/Volumes/JianDisk/code/link-target",
+        resolvedPath: "/System/Volumes/Data/Volumes/ExternalSSD/code/link-target",
         volumeIdentifier: "volume-a"
     ) == .included(relativePath: "link-target"))
 
@@ -384,30 +384,30 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     }
 }
 
-@Test func codexFSUsageFixtureResolvesFDAndContinuesAfterAttachedErrno() throws {
+@Test func exampleAppFSUsageFixtureResolvesFDAndContinuesAfterAttachedErrno() throws {
     let day = Date(timeIntervalSinceReferenceDate: 60_000)
     let process = FileAccessTraceProcessIdentity(
         pid: 85_623,
         startAbstime: 123,
-        displayName: "codex"
+        displayName: "ExampleApp"
     )
     let target = try FileAccessTraceTarget(
-        path: "/Volumes/JianDisk/.codex-cc/sessions/2026/07/23",
+        path: "/Volumes/ExternalSSD/ExampleApp/Sessions/Current",
         volumeIdentifier: "volume-a",
         kind: .directory,
         isCaseSensitive: true
     )
     var descriptors = FileAccessTraceDescriptorIndex()
     descriptors.register(
-        path: "/Volumes/JianDisk/.codex-cc/sessions/2026/07/23/rollout.jsonl",
+        path: "/Volumes/ExternalSSD/ExampleApp/Sessions/Current/activity.log",
         process: process,
         fileDescriptor: 39
     )
     var parser = FileAccessTraceStreamParser()
     let lines = [
-        "14:10:45.100000 pread F=39 B=0x1000 O=0x1000 0.000002 codex.51508301",
-        "14:10:45.200000 writev F=120[ 35] 0.000001 codex.49781806",
-        "14:10:45.300000 pwrite F=39 B=0x40 O=0x2000 0.000003 codex.51508301"
+        "14:10:45.100000 pread F=39 B=0x1000 O=0x1000 0.000002 ExampleApp.51508301",
+        "14:10:45.200000 writev F=120[ 35] 0.000001 ExampleApp.49781806",
+        "14:10:45.300000 pwrite F=39 B=0x40 O=0x2000 0.000003 ExampleApp.51508301"
     ]
     var events: [FileAccessTraceParsedEvent] = []
     for line in lines {
@@ -417,7 +417,7 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
         case .failedCall:
             continue
         default:
-            Issue.record("Unexpected parser result for Codex fixture: \(line)")
+            Issue.record("Unexpected parser result for example fixture: \(line)")
         }
     }
     #expect(parser.state == .parsing)
@@ -446,7 +446,7 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(snapshot.coverage == .complete)
     #expect(snapshot.requestedReadBytes == 4_096)
     #expect(snapshot.requestedWriteBytes == 64)
-    #expect(snapshot.files.first?.path.hasSuffix("rollout.jsonl") == true)
+    #expect(snapshot.files.first?.path.hasSuffix("activity.log") == true)
 }
 
 @Test func fileAccessTraceAggregatorSeparatesReadWriteFilesAndProcessSessions() throws {
@@ -732,7 +732,7 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
 @Test func clearingMonitoringHistoryRemovesSessionDataButKeepsMountedVolumes() async {
     let store = MonitorStore()
     let baseDate = Date(timeIntervalSinceReferenceDate: 2_500)
-    let volume = fixtureVolume(id: "volume-a", name: "JianDisk", mountPath: "/Volumes/JianDisk")
+    let volume = fixtureVolume(id: "volume-a", name: "ExternalSSD", mountPath: "/Volumes/ExternalSSD")
 
     for index in 0..<2 {
         store.ingest(SystemSnapshot(
@@ -1545,17 +1545,17 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     let root = fixtureVolume(id: "root", name: "Macintosh HD", mountPath: "/")
     let external = fixtureVolume(
         id: "external-a",
-        name: "JianDisk",
-        mountPath: "/Volumes/JianDisk"
+        name: "ExternalSSD",
+        mountPath: "/Volumes/ExternalSSD"
     )
 
     let match = VolumePathResolver.bestMatch(
-        for: "/Volumes/JianDisk/code/find-disk-killer",
+        for: "/Volumes/ExternalSSD/code/find-disk-killer",
         in: [root, external]
     )
 
     #expect(match?.id == external.id)
-    #expect(match?.name == "JianDisk")
+    #expect(match?.name == "ExternalSSD")
 }
 
 @Test func volumePathResolverDoesNotCrossPathComponentBoundaries() {
@@ -1572,16 +1572,16 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
 }
 
 @Test func volumePathResolverRecoversWhenVolumesArriveOrRemount() {
-    let path = "/Volumes/JianDisk/code/find-disk-killer"
+    let path = "/Volumes/ExternalSSD/code/find-disk-killer"
     let firstMount = fixtureVolume(
         id: "external-a",
-        name: "JianDisk",
-        mountPath: "/Volumes/JianDisk"
+        name: "ExternalSSD",
+        mountPath: "/Volumes/ExternalSSD"
     )
     let remounted = fixtureVolume(
         id: "external-b",
-        name: "JianDisk",
-        mountPath: "/Volumes/JianDisk"
+        name: "ExternalSSD",
+        mountPath: "/Volumes/ExternalSSD"
     )
 
     #expect(VolumePathResolver.bestMatch(for: path, in: []) == nil)
@@ -1594,13 +1594,13 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     let store = MonitorStore()
     let external = fixtureVolume(
         id: "external-a",
-        name: "JianDisk",
-        mountPath: "/Volumes/JianDisk"
+        name: "ExternalSSD",
+        mountPath: "/Volumes/ExternalSSD"
     )
     let remounted = fixtureVolume(
         id: "external-b",
-        name: "JianDisk",
-        mountPath: "/Volumes/JianDisk"
+        name: "ExternalSSD",
+        mountPath: "/Volumes/ExternalSSD"
     )
 
     store.ingest(volumeOnlySnapshot(volumes: [], uptime: 1))

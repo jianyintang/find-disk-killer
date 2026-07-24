@@ -122,7 +122,7 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Link(destination: releasesURL) {
+                    Link(destination: downloadURL) {
                         Label(L10n.text("检查更新"), systemImage: "arrow.triangle.2.circlepath")
                     }
                     Link(destination: privacyPolicyURL) {
@@ -227,9 +227,22 @@ struct SettingsView: View {
     private let sourceURL = URL(
         string: "https://github.com/jianyintang/find-disk-killer"
     )!
-    private let releasesURL = URL(
-        string: "https://github.com/jianyintang/find-disk-killer/releases/latest"
-    )!
+    private var downloadURL: URL {
+        let locale = switch L10n.effectiveLanguage {
+        case .simplifiedChinese: "zh-cn"
+        case .traditionalChinese: "zh-tw"
+        case .brazilianPortuguese: "pt-br"
+        case .english: "en"
+        case .japanese: "ja"
+        case .korean: "ko"
+        case .german: "de"
+        case .french: "fr"
+        case .spanish: "es"
+        case .russian: "ru"
+        case .system: "en"
+        }
+        return URL(string: "https://finddiskkiller.com/\(locale)/download/")!
+    }
 }
 
 private struct SettingsInlineStatus: View {
