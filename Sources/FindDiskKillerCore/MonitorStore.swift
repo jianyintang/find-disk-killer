@@ -229,6 +229,35 @@ public final class MonitorStore {
         start()
     }
 
+    public func clearHistory() {
+        processSummaryTask?.cancel()
+        processSummaryTask = nil
+        processSummaryGeneration += 1
+
+        points.removeAll(keepingCapacity: true)
+        systemPoints.removeAll(keepingCapacity: true)
+        disks.removeAll(keepingCapacity: true)
+        recentDiskSamples.removeAll(keepingCapacity: true)
+        groupHistory.removeAll(keepingCapacity: true)
+        groupMetadata.removeAll(keepingCapacity: true)
+        processes.removeAll(keepingCapacity: true)
+        selectedCoverage = 0
+        visibleProcessCount = 0
+        activeApplicationCount = 0
+        isDiskAvailable = false
+        isSystemCPUAvailable = false
+        isSystemNetworkAvailable = false
+        isProcessNetworkAvailable = false
+        startedAt = isCollecting ? Date() : nil
+        lastUpdatedAt = nil
+        lastError = nil
+        lastHistoryTrimAt = nil
+        elevatedSince = nil
+        if isCollecting {
+            health = .starting
+        }
+    }
+
     func ingest(_ snapshot: SystemSnapshot) {
         let duration = max(0.1, snapshot.uptime - (priorUptime ?? snapshot.uptime))
         priorUptime = snapshot.uptime

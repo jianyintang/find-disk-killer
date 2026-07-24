@@ -24,6 +24,8 @@
 		99192C06F8FEEAE121E9322F /* claude-code.png in Resources */ = {isa = PBXBuildFile; fileRef = 68194E3D67F4FC76209C94C2 /* claude-code.png */; };
 		9E3B6D513AAF6D1ECFA54F73 /* FindDiskKillerTraceHelper in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = 129601FEC7DAF3B684090C81 /* FindDiskKillerTraceHelper */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A1A5A345383AD5797E0A9A9D /* FindDiskKillerTraceProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = F12401CDA817FB03FD601CF3 /* FindDiskKillerTraceProtocol */; };
+		AA71A24339B7FC3D577C0C5A /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 12DB0A40C0A9F3B41FEE5274 /* PrivacyInfo.xcprivacy */; };
+		AD2D93837D3F22D35029747C /* THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = 8F5A2845DA87F6AFE0572292 /* THIRD_PARTY_NOTICES.md */; };
 		B878AAEF8FDB35BB9B078B31 /* FileAccessTraceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A3C91E9D097BF60792BFA1D /* FileAccessTraceView.swift */; };
 		BC3E000C2202C14A4B4919C6 /* FindDiskKillerTraceProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = C4C6752601A90F75FCAC330C /* FindDiskKillerTraceProtocol */; };
 		BD8828B6911CFC4D4E24E5CB /* CFindDiskKillerTrace in Frameworks */ = {isa = PBXBuildFile; productRef = E51665319183E47877DA0458 /* CFindDiskKillerTrace */; };
@@ -79,6 +81,7 @@
 		095D33516AF500CF80F1DB90 /* MonitorChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorChart.swift; sourceTree = "<group>"; };
 		0EC9EF0D9A07E6D818C8D2BF /* com.jianyintang.FindDiskKiller.TraceHelper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = com.jianyintang.FindDiskKiller.TraceHelper.plist; sourceTree = "<group>"; };
 		129601FEC7DAF3B684090C81 /* FindDiskKillerTraceHelper */ = {isa = PBXFileReference; includeInIndex = 0; path = FindDiskKillerTraceHelper; sourceTree = BUILT_PRODUCTS_DIR; };
+		12DB0A40C0A9F3B41FEE5274 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		19522173F0ADEF7848BBB1F9 /* claude-code.svg */ = {isa = PBXFileReference; path = "claude-code.svg"; sourceTree = "<group>"; };
 		195FD2EA225982A5C2A7D542 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		1F0023EE9E80BF9FD710B334 /* FileAccessTraceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileAccessTraceStore.swift; sourceTree = "<group>"; };
@@ -98,6 +101,7 @@
 		7B45AA78FCDDF1D3E2E56551 /* OverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewView.swift; sourceTree = "<group>"; };
 		7BB11F2EFC76CFC186F5A935 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		7F13AE24E17E72270635D523 /* DisksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisksView.swift; sourceTree = "<group>"; };
+		8F5A2845DA87F6AFE0572292 /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_NOTICES.md; sourceTree = "<group>"; };
 		A2D149CD762D0BFD8DD8359E /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = de.lproj/Localizable.strings; sourceTree = "<group>"; };
 		A53F0E89B523716633119DE0 /* FindDiskKillerApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FindDiskKillerApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A8784670E78734B9A225A4E8 /* Localization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Localization.swift; sourceTree = "<group>"; };
@@ -144,6 +148,7 @@
 				557B99818141A5F6C7641804 /* codex-openai.svg */,
 				73D1E9A8CB4ED5D09C2B90D7 /* FindDiskKiller.icns */,
 				710BED35EF73FDAAD7FBB024 /* Localizable.strings */,
+				12DB0A40C0A9F3B41FEE5274 /* PrivacyInfo.xcprivacy */,
 				DEAF50A4052D9A28723D4E58 /* THIRD_PARTY_ASSETS.md */,
 			);
 			path = Resources;
@@ -189,6 +194,7 @@
 		8AE0D5862A6A544A027A5547 = {
 			isa = PBXGroup;
 			children = (
+				8F5A2845DA87F6AFE0572292 /* THIRD_PARTY_NOTICES.md */,
 				DF749020649060E41AC0B5D3 /* AppConfig */,
 				ADC8128EAF213ACF0F089EDC /* Packages */,
 				63BA19D707D349B5342C5F42 /* Sources */,
@@ -344,7 +350,9 @@
 			files = (
 				BED81DF72719B8136B7FB922 /* FindDiskKiller.icns in Resources */,
 				EC249E190109F76E7790D340 /* Localizable.strings in Resources */,
+				AA71A24339B7FC3D577C0C5A /* PrivacyInfo.xcprivacy in Resources */,
 				149AD03F0F95F5953BC2472D /* THIRD_PARTY_ASSETS.md in Resources */,
+				AD2D93837D3F22D35029747C /* THIRD_PARTY_NOTICES.md in Resources */,
 				99192C06F8FEEAE121E9322F /* claude-code.png in Resources */,
 				780A5E1EC904EA5BFF7138E3 /* claude-code.svg in Resources */,
 				60FBDF8CE690926784724D9B /* codex-openai.png in Resources */,
@@ -424,7 +432,7 @@
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				COMBINE_HIDPI_IMAGES = YES;
 				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				INFOPLIST_FILE = "AppConfig/FindDiskKillerTraceHelper-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -464,7 +472,7 @@
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				COMBINE_HIDPI_IMAGES = YES;
 				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				INFOPLIST_FILE = "AppConfig/FindDiskKillerTraceHelper-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

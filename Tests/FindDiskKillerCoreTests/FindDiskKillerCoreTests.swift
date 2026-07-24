@@ -728,6 +728,67 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(store.points.last?.writeBytesPerSecond == nil)
 }
 
+@MainActor
+@Test func clearingMonitoringHistoryRemovesSessionDataButKeepsMountedVolumes() async {
+    let store = MonitorStore()
+    let baseDate = Date(timeIntervalSinceReferenceDate: 2_500)
+    let volume = fixtureVolume(id: "volume-a", name: "JianDisk", mountPath: "/Volumes/JianDisk")
+
+    for index in 0..<2 {
+        store.ingest(SystemSnapshot(
+            date: baseDate.addingTimeInterval(Double(index)),
+            uptime: Double(index + 1),
+            processes: [RawProcessCounter(
+                pid: 44,
+                startAbstime: 9,
+                name: "fixture",
+                path: "/usr/bin/fixture",
+                cpuTimeNanoseconds: UInt64(index) * 100_000_000,
+                bytesRead: UInt64(index) * 1_000,
+                bytesWritten: UInt64(index) * 2_000,
+                networkBytesReceived: nil,
+                networkBytesSent: nil
+            )],
+            disks: [RawDiskCounter(
+                registryID: 100,
+                name: "Physical Disk",
+                bytesRead: UInt64(index) * 1_000,
+                bytesWritten: UInt64(index) * 2_000,
+                readOperations: UInt64(index),
+                writeOperations: UInt64(index),
+                capacity: 1_000_000,
+                bsdName: "disk100",
+                isPhysical: true
+            )],
+            volumes: [volume],
+            cpuUserTicks: UInt64(index) * 10,
+            cpuSystemTicks: UInt64(index) * 5,
+            cpuNiceTicks: 0,
+            cpuIdleTicks: UInt64(index) * 85,
+            networkInterfaces: [],
+            cpuStatsAvailable: true,
+            networkInterfacesAvailable: false,
+            processNetworkAvailable: false
+        ))
+        await store.waitForPendingProcessSummary()
+    }
+
+    #expect(!store.points.isEmpty)
+    #expect(!store.systemPoints.isEmpty)
+    #expect(!store.processes.isEmpty)
+    #expect(!store.disks.isEmpty)
+
+    store.clearHistory()
+
+    #expect(store.points.isEmpty)
+    #expect(store.systemPoints.isEmpty)
+    #expect(store.processes.isEmpty)
+    #expect(store.disks.isEmpty)
+    #expect(store.volumes.map(\.id) == ["volume-a"])
+    #expect(store.lastUpdatedAt == nil)
+    #expect(store.selectedCoverage == 0)
+}
+
 @Test func samplerIncludesCallingProcess() async {
     let snapshot = await SystemSampler.shared.collect()
     #expect(snapshot.processes.contains { $0.pid == getpid() })

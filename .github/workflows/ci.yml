@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: swift test
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build the app and trace helper
+        run: |
+          xcodegen generate
+          git diff --exit-code -- AppConfig/FindDiskKiller-Info.plist FindDiskKiller.xcodeproj/project.pbxproj
+          xcodebuild \
+            -project FindDiskKiller.xcodeproj \
+            -scheme FindDiskKillerApp \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO \
+            -quiet \
+            build
+      - name: Validate release metadata
+        run: |
+          plutil -lint Sources/FindDiskKillerApp/Resources/PrivacyInfo.xcprivacy
+          for file in Sources/FindDiskKillerApp/Resources/*.lproj/Localizable.strings; do
+            plutil -lint "$file"
+          done
+          bash -n scripts/release.sh scripts/verify-release.sh

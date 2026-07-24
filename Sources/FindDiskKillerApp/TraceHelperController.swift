@@ -284,13 +284,16 @@ final class TraceHelperController {
         }
     }
 
-    func unregister() {
+    @discardableResult
+    func unregister() -> Bool {
         invalidateConnection()
         do {
             try service.unregister()
             refreshStatus()
+            return true
         } catch {
             state = .operationFailed(error.localizedDescription)
+            return false
         }
     }
 

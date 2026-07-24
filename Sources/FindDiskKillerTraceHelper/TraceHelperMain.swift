@@ -1,4 +1,5 @@
 import CFindDiskKillerTrace
+import Darwin
 import Foundation
 import FindDiskKillerTraceProtocol
 
@@ -11,6 +12,18 @@ private enum TraceHelperStatus {
     static let invalidRequest = "invalid-request"
     static let launchFailed = "launch-failed"
     static let encodingFailed = "encoding-failed"
+}
+
+private final class XPCReply<Value>: @unchecked Sendable {
+    private let callback: (Value) -> Void
+
+    init(_ callback: @escaping (Value) -> Void) {
+        self.callback = callback
+    }
+
+    func callAsFunction(_ value: Value) {
+        callback(value)
+    }
 }
 
 private final class TraceProcessResolver: @unchecked Sendable {
@@ -247,7 +260,7 @@ private final class TraceSession: @unchecked Sendable {
     }
 }
 
-private final class TraceHelperService: NSObject, TraceHelperXPCProtocol {
+private final class TraceHelperService: NSObject, TraceHelperXPCProtocol, @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.jianyintang.FindDiskKiller.TraceHelper.session")
     private var session: TraceSession?
 
@@ -255,6 +268,13 @@ private final class TraceHelperService: NSObject, TraceHelperXPCProtocol {
         queue.async {
             self.session?.stop()
             self.session = nil
+        }
+    }
+
+    func shutdown() {
+        queue.sync {
+            session?.stop()
+            session = nil
         }
     }
 
@@ -273,17 +293,21 @@ private final class TraceHelperService: NSObject, TraceHelperXPCProtocol {
         processIdentifiers: NSArray,
         withReply reply: @escaping (NSString, NSString) -> Void
     ) {
+        let requestedDuration = maximumDurationSeconds.intValue
+        let rawIdentifiers = processIdentifiers.compactMap { ($0 as? NSNumber)?.int64Value }
+        let originalIdentifierCount = processIdentifiers.count
+        let replyBox = XPCReply<(NSString, NSString)> { reply($0.0, $0.1) }
         queue.async {
             guard let duration = TraceHelperProtocolConfiguration.validatedDuration(
-                maximumDurationSeconds.intValue
+                requestedDuration
             ), let identifiers = TraceHelperProtocolConfiguration.validatedProcessIdentifiers(
-                processIdentifiers.compactMap { $0 as? NSNumber }
-            ), identifiers.count == processIdentifiers.count else {
-                reply("" as NSString, TraceHelperStatus.invalidRequest as NSString)
+                rawIdentifiers.map(NSNumber.init(value:))
+            ), identifiers.count == originalIdentifierCount else {
+                replyBox(("" as NSString, TraceHelperStatus.invalidRequest as NSString))
                 return
             }
             if let session = self.session, session.process.isRunning {
-                reply(session.id as NSString, TraceHelperStatus.busy as NSString)
+                replyBox((session.id as NSString, TraceHelperStatus.busy as NSString))
                 return
             }
             self.session?.stop()
@@ -293,10 +317,10 @@ private final class TraceHelperService: NSObject, TraceHelperXPCProtocol {
                     processIdentifiers: identifiers
                 )
                 self.session = session
-                reply(session.id as NSString, TraceHelperStatus.started as NSString)
+                replyBox((session.id as NSString, TraceHelperStatus.started as NSString))
             } catch {
                 self.session = nil
-                reply("" as NSString, TraceHelperStatus.launchFailed as NSString)
+                replyBox(("" as NSString, TraceHelperStatus.launchFailed as NSString))
             }
         }
     }
@@ -306,20 +330,23 @@ private final class TraceHelperService: NSObject, TraceHelperXPCProtocol {
         maximumRecordCount: NSNumber,
         withReply reply: @escaping (NSData, NSString) -> Void
     ) {
+        let requestedSessionID = sessionID as String
+        let requestedRecordCount = maximumRecordCount.intValue
+        let replyBox = XPCReply<(NSData, NSString)> { reply($0.0, $0.1) }
         queue.async {
-            guard let session = self.session, session.id == sessionID as String else {
-                reply(NSData(), TraceHelperStatus.invalidSession as NSString)
+            guard let session = self.session, session.id == requestedSessionID else {
+                replyBox((NSData(), TraceHelperStatus.invalidSession as NSString))
                 return
             }
             let count = TraceHelperProtocolConfiguration.boundedDrainRecordCount(
-                maximumRecordCount.intValue
+                requestedRecordCount
             )
             let payload = session.drain(maximumRecordCount: count)
             guard let data = try? JSONEncoder().encode(payload) else {
-                reply(NSData(), TraceHelperStatus.encodingFailed as NSString)
+                replyBox((NSData(), TraceHelperStatus.encodingFailed as NSString))
                 return
             }
-            reply(data as NSData, TraceHelperStatus.ready as NSString)
+            replyBox((data as NSData, TraceHelperStatus.ready as NSString))
         }
     }
 
@@ -327,19 +354,21 @@ private final class TraceHelperService: NSObject, TraceHelperXPCProtocol {
         sessionID: NSString,
         withReply reply: @escaping (NSString) -> Void
     ) {
+        let requestedSessionID = sessionID as String
+        let replyBox = XPCReply<NSString>(reply)
         queue.async {
-            guard let session = self.session, session.id == sessionID as String else {
-                reply(TraceHelperStatus.invalidSession as NSString)
+            guard let session = self.session, session.id == requestedSessionID else {
+                replyBox(TraceHelperStatus.invalidSession as NSString)
                 return
             }
             session.stop()
             self.session = nil
-            reply(TraceHelperStatus.stopped as NSString)
+            replyBox(TraceHelperStatus.stopped as NSString)
         }
     }
 }
 
-private final class TraceHelperListenerDelegate: NSObject, NSXPCListenerDelegate {
+private final class TraceHelperListenerDelegate: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
     private let service = TraceHelperService()
 
     func listener(
@@ -356,6 +385,10 @@ private final class TraceHelperListenerDelegate: NSObject, NSXPCListenerDelegate
         connection.activate()
         return true
     }
+
+    func shutdown() {
+        service.shutdown()
+    }
 }
 
 @main
@@ -371,6 +404,16 @@ private enum TraceHelperMain {
         let delegate = TraceHelperListenerDelegate()
         listener.delegate = delegate
         listener.activate()
-        RunLoop.current.run()
+
+        signal(SIGTERM, SIG_IGN)
+        let terminationSource = DispatchSource.makeSignalSource(signal: SIGTERM)
+        terminationSource.setEventHandler {
+            delegate.shutdown()
+            exit(EXIT_SUCCESS)
+        }
+        terminationSource.resume()
+        withExtendedLifetime(terminationSource) {
+            RunLoop.current.run()
+        }
     }
 }

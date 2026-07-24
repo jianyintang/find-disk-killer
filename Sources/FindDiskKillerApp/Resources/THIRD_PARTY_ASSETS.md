@@ -13,3 +13,5 @@ used to avoid parsing third-party SVG at runtime.
 
 Brand marks remain subject to their owners' trademark policies. FindDiskKiller uses
 them only to identify observed software and does not imply endorsement.
+The distributed notice text is maintained in the repository-level
+`THIRD_PARTY_NOTICES.md` file.

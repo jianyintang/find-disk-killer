@@ -1,62 +1,127 @@
-# FindDiskKiller
+<div align="center">
+  <img src="docs/assets/find-disk-killer-icon.png" width="136" height="136" alt="FindDiskKiller app icon">
+  <h1>FindDiskKiller</h1>
+  <p><strong>See what keeps using your disk.</strong></p>
+  <p>A native macOS workspace for application disk I/O, CPU, network, file activity, and drive-health evidence.</p>
+  <p>
+    <a href="README.md">English</a> ·
+    <a href="README.zh-CN.md">简体中文</a> ·
+    <a href="README.zh-TW.md">繁體中文</a> ·
+    <a href="README.ja.md">日本語</a> ·
+    <a href="README.ko.md">한국어</a> ·
+    <a href="README.de.md">Deutsch</a> ·
+    <a href="README.fr.md">Français</a> ·
+    <a href="README.es.md">Español</a> ·
+    <a href="README.pt-BR.md">Português (Brasil)</a> ·
+    <a href="README.ru.md">Русский</a>
+  </p>
+  <p><strong>macOS 14+ · Apple silicon & Intel · Local processing · 10 interface languages</strong></p>
+  <p>
+    <a href="https://github.com/jianyintang/find-disk-killer/releases/latest">Download</a> ·
+    <a href="docs/find-disk-killer-product-and-technical-plan.md">Product model</a> ·
+    <a href="SUPPORT.md">Support</a> ·
+    <a href="PRIVACY.md">Privacy</a>
+  </p>
+</div>
 
-FindDiskKiller is a native macOS app for finding applications that generate
-unexpected disk activity. It brings disk I/O, CPU, network traffic, open file
-locations, recent file-system changes, and physical-drive health into one
-application-centered workspace.
+---
 
-The app is designed for developers and other Mac users who need to answer
-questions such as:
+FindDiskKiller is built for the moment when your Mac is warm, the disk is busy,
+and a process list alone does not explain why. It keeps the investigation
+application-centered: identify sustained activity, inspect the responsible
+application, then move into its CPU, disk, network, files, and storage context
+without assembling the story across several tools.
 
-- Which application is writing to disk right now?
-- Is the activity sustained or only a short spike?
-- Which mounted drive is busy?
-- Which locations does an application currently have open?
-- Was a related location modified during the last five minutes?
+## What You Can See
 
-## Highlights
-
-- Five-second rolling CPU, disk, network, and per-device rates.
-- Application grouping with native icons and audited brand fallbacks.
-- Sortable, resizable application columns with stable live updates.
-- Separate network download and upload measurements.
-- One-minute, 15-minute, and one-hour timelines with interactive values.
-- Independent process detail windows for side-by-side investigation.
-- Current open-file locations plus file-system changes retained for five
-  minutes after they are observed.
-- Mounted-volume names mapped to physical-device throughput.
-- Physical-drive health and available NVMe/SMART evidence from `diskutil`.
-- On-demand file or folder access tracing with requested read/write totals,
-  five-second rates, session peaks, active files, and verified process sessions.
-- Ten interface languages.
-- Menu bar status for lightweight monitoring.
-
-## Measurement Model
-
-FindDiskKiller keeps evidence from different macOS data sources separate so a
-precise-looking number never implies more certainty than the system provides.
-
-| View | Source and meaning |
+| Workspace | What it gives you |
 | --- | --- |
-| Application disk I/O | Per-process counters from `proc_pid_rusage`, grouped by application. Current rates are time-weighted over the latest five seconds and cover all disks combined. |
-| Device throughput | Public IOKit counters for physical storage devices, shown through user-facing mounted-volume names. |
-| CPU | Per-process CPU time in Activity Monitor units, where one fully occupied logical core is 100%. |
-| Network | Per-process and system counters with download and upload kept separate. Missing coverage is shown as unavailable, not as zero. |
-| File activity | Open file descriptors for the selected application, combined with macOS FSEvents observations. A file-system change cannot be conclusively attributed to that application. |
-| File access trace | Successful read/write system-call requests observed by the signed helper. These requested bytes can differ from physical device I/O because of caching, APFS writeback, compression, copy-on-write, mmap, and coverage gaps. |
-| Drive health | The fields macOS exposes through `diskutil -plist`; unsupported values remain unavailable. |
+| **Applications** | Five-second CPU, reads, writes, download, and upload; sortable and resizable live columns; native app icons |
+| **Timelines** | Straight-line one-minute, 15-minute, and one-hour history with precise hover values |
+| **Process details** | Independent windows for comparing application CPU, disk, network, and file evidence |
+| **File Activity** | Current open locations and directories changed during the last five minutes |
+| **File access trace** | On-demand requested read/write totals, five-second rates, session peaks, active files, and verified process sessions |
+| **Disks** | Mounted-volume names mapped to physical-device throughput, including external storage |
+| **Drive health** | Native NVMe/SMART evidence such as temperature, host writes, wear, spare capacity, power history, and errors when macOS exposes it |
+| **Menu bar** | A quiet, lightweight view of current activity without notification noise |
 
-The current implementation does **not** claim exact process-to-volume write
-attribution. Application I/O and physical-device throughput are related views,
-not a fabricated causal link.
+## One Investigation, One Context
+
+```text
+Sustained activity
+        |
+        v
+Leading application  -->  CPU / disk / download / upload
+        |
+        v
+Open files and recent changes
+        |
+        v
+Optional bounded file or folder trace
+        |
+        v
+Physical device and available health evidence
+```
+
+The UI is designed for repeated investigation: CPU appears first, reads and
+writes stay separate, download and upload stay separate, current values use the
+latest five seconds, lists pause their visual reordering while you inspect a
+row, and process details open in independent windows.
+
+## Measurement Without False Precision
+
+FindDiskKiller keeps macOS evidence sources separate:
+
+- **Application disk I/O** comes from per-process counters and covers all
+  storage used by that process.
+- **Device throughput** comes from physical storage counters and is shown
+  through names people recognize, such as `Macintosh HD` or `JianDisk`.
+- **Recent changes** show that macOS observed a location changing; they do not
+  identify the writer by themselves.
+- **File access traces** measure bytes requested through successful system
+  calls. Cache, APFS writeback, compression, copy-on-write, memory mapping, and
+  coverage gaps mean those values are not physical NAND writes.
+- **Drive health** contains only fields macOS actually reports. Missing values
+  remain unavailable instead of becoming zero.
+
+The app does **not** claim exact process-to-physical-device byte attribution.
+Related measurements are presented together without forcing them to add up.
+
+## Privacy and Permissions
+
+Monitoring and analysis happen locally. The current release contains no ads,
+telemetry, analytics, or third-party tracking SDKs, and it does not upload
+process activity, file paths, monitoring history, or disk serial numbers.
+
+Basic monitoring does not request administrator approval. When you explicitly
+start a file or folder trace, macOS may ask you to approve FindDiskKiller's
+signed background component. The helper can supervise only a bounded
+`/usr/bin/fs_usage` session with a fixed command shape; it cannot execute a
+shell or arbitrary command. It can be stopped and removed from Settings.
+
+Read the complete [Privacy Policy](PRIVACY.md) and [Security Policy](SECURITY.md).
 
 ## Requirements
 
 - macOS 14 or later
-- Swift 6 toolchain (Xcode 16 or a compatible command-line toolchain)
-- XcodeGen 2.42 or later when regenerating the Xcode project
+- Apple silicon or Intel Mac
+- An administrator account only when enabling on-demand file access tracing
 
-## Build the macOS App
+## Install
+
+Official website releases are distributed as universal2, Developer ID signed,
+Apple-notarized disk images.
+
+1. Download the latest DMG from [Releases](https://github.com/jianyintang/find-disk-killer/releases/latest).
+2. Open it and drag FindDiskKiller to Applications.
+3. Launch FindDiskKiller from Applications.
+
+Published releases include a SHA-256 checksum. Never bypass Gatekeeper for a
+package that fails signature or notarization validation.
+
+## Build and Test
+
+XcodeGen is the source of truth for the Xcode project:
 
 ```bash
 git clone git@github.com:jianyintang/find-disk-killer.git
@@ -66,75 +131,64 @@ xcodebuild \
   -project FindDiskKiller.xcodeproj \
   -scheme FindDiskKillerApp \
   -configuration Release \
-  -derivedDataPath .derivedData \
+  -destination 'generic/platform=macOS' \
   build
-open .derivedData/Build/Products/Release/FindDiskKiller.app
 ```
 
-The Xcode build produces the real signed app bundle. It embeds the on-demand
-trace helper and its LaunchDaemon property list at the locations required by
-`SMAppService`. The app checks helper status at launch but does not register the
-helper or request administrator approval automatically.
-
-The SwiftPM executable remains available for Core development, but it does not
-contain the app-bundle helper layout:
-
-```bash
-swift run FindDiskKiller
-```
-
-## Test
+Run the core test suite:
 
 ```bash
 swift test
 ```
 
-The test suite covers sampling arithmetic, Activity Monitor CPU semantics,
-network gaps, process hover state, open-file limits, FSEvents retention,
-multi-window observation leases, volume identity, disk-health parsing, bounded
-trace contracts and parsing, command timeouts, and localization consistency.
+Create a signed, notarized website release from a clean commit:
 
-## Privacy and Permissions
+```bash
+make lint test
+make release VERSION=1.0.0 BUILD_NUMBER=100
+```
 
-FindDiskKiller processes monitoring data locally. The current codebase does not
-send telemetry, upload file paths, or install an Endpoint Security extension.
-The Xcode app bundle contains a signed privileged helper dedicated to bounded
-file-access trace sessions. It is never registered automatically. Registration
-is requested only after the user chooses a target and explicitly enables
-tracing. The helper can only launch `/usr/bin/fs_usage` with a fixed argument
-shape and bounded duration; it cannot run shell commands or accept paths and
-command-line arguments from the app. Target matching and aggregation happen in
-the unprivileged app process.
+The release pipeline builds universal2 App and helper binaries, verifies
+Hardened Runtime and trusted timestamps, creates a signed DMG, submits it for
+Apple notarization, staples the ticket, runs Gatekeeper checks, and writes
+`SHA256SUMS`. Artifacts produced with `SKIP_NOTARIZATION=1` are local rehearsals
+and must never be published.
 
-macOS may restrict visibility into protected processes and paths. The interface
-reports partial or unavailable coverage explicitly. Recent file changes come
-from system-wide FSEvents and therefore indicate that a location changed, not
-which process caused the change.
-
-## Repository Layout
+## Architecture
 
 ```text
 Sources/
-  CFindDiskKiller/       Low-level macOS sampling bridge
-  CFindDiskKillerTrace/  Thread-to-process identity bridge for the helper
-  FindDiskKillerCore/    Sampling, aggregation, and health models
-  FindDiskKillerApp/     SwiftUI application and localized resources
-  FindDiskKillerTraceProtocol/  Bounded shared XPC contract
-  FindDiskKillerTraceHelper/  Signed, fixed-purpose trace helper
-AppConfig/               App, helper, signing, and LaunchDaemon metadata
-Tests/
-  FindDiskKillerCoreTests/
-docs/
+  CFindDiskKiller/              Low-level macOS sampling bridge
+  CFindDiskKillerTrace/         Thread-to-process identity bridge
+  FindDiskKillerCore/           Models, aggregation, and health parsing
+  FindDiskKillerApp/            SwiftUI application and resources
+  FindDiskKillerTraceProtocol/  Bounded XPC contract
+  FindDiskKillerTraceHelper/    Signed fixed-purpose helper
+AppConfig/                      Signing, bundle, and helper metadata
+Tests/                          Core and contract tests
+docs/                           Product, tracing, and release documentation
 ```
 
-`project.yml` is the source of truth for the generated Xcode project. SwiftPM
-continues to own the Core library and unit tests.
+The real distribution artifact is the Xcode-built `.app`; the SwiftPM
+executable does not contain the signed helper bundle layout.
 
-The current product and implementation plans are available in Chinese:
+## Documentation
 
-- [Product and technical plan](docs/find-disk-killer-product-and-technical-plan.zh-CN.md)
-- [Deep tracing and SSD health plan](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.zh-CN.md)
+- [Product and Technical Plan](docs/find-disk-killer-product-and-technical-plan.md)
+- [Deep File Tracing and SSD Health Plan](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.md)
+- [Website Release Checklist](docs/website-release-checklist.md)
+- [Support](SUPPORT.md)
+- [Privacy](PRIVACY.md)
+- [Security](SECURITY.md)
+- [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 
-Third-party application marks are used only to identify observed software. See
-[THIRD_PARTY_ASSETS.md](Sources/FindDiskKillerApp/Resources/THIRD_PARTY_ASSETS.md)
-for pinned sources and license details.
+## Support and License
+
+Use [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues) for
+ordinary support. Report vulnerabilities privately through
+[GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new)
+and remove sensitive paths, usernames, and serial numbers from diagnostics.
+
+FindDiskKiller is distributed under the repository's
+[All Rights Reserved license](LICENSE). Third-party application marks are used
+only to identify observed software and do not imply affiliation or endorsement.

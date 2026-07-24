@@ -4,6 +4,7 @@
 DerivedData/
 .derivedData*/
 build/
+artifacts/
 xcuserdata/
 *.xcuserstate
 *.xccheckout

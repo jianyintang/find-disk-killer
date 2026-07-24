@@ -1,0 +1,125 @@
+<div align="center">
+  <img src="docs/assets/find-disk-killer-icon.png" width="136" height="136" alt="FindDiskKiller アプリアイコン">
+  <h1>FindDiskKiller</h1>
+  <p><strong>ディスクを使い続けているアプリを、ひと目で。</strong></p>
+  <p>アプリのディスク I/O、CPU、ネットワーク、ファイル活動、ドライブの健全性を、macOS ネイティブのワークスペースに集約します。</p>
+  <p>
+    <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> ·
+    <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ja.md">日本語</a> ·
+    <a href="README.ko.md">한국어</a> · <a href="README.de.md">Deutsch</a> ·
+    <a href="README.fr.md">Français</a> · <a href="README.es.md">Español</a> ·
+    <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.ru.md">Русский</a>
+  </p>
+  <p><strong>macOS 14 以降 · Apple シリコン / Intel · ローカル処理 · 10 言語対応</strong></p>
+  <p><a href="https://github.com/jianyintang/find-disk-killer/releases/latest">ダウンロード</a> · <a href="docs/find-disk-killer-product-and-technical-plan.md">製品モデル</a> · <a href="SUPPORT.md">サポート</a> · <a href="PRIVACY.md">プライバシー</a></p>
+</div>
+
+---
+
+Mac が熱を持ち、ディスクが動き続けているのに、プロセス一覧だけでは理由が分からない。
+FindDiskKiller は、そんな調査をアプリ中心に整理します。継続的な負荷を見つけ、対象アプリの
+CPU、ディスク、ネットワーク、ファイル、ストレージの状況を、一つの流れで確認できます。
+
+## ひとつの画面で分かること
+
+| ワークスペース | 確認できる内容 |
+| --- | --- |
+| **アプリの活動** | 直近 5 秒の CPU、読み込み、書き込み、ダウンロード、アップロード。並べ替えと列幅変更に対応 |
+| **タイムライン** | 1 分、15 分、1 時間の折れ線。ホバーで正確な時刻と値を表示 |
+| **プロセス詳細** | 独立したウインドウで CPU、ディスク、ネットワーク、ファイルの情報を比較 |
+| **ファイル活動** | 現在開いている場所と、直近 5 分間に変更が観測されたディレクトリ |
+| **ファイルアクセス追跡** | オンデマンドの要求読み書き量、直近 5 秒の速度、セッション最大値、活発なファイルと検証済みプロセス |
+| **ディスク** | マウント済みボリューム名と物理デバイスのスループット。外付けストレージにも対応 |
+| **ドライブの健全性** | macOS が提供する場合に、温度、ホスト書き込み量、消耗度、予備領域、電源履歴、エラーを表示 |
+| **メニューバー** | 通知を繰り返さず、現在の状態を静かに確認 |
+
+## 調査を途切れさせない設計
+
+```text
+継続的な負荷を検出
+        |
+        v
+主なアプリを特定  -->  CPU / ディスク / ダウンロード / アップロード
+        |
+        v
+開いているファイルと最近の変更を確認
+        |
+        v
+必要なときだけ、時間制限付きのファイル／フォルダ追跡を開始
+        |
+        v
+物理デバイスのスループットと健全性情報を確認
+```
+
+CPU は常に先頭に表示し、読み込みと書き込み、ダウンロードとアップロードを分離します。
+現在値は直近 5 秒から計算。行を確認している間は表示順の更新だけを止め、クリック操作は妨げません。
+プロセス詳細は独立したウインドウで開きます。
+
+## 見せかけの精度を作らない
+
+- **アプリのディスク I/O** はプロセスのカウンタで、すべてのストレージを含む合計です。
+- **デバイスのスループット** は物理デバイスのカウンタで、`Macintosh HD` や `JianDisk` など分かりやすい名前で表示します。
+- **最近の変更** は、その場所の変更を macOS が観測した事実であり、変更したプロセスを単独では特定しません。
+- **ファイルアクセス追跡** は、成功したシステムコールで要求されたバイト数です。キャッシュ、APFS の遅延書き込み、圧縮、コピーオンライト、メモリマップ、観測漏れにより、物理ディスクや NAND の書き込み量とは異なります。
+- **ドライブの健全性** は macOS が実際に返した項目だけを表示し、取得できない値をゼロに置き換えません。
+
+任意のプロセスが特定の物理ディスクへ書き込んだ全バイトを正確に特定できる、とは主張しません。
+
+## プライバシーと権限
+
+監視と解析は Mac 上で完結します。現行版には広告、テレメトリ、行動解析、第三者の追跡 SDK はなく、
+プロセス活動、ファイルパス、監視履歴、ディスクのシリアル番号をアップロードしません。
+
+基本監視に管理者の承認は不要です。ファイルまたはフォルダの追跡を明示的に開始した場合だけ、
+macOS が署名済みバックグラウンドコンポーネントの承認を求めることがあります。このコンポーネントは、
+固定された引数と時間制限を持つ `/usr/bin/fs_usage` セッションだけを監督し、シェルや任意のコマンドは実行できません。
+
+詳しくは [プライバシーポリシー](PRIVACY.md) と [セキュリティポリシー](SECURITY.md) をご覧ください。
+
+## 動作環境とインストール
+
+- macOS 14 以降
+- Apple シリコンまたは Intel Mac
+- 管理者アカウントが必要なのは、オンデマンドのファイルアクセス追跡を有効にするときだけです
+
+正式版は Developer ID 署名と Apple の公証を受けた universal2 DMG です。
+
+1. [Releases](https://github.com/jianyintang/find-disk-killer/releases/latest) から最新版をダウンロードします。
+2. DMG を開き、FindDiskKiller を「アプリケーション」へドラッグします。
+3. 「アプリケーション」から FindDiskKiller を起動します。
+
+各正式版には SHA-256 を公開します。Gatekeeper の検証に失敗するパッケージでは、システムの保護機能を回避しないでください。
+
+## ビルドとテスト
+
+```bash
+git clone git@github.com:jianyintang/find-disk-killer.git
+cd find-disk-killer
+xcodegen generate
+xcodebuild -project FindDiskKiller.xcodeproj \
+  -scheme FindDiskKillerApp -configuration Release \
+  -destination 'generic/platform=macOS' build
+swift test
+```
+
+クリーンなコミットから署名・公証済みの配布物を作成します。
+
+```bash
+make lint test
+make release VERSION=1.0.0 BUILD_NUMBER=100
+```
+
+`SKIP_NOTARIZATION=1` の成果物はローカル検証専用で、公開できません。
+
+## ドキュメントとサポート
+
+- [製品・技術計画](docs/find-disk-killer-product-and-technical-plan.md)
+- [詳細ファイル追跡と SSD 健全性計画](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.md)
+- [Web 配布チェックリスト](docs/website-release-checklist.md)
+- [サポート](SUPPORT.md) · [プライバシー](PRIVACY.md) · [セキュリティ](SECURITY.md) · [第三者に関する表示](THIRD_PARTY_NOTICES.md)
+
+一般的な問い合わせは [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues) へ、
+脆弱性は [GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new) から非公開で報告してください。
+
+FindDiskKiller はリポジトリの [All Rights Reserved ライセンス](LICENSE) に基づき配布されます。
+第三者のアプリマークは観測したソフトウェアの識別にのみ使用し、提携や推奨を示すものではありません。
