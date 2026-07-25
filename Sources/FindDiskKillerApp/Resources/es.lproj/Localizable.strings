@@ -400,3 +400,14 @@
 "操作失败" = "La operación ha fallado";
 "版本 %@（%@）" = "Versión %@ (%@)";
 "检查更新" = "Buscar actualizaciones";
+"正在更新追踪组件" = "Actualizando el componente de rastreo";
+"追踪组件需要修复" = "El componente de rastreo necesita reparación";
+"需要先安装到应用程序文件夹" = "Instala primero en Aplicaciones";
+"修复并重试" = "Reparar y reintentar";
+"打开安装窗口" = "Abrir instalador";
+"重试" = "Reintentar";
+"正在替换旧版追踪组件，完成后会自动继续。" = "Se está sustituyendo el componente de rastreo anterior. El rastreo continuará automáticamente.";
+"自动修复未完成；已有结果仍保留在当前会话中。" = "La reparación automática no finalizó. Los resultados existentes permanecen disponibles en esta sesión.";
+"请在安装窗口中将 FindDiskKiller 拖入“应用程序”，然后重新打开。" = "Arrastra FindDiskKiller a Aplicaciones en el instalador y vuelve a abrirlo.";
+"请将 FindDiskKiller 移入“应用程序”文件夹，然后重新打开。" = "Mueve FindDiskKiller a la carpeta Aplicaciones y vuelve a abrirlo.";
+"正在更新" = "Actualizando";

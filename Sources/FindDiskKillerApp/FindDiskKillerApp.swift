@@ -130,8 +130,11 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
             Task { @MainActor in
-                await authorizeAndTestTraceHelperOnce()
-                NSApp.terminate(nil)
+                if await authorizeAndTestTraceHelperOnce() {
+                    NSApp.terminate(nil)
+                } else {
+                    exit(EXIT_FAILURE)
+                }
             }
             return
         }
@@ -139,24 +142,29 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func authorizeAndTestTraceHelperOnce() async {
+    private func authorizeAndTestTraceHelperOnce() async -> Bool {
         let controller = TraceHelperController()
         do {
-            // The final build is registered exactly once. No retry in this
-            // diagnostic path is allowed to mutate the authorization state.
-            try await controller.repairService()
-            if controller.state == .requiresApproval {
+            do {
+                try await controller.prepareForTracing(recoveryMode: .automatic) { phase in
+                    if phase == .repairing {
+                        print("trace-helper-recovery=repairing")
+                    }
+                }
+            } catch TraceHelperClientError.approvalRequired {
                 print("trace-helper-authorization=waiting")
                 controller.openLoginItemsSettings()
+                try await controller.waitUntilAuthorizedAndReady()
             }
-            try await controller.waitUntilAuthorizedAndReady()
             let result = try await runTraceHelperSmokeTest(controller: controller)
             print(
                 "trace-helper-smoke=success records=\(result.records) "
                     + "attributed=\(result.attributed) parsed-io=\(result.parsedIO)"
             )
+            return true
         } catch {
             print("trace-helper-smoke=failure error=\(error)")
+            return false
         }
     }
 

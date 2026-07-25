@@ -80,6 +80,26 @@ for signature in "$app_signature" "$helper_signature"; do
     }
 done
 
+temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/find-disk-killer-verify.XXXXXX")
+cleanup() {
+    rm -rf "$temporary_directory"
+}
+trap cleanup EXIT
+
+require_empty_entitlements() {
+    local signed_path=$1
+    local output_path=$2
+    codesign -d --entitlements "$output_path" --xml "$signed_path"
+    [[ "$(plutil -convert json -o - "$output_path")" == "{}" ]] || {
+        echo "Release signing entitlements changed for $signed_path" >&2
+        plutil -p "$output_path" >&2
+        exit 1
+    }
+}
+
+require_empty_entitlements "$app_path" "$temporary_directory/app-entitlements.plist"
+require_empty_entitlements "$helper" "$temporary_directory/helper-entitlements.plist"
+
 require_universal_binary() {
     local binary=$1
     local architectures

@@ -9,8 +9,11 @@ enum FileAccessTraceRunState: Equatable {
     case permissionRequired
     case waitingForApproval
     case starting
+    case repairing
     case running
     case stopped
+    case installationRequired(isDiskImage: Bool)
+    case repairAvailable
     case failed(String)
     case unsupportedFormat
 }
@@ -228,7 +231,7 @@ final class FileAccessTraceStore {
     private(set) var elapsed: TimeInterval = 0
     private(set) var lastEventAt: Date?
 
-    let helper = TraceHelperController()
+    let helper: TraceHelperController
     @ObservationIgnored private var engine: FileAccessTraceEngine?
     @ObservationIgnored private var drainTask: Task<Void, Never>?
     @ObservationIgnored private var sessionID: String?
@@ -238,7 +241,13 @@ final class FileAccessTraceStore {
     @ObservationIgnored private var attemptedRegistrationForIntent = false
     @ObservationIgnored private var monitoredSessions: [ProcessSession] = []
 
-    var isRunning: Bool { state == .running || state == .starting }
+    init(helper: TraceHelperController = TraceHelperController()) {
+        self.helper = helper
+    }
+
+    var isRunning: Bool {
+        state == .running || state == .starting || state == .repairing
+    }
 
     func setProcessSessions(_ sessions: [ProcessSession]) {
         guard !isRunning else { return }
@@ -285,7 +294,18 @@ final class FileAccessTraceStore {
         guard selection != nil, !isRunning else { return }
         hasPendingStartIntent = true
         attemptedRegistrationForIntent = false
-        advancePendingStart(allowRegistration: true)
+        advancePendingStart(allowRegistration: true, recoveryMode: .automatic)
+    }
+
+    func repairAndRetry() {
+        guard selection != nil, !isRunning else { return }
+        hasPendingStartIntent = true
+        attemptedRegistrationForIntent = true
+        launchTrace(recoveryMode: .userInitiated)
+    }
+
+    func openInstallationLocation() {
+        helper.openInstallationLocation()
     }
 
     func beginTracing(_ url: URL) {
@@ -298,12 +318,15 @@ final class FileAccessTraceStore {
         start()
     }
 
-    private func advancePendingStart(allowRegistration: Bool) {
+    private func advancePendingStart(
+        allowRegistration: Bool,
+        recoveryMode: TraceHelperRecoveryMode = .automatic
+    ) {
         guard hasPendingStartIntent, selection != nil, !isRunning else { return }
         helper.refreshStatus()
         switch helper.state {
         case .enabled, .ready:
-            launchTrace()
+            launchTrace(recoveryMode: recoveryMode)
         case .requiresApproval:
             state = .waitingForApproval
         case .notRegistered, .notFound:
@@ -312,27 +335,24 @@ final class FileAccessTraceStore {
                 return
             }
             attemptedRegistrationForIntent = true
-            helper.requestRegistration()
-            if helper.state == .requiresApproval {
-                state = .waitingForApproval
-                helper.openLoginItemsSettings()
-            } else if helper.state == .enabled || helper.state == .ready {
-                launchTrace()
-            } else {
-                state = stateForHelper()
-                if case .failed = state {
-                    cancelPendingStart()
-                }
-            }
+            launchTrace(recoveryMode: recoveryMode)
         case .connecting:
             state = .ready
+        case .repairing:
+            state = .repairing
+        case .repairAvailable:
+            state = .repairAvailable
+            cancelPendingStart()
+        case .installationRequired(let isDiskImage):
+            state = .installationRequired(isDiskImage: isDiskImage)
+            cancelPendingStart()
         case .protocolMismatch, .connectionUnavailable, .operationFailed:
             state = stateForHelper()
             cancelPendingStart()
         }
     }
 
-    private func launchTrace() {
+    private func launchTrace(recoveryMode: TraceHelperRecoveryMode) {
         guard let selection, hasPendingStartIntent, !isRunning else { return }
         let sessions = monitoredSessions
         let processIdentifiers = sessions.map(\.pid)
@@ -343,25 +363,19 @@ final class FileAccessTraceStore {
         }
         hasPendingStartIntent = false
         attemptedRegistrationForIntent = false
-        resetMeasurements()
-        let now = Date()
-        startedAt = now
-        requestedReadBytes = 0
-        requestedWriteBytes = 0
-        currentReadBytesPerSecond = 0
-        currentWriteBytesPerSecond = 0
-        peakReadBytesPerSecond = 0
-        peakWriteBytesPerSecond = 0
-        ratePoints = [FileAccessTraceRatePoint(
-            timestamp: now,
-            readBytesPerSecond: 0,
-            writeBytesPerSecond: 0
-        )]
         state = .starting
         drainTask?.cancel()
         drainTask = Task { [weak self] in
             guard let self else { return }
             do {
+                try await helper.prepareForTracing(
+                    recoveryMode: recoveryMode
+                ) { phase in
+                    if phase == .repairing {
+                        self.state = .repairing
+                    }
+                }
+                guard !Task.isCancelled else { return }
                 let sessionID = try await helper.startTrace(
                     maximumDurationSeconds: 900,
                     processIdentifiers: processIdentifiers
@@ -370,6 +384,8 @@ final class FileAccessTraceStore {
                     try? await helper.stopTrace(sessionID: sessionID)
                     return
                 }
+                let now = Date()
+                beginNewMeasurementSession(at: now)
                 self.sessionID = sessionID
                 let baseline = await OpenFileSampler.shared.sample(sessions: sessions)
                 guard !Task.isCancelled else {
@@ -390,6 +406,10 @@ final class FileAccessTraceStore {
                 self.hasPendingStartIntent = true
                 self.state = .waitingForApproval
                 self.helper.openLoginItemsSettings()
+            } catch TraceHelperClientError.installationRequired(let isDiskImage) {
+                self.state = .installationRequired(isDiskImage: isDiskImage)
+            } catch TraceHelperClientError.repairRequired {
+                self.state = .repairAvailable
             } catch {
                 self.state = .failed(self.message(for: error))
             }
@@ -544,6 +564,10 @@ final class FileAccessTraceStore {
         case .notFound: .failed(L10n.text("当前应用构建中没有可用的追踪组件"))
         case .protocolMismatch: .failed(L10n.text("追踪组件版本不匹配，请重新安装应用"))
         case .connectionUnavailable: .failed(L10n.text("无法连接文件访问追踪组件"))
+        case .repairing: .repairing
+        case .repairAvailable: .repairAvailable
+        case .installationRequired(let isDiskImage):
+            .installationRequired(isDiskImage: isDiskImage)
         case .operationFailed(let message): .failed(message)
         }
     }
@@ -554,6 +578,10 @@ final class FileAccessTraceStore {
             L10n.text("追踪组件版本不匹配，请重新安装应用")
         case .approvalRequired:
             L10n.text("需要启用文件访问追踪")
+        case .installationRequired:
+            L10n.text("需要先安装到应用程序文件夹")
+        case .repairRequired:
+            L10n.text("追踪组件需要修复")
         case .rejected(let status):
             L10n.format("追踪组件未能开始：%@", status)
         case .invalidPayload:
@@ -568,6 +596,30 @@ final class FileAccessTraceStore {
         drainTask = nil
         sessionID = nil
         engine = nil
+        clearPublishedMeasurements()
+        startedAt = nil
+        elapsed = 0
+    }
+
+    private func beginNewMeasurementSession(at now: Date) {
+        engine = nil
+        clearPublishedMeasurements()
+        startedAt = now
+        elapsed = 0
+        requestedReadBytes = 0
+        requestedWriteBytes = 0
+        currentReadBytesPerSecond = 0
+        currentWriteBytesPerSecond = 0
+        peakReadBytesPerSecond = 0
+        peakWriteBytesPerSecond = 0
+        ratePoints = [FileAccessTraceRatePoint(
+            timestamp: now,
+            readBytesPerSecond: 0,
+            writeBytesPerSecond: 0
+        )]
+    }
+
+    private func clearPublishedMeasurements() {
         requestedReadBytes = nil
         requestedWriteBytes = nil
         currentReadBytesPerSecond = nil
@@ -578,8 +630,6 @@ final class FileAccessTraceStore {
         files = []
         processes = []
         ratePoints = []
-        startedAt = nil
-        elapsed = 0
         lastEventAt = nil
         lastListUpdate = .distantPast
         lastChartPoint = .distantPast

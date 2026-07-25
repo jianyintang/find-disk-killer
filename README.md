@@ -190,6 +190,14 @@ Apple notarization, staples the ticket, runs Gatekeeper checks, and writes
 `SHA256SUMS`. Artifacts produced with `SKIP_NOTARIZATION=1` are local rehearsals
 and must never be published.
 
+On a release host without Finder automation permission, reuse a previously
+approved installer layout without opening Finder:
+
+```bash
+DMG_TEMPLATE=artifacts/FindDiskKiller-1.0.1-101/FindDiskKiller-1.0.1.dmg \
+  make release VERSION=1.0.2 BUILD_NUMBER=102
+```
+
 ## Architecture
 
 ```text

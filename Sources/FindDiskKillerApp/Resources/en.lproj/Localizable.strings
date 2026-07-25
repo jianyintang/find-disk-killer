@@ -400,3 +400,14 @@
 "操作失败" = "Operation Failed";
 "版本 %@（%@）" = "Version %@ (%@)";
 "检查更新" = "Check for Updates";
+"正在更新追踪组件" = "Updating Trace Component";
+"追踪组件需要修复" = "Trace Component Needs Repair";
+"需要先安装到应用程序文件夹" = "Install in Applications First";
+"修复并重试" = "Repair and Retry";
+"打开安装窗口" = "Open Installer";
+"重试" = "Try Again";
+"正在替换旧版追踪组件，完成后会自动继续。" = "Replacing the previous trace component. Tracing will continue automatically.";
+"自动修复未完成；已有结果仍保留在当前会话中。" = "Automatic repair did not finish. Existing results remain available in this session.";
+"请在安装窗口中将 FindDiskKiller 拖入“应用程序”，然后重新打开。" = "Drag FindDiskKiller to Applications in the installer, then reopen it.";
+"请将 FindDiskKiller 移入“应用程序”文件夹，然后重新打开。" = "Move FindDiskKiller to the Applications folder, then reopen it.";
+"正在更新" = "Updating";

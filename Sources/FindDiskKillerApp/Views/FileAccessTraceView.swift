@@ -203,8 +203,23 @@ struct FileAccessTraceView: View {
         case .waitingForApproval:
             Button(L10n.text("打开登录项设置"), action: store.openApprovalSettings)
                 .buttonStyle(.borderedProminent)
+        case .repairAvailable:
+            Button(action: store.repairAndRetry) {
+                Label(L10n.text("修复并重试"), systemImage: "wrench.and.screwdriver")
+            }
+            .buttonStyle(.borderedProminent)
+        case .installationRequired:
+            Button(action: store.openInstallationLocation) {
+                Label(L10n.text("打开安装窗口"), systemImage: "folder")
+            }
+            .buttonStyle(.borderedProminent)
+        case .repairing:
+            ProgressView()
+                .controlSize(.small)
         case .failed:
-            Button(L10n.text("重新连接"), action: store.start)
+            Button(action: store.start) {
+                Label(L10n.text("重试"), systemImage: "arrow.clockwise")
+            }
         default:
             EmptyView()
         }
@@ -302,7 +317,9 @@ struct FileAccessTraceView: View {
 
     private var needsStatusBand: Bool {
         switch store.state {
-        case .permissionRequired, .waitingForApproval, .failed, .unsupportedFormat: true
+        case .permissionRequired, .waitingForApproval, .repairing,
+                .repairAvailable, .installationRequired, .failed, .unsupportedFormat:
+            true
         default: false
         }
     }
@@ -311,6 +328,9 @@ struct FileAccessTraceView: View {
         switch store.state {
         case .permissionRequired: L10n.text("需要启用文件访问追踪")
         case .waitingForApproval: L10n.text("等待你在系统设置中批准")
+        case .repairing: L10n.text("正在更新追踪组件")
+        case .repairAvailable: L10n.text("追踪组件需要修复")
+        case .installationRequired: L10n.text("需要先安装到应用程序文件夹")
         case .unsupportedFormat: L10n.text("当前 macOS 输出格式暂不受支持")
         case .failed(let message): message
         default: ""
@@ -323,6 +343,14 @@ struct FileAccessTraceView: View {
             L10n.text("点击启用后，macOS 会请求一次管理员确认。FindDiskKiller 不会在后台自行申请。")
         case .waitingForApproval:
             L10n.text("在“登录项与扩展”中允许 FindDiskKiller 后返回这里，追踪会自动开始。")
+        case .repairing:
+            L10n.text("正在替换旧版追踪组件，完成后会自动继续。")
+        case .repairAvailable:
+            L10n.text("自动修复未完成；已有结果仍保留在当前会话中。")
+        case .installationRequired(let isDiskImage):
+            isDiskImage
+                ? L10n.text("请在安装窗口中将 FindDiskKiller 拖入“应用程序”，然后重新打开。")
+                : L10n.text("请将 FindDiskKiller 移入“应用程序”文件夹，然后重新打开。")
         case .unsupportedFormat:
             L10n.text("为了避免显示看似精确但含义错误的数字，本次结果已停止统计。")
         case .failed:
@@ -334,6 +362,9 @@ struct FileAccessTraceView: View {
     private var statusSymbol: String {
         switch store.state {
         case .permissionRequired, .waitingForApproval: "lock.shield"
+        case .repairing: "arrow.triangle.2.circlepath"
+        case .repairAvailable: "wrench.and.screwdriver"
+        case .installationRequired: "folder.badge.plus"
         case .unsupportedFormat: "doc.badge.ellipsis"
         default: "exclamationmark.triangle"
         }
@@ -341,7 +372,7 @@ struct FileAccessTraceView: View {
 
     private var statusColor: Color {
         switch store.state {
-        case .permissionRequired, .waitingForApproval: .blue
+        case .permissionRequired, .waitingForApproval, .repairing: .blue
         default: .orange
         }
     }
@@ -472,8 +503,10 @@ private struct TraceStateLabel: View {
         switch state {
         case .running: L10n.text("追踪中")
         case .starting: L10n.text("正在开始")
+        case .repairing: L10n.text("正在更新")
         case .stopped: L10n.text("已停止")
-        case .failed, .unsupportedFormat: L10n.text("需要处理")
+        case .repairAvailable, .installationRequired, .failed, .unsupportedFormat:
+            L10n.text("需要处理")
         default: L10n.text("准备就绪")
         }
     }
@@ -481,8 +514,8 @@ private struct TraceStateLabel: View {
     private var color: Color {
         switch state {
         case .running: .green
-        case .starting: .blue
-        case .failed, .unsupportedFormat: .orange
+        case .starting, .repairing: .blue
+        case .repairAvailable, .installationRequired, .failed, .unsupportedFormat: .orange
         default: .secondary
         }
     }

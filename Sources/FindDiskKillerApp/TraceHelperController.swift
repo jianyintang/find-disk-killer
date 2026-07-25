@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import FindDiskKillerTraceProtocol
 import Observation
@@ -12,6 +13,9 @@ enum TraceHelperServiceState: Equatable {
     case ready
     case protocolMismatch
     case connectionUnavailable
+    case repairing
+    case repairAvailable
+    case installationRequired(isDiskImage: Bool)
     case operationFailed(String)
 }
 
@@ -19,8 +23,120 @@ enum TraceHelperClientError: Error, Equatable {
     case unavailable
     case protocolMismatch
     case approvalRequired
+    case installationRequired(isDiskImage: Bool)
+    case repairRequired
     case rejected(String)
     case invalidPayload
+}
+
+enum TraceHelperRecoveryMode: Equatable {
+    case automatic
+    case userInitiated
+}
+
+enum TraceHelperPreparationPhase: Equatable {
+    case checking
+    case repairing
+}
+
+enum TraceHelperRegistrationStatus: Equatable {
+    case notRegistered
+    case requiresApproval
+    case enabled
+    case notFound
+}
+
+@MainActor
+protocol TraceHelperServiceManaging: AnyObject {
+    var status: TraceHelperRegistrationStatus { get }
+    func register() throws
+    func unregister() throws
+    func unregisterAndWait() async throws
+    func openSystemSettings()
+}
+
+protocol TraceHelperTransporting: AnyObject, Sendable {
+    func ping(clientProtocolVersion: Int, timeout: Duration) async throws -> (Int, String)
+    func startTrace(
+        maximumDurationSeconds: Int,
+        processIdentifiers: [Int32]
+    ) async throws -> String
+    func drainTrace(
+        sessionID: String,
+        maximumRecordCount: Int
+    ) async throws -> TraceHelperDrainPayload
+    func stopTrace(sessionID: String) async throws
+    func invalidate()
+}
+
+@MainActor
+protocol TraceHelperRegistrationPersisting: AnyObject {
+    var lastHealthyFingerprint: String? { get set }
+    var autoRepairAttemptedFingerprint: String? { get set }
+}
+
+private final class TraceHelperServiceManager: TraceHelperServiceManaging {
+    private let service = SMAppService.daemon(
+        plistName: TraceHelperProtocolConfiguration.launchDaemonPlistName
+    )
+
+    var status: TraceHelperRegistrationStatus {
+        switch service.status {
+        case .notRegistered: .notRegistered
+        case .requiresApproval: .requiresApproval
+        case .enabled: .enabled
+        case .notFound: .notFound
+        @unknown default: .notFound
+        }
+    }
+
+    func register() throws {
+        try service.register()
+    }
+
+    func unregister() throws {
+        try service.unregister()
+    }
+
+    func unregisterAndWait() async throws {
+        try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Void, Error>) in
+            service.unregister { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
+        }
+    }
+
+    func openSystemSettings() {
+        SMAppService.openSystemSettingsLoginItems()
+    }
+}
+
+private final class TraceHelperRegistrationStore: TraceHelperRegistrationPersisting {
+    private enum Key {
+        static let lastHealthy = "traceHelper.lastHealthyFingerprint"
+        static let autoRepairAttempted = "traceHelper.autoRepairAttemptedFingerprint"
+    }
+
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    var lastHealthyFingerprint: String? {
+        get { defaults.string(forKey: Key.lastHealthy) }
+        set { defaults.set(newValue, forKey: Key.lastHealthy) }
+    }
+
+    var autoRepairAttemptedFingerprint: String? {
+        get { defaults.string(forKey: Key.autoRepairAttempted) }
+        set { defaults.set(newValue, forKey: Key.autoRepairAttempted) }
+    }
 }
 
 private final class TraceHelperContinuation<Value: Sendable>: @unchecked Sendable {
@@ -63,7 +179,7 @@ private final class TraceHelperContinuation<Value: Sendable>: @unchecked Sendabl
 // NSXPCConnection invokes replies on its own queues. Keeping every callback in
 // this nonisolated transport prevents Objective-C callbacks from inheriting the
 // UI controller's MainActor executor.
-final class TraceHelperXPCTransport: @unchecked Sendable {
+final class TraceHelperXPCTransport: TraceHelperTransporting, @unchecked Sendable {
     private let lock = NSLock()
     private var connection: NSXPCConnection?
     private let machServiceName: String
@@ -245,13 +361,51 @@ final class TraceHelperXPCTransport: @unchecked Sendable {
 @Observable
 final class TraceHelperController {
     private(set) var state: TraceHelperServiceState = .notRegistered
-    @ObservationIgnored private let transport = TraceHelperXPCTransport()
+    @ObservationIgnored private let transport: any TraceHelperTransporting
+    @ObservationIgnored private let service: any TraceHelperServiceManaging
+    @ObservationIgnored private let registrationStore: any TraceHelperRegistrationPersisting
+    @ObservationIgnored private let bundleURL: URL
+    @ObservationIgnored private let fingerprint: String
+    @ObservationIgnored private let registrationSettleTimeout: Duration
+    @ObservationIgnored private let readinessTimeout: Duration
+    @ObservationIgnored private let retryDelay: Duration
+    @ObservationIgnored private let packagedServicePresenceOverride: Bool?
 
-    private let service = SMAppService.daemon(
-        plistName: TraceHelperProtocolConfiguration.launchDaemonPlistName
-    )
+    init(
+        service: any TraceHelperServiceManaging = TraceHelperServiceManager(),
+        transport: any TraceHelperTransporting = TraceHelperXPCTransport(),
+        registrationStore: any TraceHelperRegistrationPersisting = TraceHelperRegistrationStore(),
+        bundleURL: URL = Bundle.main.bundleURL,
+        appBundleIdentifier: String = Bundle.main.bundleIdentifier
+            ?? "com.jianyintang.FindDiskKiller",
+        appBuild: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion")
+            as? String ?? "unknown",
+        registrationSettleTimeout: Duration = .seconds(2),
+        readinessTimeout: Duration = .seconds(5),
+        retryDelay: Duration = .milliseconds(250),
+        packagedServicePresenceOverride: Bool? = nil
+    ) {
+        self.service = service
+        self.transport = transport
+        self.registrationStore = registrationStore
+        self.bundleURL = bundleURL.standardizedFileURL
+        fingerprint = [
+            appBundleIdentifier,
+            appBuild,
+            TraceHelperProtocolConfiguration.machServiceName,
+            String(TraceHelperProtocolConfiguration.version)
+        ].joined(separator: "|")
+        self.registrationSettleTimeout = registrationSettleTimeout
+        self.readinessTimeout = readinessTimeout
+        self.retryDelay = retryDelay
+        self.packagedServicePresenceOverride = packagedServicePresenceOverride
+    }
 
     func refreshStatus() {
+        guard isInstalledInApplications else {
+            state = .installationRequired(isDiskImage: isRunningFromDiskImage)
+            return
+        }
         state = switch service.status {
         case .notRegistered: .notRegistered
         case .enabled: .enabled
@@ -265,6 +419,10 @@ final class TraceHelperController {
 
     // Registration is only called from the tracing workspace's explicit action.
     func requestRegistration() {
+        guard isInstalledInApplications else {
+            state = .installationRequired(isDiskImage: isRunningFromDiskImage)
+            return
+        }
         guard packagedServiceIsPresent else {
             state = .notFound
             return
@@ -298,19 +456,140 @@ final class TraceHelperController {
     }
 
     func openLoginItemsSettings() {
-        SMAppService.openSystemSettingsLoginItems()
+        service.openSystemSettings()
     }
 
     func repairService() async throws {
         try await replaceOutdatedService()
     }
 
+    func prepareForTracing(
+        recoveryMode: TraceHelperRecoveryMode,
+        onPhaseChange: (TraceHelperPreparationPhase) -> Void = { _ in }
+    ) async throws {
+        onPhaseChange(.checking)
+        guard isInstalledInApplications else {
+            let isDiskImage = isRunningFromDiskImage
+            state = .installationRequired(isDiskImage: isDiskImage)
+            throw TraceHelperClientError.installationRequired(isDiskImage: isDiskImage)
+        }
+        guard packagedServiceIsPresent else {
+            state = .notFound
+            throw TraceHelperClientError.unavailable
+        }
+
+        refreshStatus()
+        var registeredDuringPreparation = false
+        switch service.status {
+        case .notRegistered, .notFound:
+            try await registerWithRetry()
+            try await waitForRegisteredStatus()
+            registeredDuringPreparation = true
+        case .requiresApproval:
+            state = .requiresApproval
+            throw TraceHelperClientError.approvalRequired
+        case .enabled:
+            break
+        }
+
+        if service.status == .requiresApproval {
+            state = .requiresApproval
+            throw TraceHelperClientError.approvalRequired
+        }
+        guard service.status == .enabled else {
+            refreshStatus()
+            throw TraceHelperClientError.unavailable
+        }
+
+        if registeredDuringPreparation {
+            state = .connecting
+            do {
+                try await waitUntilReachable()
+                return
+            } catch TraceHelperClientError.approvalRequired {
+                throw TraceHelperClientError.approvalRequired
+            } catch {
+                state = .connectionUnavailable
+                throw TraceHelperClientError.unavailable
+            }
+        }
+
+        do {
+            try await pingAndRecordHealth(timeout: .seconds(2))
+            return
+        } catch let error as TraceHelperClientError {
+            guard shouldRepair(after: error, recoveryMode: recoveryMode) else {
+                state = .repairAvailable
+                throw TraceHelperClientError.repairRequired
+            }
+        } catch {
+            guard shouldRepair(
+                after: .unavailable,
+                recoveryMode: recoveryMode
+            ) else {
+                state = .repairAvailable
+                throw TraceHelperClientError.repairRequired
+            }
+        }
+
+        registrationStore.autoRepairAttemptedFingerprint = fingerprint
+        state = .repairing
+        onPhaseChange(.repairing)
+        do {
+            try await refreshRegisteredService()
+            try await waitUntilReachable()
+            return
+        } catch TraceHelperClientError.approvalRequired {
+            throw TraceHelperClientError.approvalRequired
+        } catch {
+            guard recoveryMode == .userInitiated else {
+                state = .repairAvailable
+                throw TraceHelperClientError.repairRequired
+            }
+        }
+
+        do {
+            try await replaceOutdatedService()
+            if service.status == .requiresApproval {
+                state = .requiresApproval
+                throw TraceHelperClientError.approvalRequired
+            }
+            try await waitUntilReachable()
+        } catch TraceHelperClientError.approvalRequired {
+            throw TraceHelperClientError.approvalRequired
+        } catch {
+            state = .repairAvailable
+            throw TraceHelperClientError.repairRequired
+        }
+    }
+
+    private func refreshRegisteredService() async throws {
+        invalidateConnection()
+        try await registerWithRetry()
+        try await waitForRegisteredStatus()
+        refreshStatus()
+        if service.status == .requiresApproval {
+            state = .requiresApproval
+            throw TraceHelperClientError.approvalRequired
+        }
+        guard service.status == .enabled else {
+            throw TraceHelperClientError.unavailable
+        }
+    }
+
     func waitUntilAuthorizedAndReady(maximumWait: Duration = .seconds(180)) async throws {
         let deadline = ContinuousClock.now.advanced(by: maximumWait)
+        var refreshedRegistrationAfterApproval = false
         while ContinuousClock.now < deadline {
             refreshStatus()
             switch state {
             case .enabled, .ready, .connecting:
+                if !refreshedRegistrationAfterApproval {
+                    refreshedRegistrationAfterApproval = true
+                    invalidateConnection()
+                    try await registerWithRetry()
+                    try await Task.sleep(for: retryDelay)
+                }
                 do {
                     try await ping(timeout: .seconds(1))
                     return
@@ -323,8 +602,11 @@ final class TraceHelperController {
             case .requiresApproval:
                 try await Task.sleep(for: .milliseconds(500))
             case .notRegistered, .notFound, .protocolMismatch,
-                    .connectionUnavailable, .operationFailed:
+                    .connectionUnavailable, .repairAvailable,
+                    .installationRequired, .operationFailed:
                 throw TraceHelperClientError.unavailable
+            case .repairing:
+                try await Task.sleep(for: .milliseconds(250))
             }
         }
         throw TraceHelperClientError.unavailable
@@ -336,23 +618,12 @@ final class TraceHelperController {
 
     private func ping(timeout: Duration) async throws {
         state = .connecting
-        let result: (Int, String)
         do {
-            result = try await transport.ping(
-                clientProtocolVersion: TraceHelperProtocolConfiguration.version,
-                timeout: timeout
-            )
+            try await pingAndRecordHealth(timeout: timeout)
         } catch {
             state = .connectionUnavailable
             throw error
         }
-        guard result.0 == TraceHelperProtocolConfiguration.version,
-              result.1 == "ready"
-        else {
-            state = .protocolMismatch
-            throw TraceHelperClientError.protocolMismatch
-        }
-        state = .ready
     }
 
     func startTrace(
@@ -376,20 +647,13 @@ final class TraceHelperController {
 
     private func replaceOutdatedService() async throws {
         invalidateConnection()
-        do {
-            if service.status != .notRegistered && service.status != .notFound {
-                try unregisterServiceBeforeReplacement()
-            }
-            try service.register()
-            refreshStatus()
-        } catch {
-            refreshStatus()
-            if service.status == .requiresApproval {
-                state = .requiresApproval
-                return
-            }
-            throw error
+        if service.status != .notRegistered && service.status != .notFound {
+            try await unregisterWithRetry()
+            try await waitForUnregisteredStatus()
         }
+        try await registerWithRetry()
+        try await waitForRegisteredStatus()
+        refreshStatus()
         if service.status == .requiresApproval {
             state = .requiresApproval
             return
@@ -397,10 +661,6 @@ final class TraceHelperController {
         guard service.status == .enabled else {
             throw TraceHelperClientError.unavailable
         }
-    }
-
-    private func unregisterServiceBeforeReplacement() throws {
-        try service.unregister()
     }
 
     func drainTrace(
@@ -421,8 +681,138 @@ final class TraceHelperController {
         transport.invalidate()
     }
 
+    func openInstallationLocation() {
+        if let mountedVolumeURL {
+            NSWorkspace.shared.open(mountedVolumeURL)
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([bundleURL])
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications", isDirectory: true))
+    }
+
+    private func shouldRepair(
+        after error: TraceHelperClientError,
+        recoveryMode: TraceHelperRecoveryMode
+    ) -> Bool {
+        if recoveryMode == .userInitiated {
+            return true
+        }
+        guard error == .unavailable || error == .protocolMismatch else { return false }
+        guard registrationStore.autoRepairAttemptedFingerprint != fingerprint else {
+            return false
+        }
+        return registrationStore.lastHealthyFingerprint != fingerprint
+            || error == .protocolMismatch
+    }
+
+    private func pingAndRecordHealth(timeout: Duration) async throws {
+        let result = try await transport.ping(
+            clientProtocolVersion: TraceHelperProtocolConfiguration.version,
+            timeout: timeout
+        )
+        guard result.0 == TraceHelperProtocolConfiguration.version,
+              result.1 == "ready"
+        else {
+            state = .protocolMismatch
+            throw TraceHelperClientError.protocolMismatch
+        }
+        registrationStore.lastHealthyFingerprint = fingerprint
+        state = .ready
+    }
+
+    private func waitUntilReachable() async throws {
+        let deadline = ContinuousClock.now.advanced(by: readinessTimeout)
+        while ContinuousClock.now < deadline {
+            guard service.status != .requiresApproval else {
+                state = .requiresApproval
+                throw TraceHelperClientError.approvalRequired
+            }
+            if service.status == .enabled {
+                do {
+                    try await pingAndRecordHealth(timeout: .seconds(1))
+                    return
+                } catch TraceHelperClientError.protocolMismatch {
+                    throw TraceHelperClientError.protocolMismatch
+                } catch {
+                    invalidateConnection()
+                }
+            }
+            try await Task.sleep(for: retryDelay)
+        }
+        throw TraceHelperClientError.unavailable
+    }
+
+    private func registerWithRetry() async throws {
+        var finalError: Error?
+        for attempt in 0...1 {
+            do {
+                try service.register()
+                refreshStatus()
+                return
+            } catch {
+                finalError = error
+                refreshStatus()
+                if service.status == .enabled || service.status == .requiresApproval {
+                    return
+                }
+                if attempt == 0 {
+                    try await Task.sleep(for: retryDelay)
+                }
+            }
+        }
+        throw finalError ?? TraceHelperClientError.unavailable
+    }
+
+    private func unregisterWithRetry() async throws {
+        var finalError: Error?
+        for attempt in 0...1 {
+            do {
+                try await service.unregisterAndWait()
+                return
+            } catch {
+                finalError = error
+                if service.status == .notRegistered || service.status == .notFound {
+                    return
+                }
+                if attempt == 0 {
+                    try await Task.sleep(for: retryDelay)
+                }
+            }
+        }
+        throw finalError ?? TraceHelperClientError.unavailable
+    }
+
+    private func waitForUnregisteredStatus() async throws {
+        let deadline = ContinuousClock.now.advanced(by: registrationSettleTimeout)
+        while ContinuousClock.now < deadline {
+            if service.status == .notRegistered || service.status == .notFound {
+                return
+            }
+            try await Task.sleep(for: retryDelay)
+        }
+        throw TraceHelperClientError.unavailable
+    }
+
+    private func waitForRegisteredStatus() async throws {
+        let deadline = ContinuousClock.now.advanced(by: readinessTimeout)
+        while ContinuousClock.now < deadline {
+            switch service.status {
+            case .enabled, .requiresApproval:
+                refreshStatus()
+                return
+            case .notRegistered, .notFound:
+                try await Task.sleep(for: retryDelay)
+            }
+        }
+        refreshStatus()
+        throw TraceHelperClientError.unavailable
+    }
+
     private var packagedServiceIsPresent: Bool {
-        let directory = Bundle.main.bundleURL
+        if let packagedServicePresenceOverride {
+            return packagedServicePresenceOverride
+        }
+        let directory = bundleURL
             .appending(path: "Contents/Library/LaunchDaemons", directoryHint: .isDirectory)
         let plist = directory.appending(
             path: TraceHelperProtocolConfiguration.launchDaemonPlistName,
@@ -434,5 +824,20 @@ final class TraceHelperController {
         )
         return FileManager.default.fileExists(atPath: plist.path)
             && FileManager.default.isExecutableFile(atPath: executable.path)
+    }
+
+    private var isInstalledInApplications: Bool {
+        let path = bundleURL.path
+        return path == "/Applications" || path.hasPrefix("/Applications/")
+    }
+
+    private var isRunningFromDiskImage: Bool {
+        mountedVolumeURL != nil
+    }
+
+    private var mountedVolumeURL: URL? {
+        let components = bundleURL.pathComponents
+        guard components.count >= 3, components[1] == "Volumes" else { return nil }
+        return URL(fileURLWithPath: "/Volumes/\(components[2])", isDirectory: true)
     }
 }
