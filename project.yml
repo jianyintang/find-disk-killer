@@ -67,6 +67,9 @@ targets:
         NSSupportsAutomaticGraphicsSwitching: true
     entitlements:
       path: AppConfig/FindDiskKiller.entitlements
+      properties:
+        com.apple.application-identifier: Y3A8BJ4475.com.jianyintang.FindDiskKiller
+        com.apple.developer.team-identifier: Y3A8BJ4475
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: ""
@@ -106,6 +109,8 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
     entitlements:
       path: AppConfig/FindDiskKillerTraceHelper.entitlements
+      properties:
+        com.apple.application-identifier: Y3A8BJ4475.com.jianyintang.FindDiskKiller.TraceHelper
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jianyintang.FindDiskKiller.TraceHelper

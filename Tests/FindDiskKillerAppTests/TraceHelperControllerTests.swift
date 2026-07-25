@@ -25,6 +25,7 @@ private final class FakeTraceHelperService: TraceHelperServiceManaging {
     var statusAfterRegistration: TraceHelperRegistrationStatus = .enabled
     var registrationStatusDelayReads = 0
     var registerFailures = 0
+    var registerError: Error?
     var unregisterFailures = 0
     private(set) var registerCount = 0
     private(set) var unregisterCount = 0
@@ -37,6 +38,9 @@ private final class FakeTraceHelperService: TraceHelperServiceManaging {
 
     func register() throws {
         registerCount += 1
+        if let registerError {
+            throw registerError
+        }
         if registerFailures > 0 {
             registerFailures -= 1
             throw FakeFailure.expected
@@ -158,7 +162,7 @@ private func makeController(
         registrationStore: store,
         bundleURL: bundleURL,
         appBundleIdentifier: "com.jianyintang.FindDiskKiller",
-        appBuild: "102",
+        appBuild: "103",
         registrationSettleTimeout: .milliseconds(50),
         readinessTimeout: .milliseconds(50),
         retryDelay: .milliseconds(1),
@@ -178,7 +182,7 @@ func freshInstallRegistersAndBecomesHealthy() async throws {
     #expect(service.registerCount == 1)
     #expect(service.unregisterCount == 0)
     #expect(controller.state == .ready)
-    #expect(store.lastHealthyFingerprint?.contains("|102|") == true)
+    #expect(store.lastHealthyFingerprint?.contains("|103|") == true)
 }
 
 @Test @MainActor
@@ -192,6 +196,20 @@ func freshRegistrationWaitsForBootstrapWithoutReplacingTheService() async throws
     #expect(service.registerCount == 1)
     #expect(service.unregisterCount == 0)
     #expect(controller.state == .ready)
+}
+
+@Test @MainActor
+func approvedFreshRegistrationThatCannotLaunchOffersRepair() async {
+    let service = FakeTraceHelperService(status: .notRegistered)
+    let transport = FakeTraceHelperTransport([.unavailable])
+    let controller = makeController(service: service, transport: transport)
+
+    await #expect(throws: TraceHelperClientError.repairRequired) {
+        try await controller.prepareForTracing(recoveryMode: .automatic)
+    }
+
+    #expect(service.registerCount == 1)
+    #expect(controller.state == .repairAvailable)
 }
 
 @Test @MainActor
@@ -250,7 +268,7 @@ func healthyHelperDoesNotReregisterAcrossAppBuilds() async throws {
 
     #expect(service.unregisterCount == 0)
     #expect(service.registerCount == 0)
-    #expect(store.lastHealthyFingerprint?.contains("|102|") == true)
+    #expect(store.lastHealthyFingerprint?.contains("|103|") == true)
 }
 
 @Test @MainActor
@@ -300,7 +318,7 @@ func userInitiatedRepairIgnoresTheAutomaticAttemptLimit() async throws {
     let store = FakeRegistrationStore()
     store.autoRepairAttemptedFingerprint = [
         "com.jianyintang.FindDiskKiller",
-        "102",
+        "103",
         TraceHelperProtocolConfiguration.machServiceName,
         String(TraceHelperProtocolConfiguration.version)
     ].joined(separator: "|")
@@ -330,6 +348,51 @@ func registrationApprovalIsSurfacedImmediately() async {
         try await controller.prepareForTracing(recoveryMode: .automatic)
     }
     #expect(controller.state == .requiresApproval)
+}
+
+@Test @MainActor
+func staleApprovalEntryIsRefreshedInPlaceBeforeOpeningSystemSettings() async {
+    let service = FakeTraceHelperService(status: .requiresApproval)
+    service.statusAfterRegistration = .requiresApproval
+    let controller = makeController(
+        service: service,
+        transport: FakeTraceHelperTransport([])
+    )
+
+    await #expect(throws: TraceHelperClientError.approvalRequired) {
+        try await controller.prepareForTracing(recoveryMode: .automatic)
+    }
+
+    #expect(service.registerCount == 1)
+    #expect(service.unregisterCount == 0)
+    #expect(controller.state == .requiresApproval)
+}
+
+@Test @MainActor
+func operationNotPermittedRegistrationWaitsForSystemApproval() async throws {
+    let service = FakeTraceHelperService(status: .notRegistered)
+    service.registerError = NSError(
+        domain: "SMAppServiceErrorDomain",
+        code: 1,
+        userInfo: [NSLocalizedFailureReasonErrorKey: "Operation not permitted"]
+    )
+    let controller = makeController(
+        service: service,
+        transport: FakeTraceHelperTransport([.ready])
+    )
+
+    await #expect(throws: TraceHelperClientError.approvalRequired) {
+        try await controller.prepareForTracing(recoveryMode: .automatic)
+    }
+    #expect(controller.state == .requiresApproval)
+    #expect(service.registerCount == 1)
+
+    service.registerError = nil
+    service.status = .enabled
+    try await controller.waitUntilAuthorizedAndReady()
+
+    #expect(controller.state == .ready)
+    #expect(service.unregisterCount == 0)
 }
 
 @Test @MainActor

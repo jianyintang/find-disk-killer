@@ -411,7 +411,9 @@ final class FileAccessTraceStore {
             } catch TraceHelperClientError.repairRequired {
                 self.state = .repairAvailable
             } catch {
-                self.state = .failed(self.message(for: error))
+                self.state = helper.state == .repairAvailable
+                    ? .repairAvailable
+                    : .failed(self.message(for: error))
             }
         }
     }

@@ -2,9 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>com.apple.application-identifier</key>
-	<string>Y3A8BJ4475.com.jianyintang.FindDiskKiller</string>
-	<key>com.apple.developer.team-identifier</key>
+	<key>destination</key>
+	<string>export</string>
+	<key>method</key>
+	<string>developer-id</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<key>teamID</key>
 	<string>Y3A8BJ4475</string>
 </dict>
 </plist>

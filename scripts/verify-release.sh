@@ -31,13 +31,15 @@ helper="$app_path/Contents/Library/LaunchDaemons/com.jianyintang.FindDiskKiller.
 helper_plist="$app_path/Contents/Library/LaunchDaemons/com.jianyintang.FindDiskKiller.TraceHelper.plist"
 privacy_manifest="$app_path/Contents/Resources/PrivacyInfo.xcprivacy"
 third_party_notices="$app_path/Contents/Resources/THIRD_PARTY_NOTICES.md"
+provisioning_profile="$app_path/Contents/embedded.provisionprofile"
 
 for required_path in \
     "$info_plist" \
     "$helper" \
     "$helper_plist" \
     "$privacy_manifest" \
-    "$third_party_notices"; do
+    "$third_party_notices" \
+    "$provisioning_profile"; do
     [[ -e "$required_path" ]] || { echo "Required release payload missing: $required_path" >&2; exit 1; }
 done
 
@@ -86,10 +88,31 @@ cleanup() {
 }
 trap cleanup EXIT
 
-require_empty_entitlements() {
+decoded_profile="$temporary_directory/developer-id-profile.plist"
+security cms -D -i "$provisioning_profile" > "$decoded_profile"
+profile_application_identifier=$(plutil \
+    -extract 'Entitlements.com\.apple\.application-identifier' raw \
+    "$decoded_profile")
+profile_team_identifier=$(plutil -extract TeamIdentifier.0 raw "$decoded_profile")
+profile_all_devices=$(plutil -extract ProvisionsAllDevices raw "$decoded_profile")
+[[ "$profile_application_identifier" == \
+    "Y3A8BJ4475.com.jianyintang.FindDiskKiller" \
+    && "$profile_team_identifier" == "Y3A8BJ4475" \
+    && "$profile_all_devices" == "true" ]] || {
+    echo "App does not contain the expected Developer ID provisioning profile" >&2
+    exit 1
+}
+
+read_entitlements() {
     local signed_path=$1
     local output_path=$2
     codesign -d --entitlements "$output_path" --xml "$signed_path"
+}
+
+require_empty_entitlements() {
+    local signed_path=$1
+    local output_path=$2
+    read_entitlements "$signed_path" "$output_path"
     [[ "$(plutil -convert json -o - "$output_path")" == "{}" ]] || {
         echo "Release signing entitlements changed for $signed_path" >&2
         plutil -p "$output_path" >&2
@@ -97,8 +120,59 @@ require_empty_entitlements() {
     }
 }
 
-require_empty_entitlements "$app_path" "$temporary_directory/app-entitlements.plist"
-require_empty_entitlements "$helper" "$temporary_directory/helper-entitlements.plist"
+app_entitlements="$temporary_directory/app-entitlements.plist"
+read_entitlements "$app_path" "$app_entitlements"
+app_application_identifier=$(plutil \
+    -extract 'com\.apple\.application-identifier' raw \
+    "$app_entitlements")
+app_team_identifier=$(plutil \
+    -extract 'com\.apple\.developer\.team-identifier' raw \
+    "$app_entitlements")
+[[ "$app_application_identifier" == \
+    "Y3A8BJ4475.com.jianyintang.FindDiskKiller" \
+    && "$app_team_identifier" == "Y3A8BJ4475" ]] || {
+    echo "App is missing its ServiceManagement signing identity" >&2
+    plutil -p "$app_entitlements" >&2
+    exit 1
+}
+plutil -remove 'com\.apple\.application-identifier' "$app_entitlements"
+plutil -remove 'com\.apple\.developer\.team-identifier' "$app_entitlements"
+[[ "$(plutil -convert json -o - "$app_entitlements")" == "{}" ]] || {
+    echo "App has unexpected release entitlements" >&2
+    plutil -p "$app_entitlements" >&2
+    exit 1
+}
+helper_entitlements="$temporary_directory/helper-entitlements.plist"
+read_entitlements "$helper" "$helper_entitlements"
+helper_application_identifier=$(plutil \
+    -extract 'com\.apple\.application-identifier' raw \
+    "$helper_entitlements")
+[[ "$helper_application_identifier" == \
+    "Y3A8BJ4475.com.jianyintang.FindDiskKiller.TraceHelper" ]] || {
+    echo "Trace helper is missing its system-service application identifier" >&2
+    plutil -p "$helper_entitlements" >&2
+    exit 1
+}
+plutil -remove 'com\.apple\.application-identifier' "$helper_entitlements"
+[[ "$(plutil -convert json -o - "$helper_entitlements")" == "{}" ]] || {
+    echo "Trace helper has unexpected release entitlements" >&2
+    plutil -p "$helper_entitlements" >&2
+    exit 1
+}
+
+bundle_program=$(plutil -extract BundleProgram raw "$helper_plist")
+[[ "$bundle_program" == \
+    "Contents/Library/LaunchDaemons/com.jianyintang.FindDiskKiller.TraceHelper" ]] || {
+    echo "Unexpected trace helper BundleProgram: $bundle_program" >&2
+    exit 1
+}
+mach_service_enabled=$(plutil \
+    -extract 'MachServices.com\.jianyintang\.FindDiskKiller\.TraceHelper' raw \
+    "$helper_plist")
+[[ "$mach_service_enabled" == "true" ]] || {
+    echo "Trace helper Mach service is not enabled" >&2
+    exit 1
+}
 
 require_universal_binary() {
     local binary=$1

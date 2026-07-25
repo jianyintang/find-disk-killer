@@ -408,6 +408,8 @@
 "重试" = "Try Again";
 "正在替换旧版追踪组件，完成后会自动继续。" = "Replacing the previous trace component. Tracing will continue automatically.";
 "自动修复未完成；已有结果仍保留在当前会话中。" = "Automatic repair did not finish. Existing results remain available in this session.";
+"追踪组件未能启动" = "Trace Component Could Not Start";
+"组件已启用但未能启动。请直接修复，无需重复切换系统设置；已有结果会保留。" = "The component is enabled but could not start. Repair it here instead of toggling System Settings again. Existing results will be preserved.";
 "请在安装窗口中将 FindDiskKiller 拖入“应用程序”，然后重新打开。" = "Drag FindDiskKiller to Applications in the installer, then reopen it.";
 "请将 FindDiskKiller 移入“应用程序”文件夹，然后重新打开。" = "Move FindDiskKiller to the Applications folder, then reopen it.";
 "正在更新" = "Updating";

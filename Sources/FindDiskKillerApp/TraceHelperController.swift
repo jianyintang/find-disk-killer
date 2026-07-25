@@ -436,8 +436,10 @@ final class TraceHelperController {
             switch service.status {
             case .enabled, .requiresApproval:
                 refreshStatus()
-            default:
-                state = .operationFailed(error.localizedDescription)
+            case .notRegistered, .notFound:
+                state = registrationNeedsApproval(after: error)
+                    ? .requiresApproval
+                    : .operationFailed(error.localizedDescription)
             }
         }
     }
@@ -486,8 +488,12 @@ final class TraceHelperController {
             try await waitForRegisteredStatus()
             registeredDuringPreparation = true
         case .requiresApproval:
-            state = .requiresApproval
-            throw TraceHelperClientError.approvalRequired
+            // Refresh the pending entry in place so it targets this app build.
+            // Unregistering here turns an existing approval into an explicit
+            // denial on macOS 26 and forces the user through the toggle again.
+            state = .repairing
+            onPhaseChange(.repairing)
+            try await refreshRegisteredService()
         case .enabled:
             break
         }
@@ -509,8 +515,8 @@ final class TraceHelperController {
             } catch TraceHelperClientError.approvalRequired {
                 throw TraceHelperClientError.approvalRequired
             } catch {
-                state = .connectionUnavailable
-                throw TraceHelperClientError.unavailable
+                state = .repairAvailable
+                throw TraceHelperClientError.repairRequired
             }
         }
 
@@ -599,9 +605,11 @@ final class TraceHelperController {
                     invalidateConnection()
                     try await Task.sleep(for: .milliseconds(250))
                 }
-            case .requiresApproval:
+            case .requiresApproval, .notRegistered:
+                // After register() reports Operation not permitted, macOS 26 can
+                // keep reporting notRegistered until the user enables the item.
                 try await Task.sleep(for: .milliseconds(500))
-            case .notRegistered, .notFound, .protocolMismatch,
+            case .notFound, .protocolMismatch,
                     .connectionUnavailable, .repairAvailable,
                     .installationRequired, .operationFailed:
                 throw TraceHelperClientError.unavailable
@@ -755,12 +763,21 @@ final class TraceHelperController {
                 if service.status == .enabled || service.status == .requiresApproval {
                     return
                 }
+                if registrationNeedsApproval(after: error) {
+                    state = .requiresApproval
+                    throw TraceHelperClientError.approvalRequired
+                }
                 if attempt == 0 {
                     try await Task.sleep(for: retryDelay)
                 }
             }
         }
         throw finalError ?? TraceHelperClientError.unavailable
+    }
+
+    private func registrationNeedsApproval(after error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == "SMAppServiceErrorDomain" && error.code == 1
     }
 
     private func unregisterWithRetry() async throws {

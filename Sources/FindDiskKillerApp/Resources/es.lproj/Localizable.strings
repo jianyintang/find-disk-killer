@@ -408,6 +408,8 @@
 "重试" = "Reintentar";
 "正在替换旧版追踪组件，完成后会自动继续。" = "Se está sustituyendo el componente de rastreo anterior. El rastreo continuará automáticamente.";
 "自动修复未完成；已有结果仍保留在当前会话中。" = "La reparación automática no finalizó. Los resultados existentes permanecen disponibles en esta sesión.";
+"追踪组件未能启动" = "No se pudo iniciar el componente de rastreo";
+"组件已启用但未能启动。请直接修复，无需重复切换系统设置；已有结果会保留。" = "El componente está activado, pero no pudo iniciarse. Repáralo aquí en lugar de volver a cambiar Ajustes del Sistema. Se conservarán los resultados existentes.";
 "请在安装窗口中将 FindDiskKiller 拖入“应用程序”，然后重新打开。" = "Arrastra FindDiskKiller a Aplicaciones en el instalador y vuelve a abrirlo.";
 "请将 FindDiskKiller 移入“应用程序”文件夹，然后重新打开。" = "Mueve FindDiskKiller a la carpeta Aplicaciones y vuelve a abrirlo.";
 "正在更新" = "Actualizando";

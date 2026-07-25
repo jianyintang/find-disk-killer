@@ -62,15 +62,26 @@ xcodebuild archive \
     -destination 'generic/platform=macOS' \
     MARKETING_VERSION="$version" \
     CURRENT_PROJECT_VERSION="$build_number" \
-    CODE_SIGN_STYLE=Manual \
-    CODE_SIGN_IDENTITY="$sign_identity" \
+    CODE_SIGN_STYLE=Automatic \
+    CODE_SIGN_IDENTITY="Apple Development" \
     DEVELOPMENT_TEAM=Y3A8BJ4475 \
     ENABLE_HARDENED_RUNTIME=YES \
     ONLY_ACTIVE_ARCH=NO \
+    -allowProvisioningUpdates \
     -quiet \
     archive
 
 app_path="$archive_path/Products/Applications/FindDiskKiller.app"
+export_directory="$temporary_directory/export"
+xcodebuild -exportArchive \
+    -archivePath "$archive_path" \
+    -exportPath "$export_directory" \
+    -exportOptionsPlist "$root_directory/AppConfig/DeveloperIDExportOptions.plist" \
+    -allowProvisioningUpdates \
+    -quiet
+development_app="$temporary_directory/development-app"
+mv "$app_path" "$development_app"
+ditto "$export_directory/FindDiskKiller.app" "$app_path"
 /bin/bash "$root_directory/scripts/verify-release.sh" "$app_path"
 
 if [[ "$skip_notarization" != 1 ]]; then

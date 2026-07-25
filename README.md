@@ -198,6 +198,15 @@ DMG_TEMPLATE=artifacts/FindDiskKiller-1.0.1-101/FindDiskKiller-1.0.1.dmg \
   make release VERSION=1.0.2 BUILD_NUMBER=102
 ```
 
+Before publishing, install the exact signed release app in `/Applications` and run the privileged tracing gate once:
+
+```bash
+EXPECTED_VERSION=1.0.3 EXPECTED_BUILD=103 \
+  scripts/verify-installed-trace-helper.sh
+```
+
+The gate verifies the embedded helper identity, performs a real file-I/O trace, confirms the launchd service is running, and rejects any new launch-constraint violation.
+
 ## Architecture
 
 ```text

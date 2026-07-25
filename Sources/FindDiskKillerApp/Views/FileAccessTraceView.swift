@@ -208,6 +208,7 @@ struct FileAccessTraceView: View {
                 Label(L10n.text("修复并重试"), systemImage: "wrench.and.screwdriver")
             }
             .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("trace.repairAndRetry")
         case .installationRequired:
             Button(action: store.openInstallationLocation) {
                 Label(L10n.text("打开安装窗口"), systemImage: "folder")
@@ -329,7 +330,7 @@ struct FileAccessTraceView: View {
         case .permissionRequired: L10n.text("需要启用文件访问追踪")
         case .waitingForApproval: L10n.text("等待你在系统设置中批准")
         case .repairing: L10n.text("正在更新追踪组件")
-        case .repairAvailable: L10n.text("追踪组件需要修复")
+        case .repairAvailable: L10n.text("追踪组件未能启动")
         case .installationRequired: L10n.text("需要先安装到应用程序文件夹")
         case .unsupportedFormat: L10n.text("当前 macOS 输出格式暂不受支持")
         case .failed(let message): message
@@ -346,7 +347,7 @@ struct FileAccessTraceView: View {
         case .repairing:
             L10n.text("正在替换旧版追踪组件，完成后会自动继续。")
         case .repairAvailable:
-            L10n.text("自动修复未完成；已有结果仍保留在当前会话中。")
+            L10n.text("组件已启用但未能启动。请直接修复，无需重复切换系统设置；已有结果会保留。")
         case .installationRequired(let isDiskImage):
             isDiskImage
                 ? L10n.text("请在安装窗口中将 FindDiskKiller 拖入“应用程序”，然后重新打开。")
