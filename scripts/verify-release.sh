@@ -101,9 +101,30 @@ fi
 if [[ $require_notarization -eq 1 ]]; then
     if [[ -n "$dmg_path" ]]; then
         xcrun stapler validate "$dmg_path"
-        spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg_path"
+        dmg_assessment=""
+        if ! dmg_assessment=$(spctl \
+            --assess \
+            --type open \
+            --context context:primary-signature \
+            --verbose=2 \
+            "$dmg_path" 2>&1); then
+            if command -v syspolicy_check >/dev/null \
+                && grep -Fq "One or more parameters passed to a function were not valid" \
+                    <<<"$dmg_assessment"; then
+                echo "spctl cannot assess disk images on this macOS version; continuing with the stapled DMG ticket and App distribution check." >&2
+            else
+                echo "$dmg_assessment" >&2
+                exit 1
+            fi
+        elif [[ -n "$dmg_assessment" ]]; then
+            echo "$dmg_assessment"
+        fi
     fi
-    spctl --assess --type execute --verbose=2 "$app_path"
+    if command -v syspolicy_check >/dev/null; then
+        syspolicy_check distribution "$app_path"
+    else
+        spctl --assess --type execute --verbose=2 "$app_path"
+    fi
 fi
 
 version=$(plutil -extract CFBundleShortVersionString raw "$info_plist")

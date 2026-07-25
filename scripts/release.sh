@@ -73,6 +73,23 @@ xcodebuild archive \
 app_path="$archive_path/Products/Applications/FindDiskKiller.app"
 /bin/bash "$root_directory/scripts/verify-release.sh" "$app_path"
 
+if [[ "$skip_notarization" != 1 ]]; then
+    app_notarization_archive="$temporary_directory/FindDiskKiller-$version.zip"
+    ditto -c -k --keepParent "$app_path" "$app_notarization_archive"
+    app_notarization_result="$release_directory/app-notarization.json"
+    xcrun notarytool submit "$app_notarization_archive" \
+        --keychain-profile "$notary_profile" \
+        --wait \
+        --output-format json > "$app_notarization_result"
+    app_notarization_status=$(plutil -extract status raw "$app_notarization_result")
+    [[ "$app_notarization_status" == "Accepted" ]] || {
+        echo "Apple did not accept the App notarization submission: $app_notarization_status" >&2
+        exit 1
+    }
+    xcrun stapler staple "$app_path"
+    xcrun stapler validate "$app_path"
+fi
+
 staging_directory="$temporary_directory/dmg"
 mkdir -p "$staging_directory"
 ditto "$app_path" "$staging_directory/FindDiskKiller.app"

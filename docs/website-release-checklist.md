@@ -32,8 +32,8 @@ item is backed by an artifact or a test record.
 
 - Do not publish artifacts created with `SKIP_NOTARIZATION=1` or
   `ALLOW_DIRTY=1`.
-- Retain the `.xcarchive`, DMG, `SHA256SUMS`, source commit, and notarization
-  submission identifier for the release record.
+- Retain the `.xcarchive`, DMG, `SHA256SUMS`, source commit, and App/DMG
+  notarization submission identifiers for the release record.
 
 ## Clean-Mac Acceptance
 
