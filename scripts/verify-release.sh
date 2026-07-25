@@ -28,7 +28,8 @@ done
 
 info_plist="$app_path/Contents/Info.plist"
 helper="$app_path/Contents/Library/LaunchDaemons/com.jianyintang.FindDiskKiller.TraceHelper"
-helper_plist="$app_path/Contents/Library/LaunchDaemons/com.jianyintang.FindDiskKiller.TraceHelper.plist"
+helper_plist="$app_path/Contents/Library/LaunchDaemons/com.jianyintang.FindDiskKiller.TraceHelper.v2.plist"
+legacy_helper_plist="$app_path/Contents/Library/LaunchDaemons/com.jianyintang.FindDiskKiller.TraceHelper.plist"
 privacy_manifest="$app_path/Contents/Resources/PrivacyInfo.xcprivacy"
 third_party_notices="$app_path/Contents/Resources/THIRD_PARTY_NOTICES.md"
 provisioning_profile="$app_path/Contents/embedded.provisionprofile"
@@ -37,13 +38,14 @@ for required_path in \
     "$info_plist" \
     "$helper" \
     "$helper_plist" \
+    "$legacy_helper_plist" \
     "$privacy_manifest" \
     "$third_party_notices" \
     "$provisioning_profile"; do
     [[ -e "$required_path" ]] || { echo "Required release payload missing: $required_path" >&2; exit 1; }
 done
 
-plutil -lint "$info_plist" "$helper_plist" "$privacy_manifest"
+plutil -lint "$info_plist" "$helper_plist" "$legacy_helper_plist" "$privacy_manifest"
 
 bundle_identifier=$(plutil -extract CFBundleIdentifier raw "$info_plist")
 [[ "$bundle_identifier" == "com.jianyintang.FindDiskKiller" ]] || {
@@ -148,7 +150,7 @@ helper_application_identifier=$(plutil \
     -extract 'com\.apple\.application-identifier' raw \
     "$helper_entitlements")
 [[ "$helper_application_identifier" == \
-    "Y3A8BJ4475.com.jianyintang.FindDiskKiller.TraceHelper" ]] || {
+    "Y3A8BJ4475.com.jianyintang.FindDiskKiller.TraceHelper.v2" ]] || {
     echo "Trace helper is missing its system-service application identifier" >&2
     plutil -p "$helper_entitlements" >&2
     exit 1
@@ -160,17 +162,23 @@ plutil -remove 'com\.apple\.application-identifier' "$helper_entitlements"
     exit 1
 }
 
-bundle_program=$(plutil -extract BundleProgram raw "$helper_plist")
-[[ "$bundle_program" == \
+helper_program=$(plutil -extract BundleProgram raw "$helper_plist")
+[[ "$helper_program" == \
     "Contents/Library/LaunchDaemons/com.jianyintang.FindDiskKiller.TraceHelper" ]] || {
-    echo "Unexpected trace helper BundleProgram: $bundle_program" >&2
+    echo "Unexpected trace helper BundleProgram: $helper_program" >&2
     exit 1
 }
 mach_service_enabled=$(plutil \
-    -extract 'MachServices.com\.jianyintang\.FindDiskKiller\.TraceHelper' raw \
+    -extract 'MachServices.com\.jianyintang\.FindDiskKiller\.TraceHelper\.v2' raw \
     "$helper_plist")
 [[ "$mach_service_enabled" == "true" ]] || {
     echo "Trace helper Mach service is not enabled" >&2
+    exit 1
+}
+
+legacy_label=$(plutil -extract Label raw "$legacy_helper_plist")
+[[ "$legacy_label" == "com.jianyintang.FindDiskKiller.TraceHelper" ]] || {
+    echo "Legacy trace helper migration plist has an unexpected label" >&2
     exit 1
 }
 

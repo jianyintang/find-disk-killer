@@ -164,6 +164,15 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
 }
 
 @Test func traceHelperContractBoundsRequestsAndRoundTripsOptionalIdentity() throws {
+    #expect(
+        TraceHelperProtocolConfiguration.helperExecutableName
+            == "com.jianyintang.FindDiskKiller.TraceHelper"
+    )
+    #expect(
+        TraceHelperProtocolConfiguration.machServiceName
+            == "com.jianyintang.FindDiskKiller.TraceHelper.v2"
+    )
+
     #expect(TraceHelperProtocolConfiguration.validatedDuration(9) == nil)
     #expect(TraceHelperProtocolConfiguration.validatedDuration(10) == 10)
     #expect(TraceHelperProtocolConfiguration.validatedDuration(3_600) == 3_600)

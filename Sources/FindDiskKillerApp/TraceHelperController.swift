@@ -79,6 +79,9 @@ private final class TraceHelperServiceManager: TraceHelperServiceManaging {
     private let service = SMAppService.daemon(
         plistName: TraceHelperProtocolConfiguration.launchDaemonPlistName
     )
+    private let legacyService = SMAppService.daemon(
+        plistName: TraceHelperProtocolConfiguration.legacyLaunchDaemonPlistName
+    )
 
     var status: TraceHelperRegistrationStatus {
         switch service.status {
@@ -91,6 +94,7 @@ private final class TraceHelperServiceManager: TraceHelperServiceManaging {
     }
 
     func register() throws {
+        removeLegacyServiceIfNeeded()
         try service.register()
     }
 
@@ -113,6 +117,17 @@ private final class TraceHelperServiceManager: TraceHelperServiceManaging {
 
     func openSystemSettings() {
         SMAppService.openSystemSettingsLoginItems()
+    }
+
+    private func removeLegacyServiceIfNeeded() {
+        switch legacyService.status {
+        case .enabled, .requiresApproval:
+            try? legacyService.unregister()
+        case .notRegistered, .notFound:
+            break
+        @unknown default:
+            break
+        }
     }
 }
 
@@ -488,12 +503,10 @@ final class TraceHelperController {
             try await waitForRegisteredStatus()
             registeredDuringPreparation = true
         case .requiresApproval:
-            // Refresh the pending entry in place so it targets this app build.
-            // Unregistering here turns an existing approval into an explicit
-            // denial on macOS 26 and forces the user through the toggle again.
-            state = .repairing
-            onPhaseChange(.repairing)
-            try await refreshRegisteredService()
+            // A pending service is already registered. Registering it again can
+            // invalidate the approval the user is currently granting.
+            state = .requiresApproval
+            throw TraceHelperClientError.approvalRequired
         case .enabled:
             break
         }
@@ -585,17 +598,10 @@ final class TraceHelperController {
 
     func waitUntilAuthorizedAndReady(maximumWait: Duration = .seconds(180)) async throws {
         let deadline = ContinuousClock.now.advanced(by: maximumWait)
-        var refreshedRegistrationAfterApproval = false
         while ContinuousClock.now < deadline {
             refreshStatus()
             switch state {
             case .enabled, .ready, .connecting:
-                if !refreshedRegistrationAfterApproval {
-                    refreshedRegistrationAfterApproval = true
-                    invalidateConnection()
-                    try await registerWithRetry()
-                    try await Task.sleep(for: retryDelay)
-                }
                 do {
                     try await ping(timeout: .seconds(1))
                     return
@@ -836,7 +842,7 @@ final class TraceHelperController {
             directoryHint: .notDirectory
         )
         let executable = directory.appending(
-            path: TraceHelperProtocolConfiguration.machServiceName,
+            path: TraceHelperProtocolConfiguration.helperExecutableName,
             directoryHint: .notDirectory
         )
         return FileManager.default.fileExists(atPath: plist.path)

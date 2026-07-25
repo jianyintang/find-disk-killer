@@ -31,6 +31,7 @@
 		BD8828B6911CFC4D4E24E5CB /* CFindDiskKillerTrace in Frameworks */ = {isa = PBXBuildFile; productRef = E51665319183E47877DA0458 /* CFindDiskKillerTrace */; };
 		BED81DF72719B8136B7FB922 /* FindDiskKiller.icns in Resources */ = {isa = PBXBuildFile; fileRef = 73D1E9A8CB4ED5D09C2B90D7 /* FindDiskKiller.icns */; };
 		C17D460138BAAD4608FB55FC /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 397BF22044FB3F231AE3EF11 /* SettingsView.swift */; };
+		C51E33E97B8C49192E2349BC /* com.jianyintang.FindDiskKiller.TraceHelper.v2.plist in CopyFiles */ = {isa = PBXBuildFile; fileRef = 9C7843C051E1DAA0FFE4379D /* com.jianyintang.FindDiskKiller.TraceHelper.v2.plist */; };
 		C58B53F593260693F3CBADD7 /* ProcessHoverCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C5B6D633FF601F496BFED97 /* ProcessHoverCard.swift */; };
 		CB385437F19C8B95DB52B8A0 /* FindDiskKillerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5425128EC43659859EFFB0 /* FindDiskKillerApp.swift */; };
 		D13AE54F2957B4238E2008D4 /* com.jianyintang.FindDiskKiller.TraceHelper.plist in CopyFiles */ = {isa = PBXBuildFile; fileRef = 0EC9EF0D9A07E6D818C8D2BF /* com.jianyintang.FindDiskKiller.TraceHelper.plist */; };
@@ -59,6 +60,7 @@
 			dstSubfolderSpec = 1;
 			files = (
 				D13AE54F2957B4238E2008D4 /* com.jianyintang.FindDiskKiller.TraceHelper.plist in CopyFiles */,
+				C51E33E97B8C49192E2349BC /* com.jianyintang.FindDiskKiller.TraceHelper.v2.plist in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -102,6 +104,7 @@
 		7BB11F2EFC76CFC186F5A935 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		7F13AE24E17E72270635D523 /* DisksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisksView.swift; sourceTree = "<group>"; };
 		8F5A2845DA87F6AFE0572292 /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_NOTICES.md; sourceTree = "<group>"; };
+		9C7843C051E1DAA0FFE4379D /* com.jianyintang.FindDiskKiller.TraceHelper.v2.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = com.jianyintang.FindDiskKiller.TraceHelper.v2.plist; sourceTree = "<group>"; };
 		A2D149CD762D0BFD8DD8359E /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = de.lproj/Localizable.strings; sourceTree = "<group>"; };
 		A53F0E89B523716633119DE0 /* FindDiskKillerApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FindDiskKillerApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A8784670E78734B9A225A4E8 /* Localization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Localization.swift; sourceTree = "<group>"; };
@@ -227,6 +230,7 @@
 			isa = PBXGroup;
 			children = (
 				0EC9EF0D9A07E6D818C8D2BF /* com.jianyintang.FindDiskKiller.TraceHelper.plist */,
+				9C7843C051E1DAA0FFE4379D /* com.jianyintang.FindDiskKiller.TraceHelper.v2.plist */,
 			);
 			path = AppConfig;
 			sourceTree = "<group>";
@@ -439,7 +443,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.jianyintang.FindDiskKiller.TraceHelper;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jianyintang.FindDiskKiller.TraceHelper.v2;
 				PRODUCT_NAME = com.jianyintang.FindDiskKiller.TraceHelper;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -479,7 +483,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.jianyintang.FindDiskKiller.TraceHelper;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jianyintang.FindDiskKiller.TraceHelper.v2;
 				PRODUCT_NAME = com.jianyintang.FindDiskKiller.TraceHelper;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;

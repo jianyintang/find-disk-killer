@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>com.jianyintang.FindDiskKiller</string>
+    </array>
+    <key>BundleProgram</key>
+    <string>Contents/Library/LaunchDaemons/com.jianyintang.FindDiskKiller.TraceHelper</string>
+    <key>Label</key>
+    <string>com.jianyintang.FindDiskKiller.TraceHelper.v2</string>
+    <key>MachServices</key>
+    <dict>
+        <key>com.jianyintang.FindDiskKiller.TraceHelper.v2</key>
+        <true/>
+    </dict>
+    <key>ProcessType</key>
+    <string>Adaptive</string>
+</dict>
+</plist>

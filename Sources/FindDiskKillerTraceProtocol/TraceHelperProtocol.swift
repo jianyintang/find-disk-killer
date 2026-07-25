@@ -2,8 +2,12 @@ import Foundation
 
 public enum TraceHelperProtocolConfiguration {
     public static let version = 4
-    public static let machServiceName = "com.jianyintang.FindDiskKiller.TraceHelper"
-    public static let launchDaemonPlistName = "com.jianyintang.FindDiskKiller.TraceHelper.plist"
+    public static let machServiceName = "com.jianyintang.FindDiskKiller.TraceHelper.v2"
+    public static let helperExecutableName = "com.jianyintang.FindDiskKiller.TraceHelper"
+    public static let launchDaemonPlistName =
+        "com.jianyintang.FindDiskKiller.TraceHelper.v2.plist"
+    public static let legacyLaunchDaemonPlistName =
+        "com.jianyintang.FindDiskKiller.TraceHelper.plist"
     public static let minimumDurationSeconds = 10
     public static let maximumDurationSeconds = 3_600
     public static let maximumDrainRecordCount = 2_048
@@ -39,7 +43,7 @@ public enum TraceHelperProtocolConfiguration {
     """
 
     public static let helperCodeSigningRequirement = """
-    anchor apple generic and identifier "com.jianyintang.FindDiskKiller.TraceHelper" and \
+    anchor apple generic and identifier "com.jianyintang.FindDiskKiller.TraceHelper.v2" and \
     certificate leaf[subject.OU] = "Y3A8BJ4475"
     """
 }

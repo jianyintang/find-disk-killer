@@ -5,7 +5,8 @@ set -euo pipefail
 app_path=${1:-/Applications/FindDiskKiller.app}
 expected_version=${EXPECTED_VERSION:-}
 expected_build=${EXPECTED_BUILD:-}
-service_label=com.jianyintang.FindDiskKiller.TraceHelper
+service_label=com.jianyintang.FindDiskKiller.TraceHelper.v2
+helper_executable_name=com.jianyintang.FindDiskKiller.TraceHelper
 
 [[ "$app_path" == /Applications/*.app ]] || {
     echo "The installed helper test only accepts an app in /Applications" >&2
@@ -18,7 +19,7 @@ service_label=com.jianyintang.FindDiskKiller.TraceHelper
 
 info_plist="$app_path/Contents/Info.plist"
 executable="$app_path/Contents/MacOS/FindDiskKiller"
-helper="$app_path/Contents/Library/LaunchDaemons/$service_label"
+helper="$app_path/Contents/Library/LaunchDaemons/$helper_executable_name"
 version=$(plutil -extract CFBundleShortVersionString raw "$info_plist")
 build=$(plutil -extract CFBundleVersion raw "$info_plist")
 
@@ -44,7 +45,7 @@ application_identifier=$(plutil \
     -extract 'com\.apple\.application-identifier' raw \
     "$helper_entitlements")
 [[ "$application_identifier" == \
-    "Y3A8BJ4475.com.jianyintang.FindDiskKiller.TraceHelper" ]] || {
+    "Y3A8BJ4475.com.jianyintang.FindDiskKiller.TraceHelper.v2" ]] || {
     echo "Installed trace helper has an invalid application identifier" >&2
     exit 1
 }

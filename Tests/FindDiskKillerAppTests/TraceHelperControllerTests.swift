@@ -351,7 +351,7 @@ func registrationApprovalIsSurfacedImmediately() async {
 }
 
 @Test @MainActor
-func staleApprovalEntryIsRefreshedInPlaceBeforeOpeningSystemSettings() async {
+func pendingApprovalIsNotRegisteredAgain() async {
     let service = FakeTraceHelperService(status: .requiresApproval)
     service.statusAfterRegistration = .requiresApproval
     let controller = makeController(
@@ -363,7 +363,7 @@ func staleApprovalEntryIsRefreshedInPlaceBeforeOpeningSystemSettings() async {
         try await controller.prepareForTracing(recoveryMode: .automatic)
     }
 
-    #expect(service.registerCount == 1)
+    #expect(service.registerCount == 0)
     #expect(service.unregisterCount == 0)
     #expect(controller.state == .requiresApproval)
 }
@@ -396,7 +396,7 @@ func operationNotPermittedRegistrationWaitsForSystemApproval() async throws {
 }
 
 @Test @MainActor
-func approvalCompletionRefreshesTheLaunchdRegistrationBeforePing() async throws {
+func approvalCompletionPingsWithoutRegisteringAgain() async throws {
     let service = FakeTraceHelperService(status: .enabled)
     let controller = makeController(
         service: service,
@@ -405,7 +405,7 @@ func approvalCompletionRefreshesTheLaunchdRegistrationBeforePing() async throws 
 
     try await controller.waitUntilAuthorizedAndReady()
 
-    #expect(service.registerCount == 1)
+    #expect(service.registerCount == 0)
     #expect(service.unregisterCount == 0)
     #expect(controller.state == .ready)
 }

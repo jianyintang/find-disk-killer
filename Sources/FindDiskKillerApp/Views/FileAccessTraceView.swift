@@ -201,8 +201,10 @@ struct FileAccessTraceView: View {
             Button(L10n.text("启用追踪"), action: store.requestPermission)
                 .buttonStyle(.borderedProminent)
         case .waitingForApproval:
-            Button(L10n.text("打开登录项设置"), action: store.openApprovalSettings)
-                .buttonStyle(.borderedProminent)
+            Button(action: store.openApprovalSettings) {
+                Label(L10n.text("打开登录项设置"), systemImage: "gearshape")
+            }
+            .buttonStyle(.borderedProminent)
         case .repairAvailable:
             Button(action: store.repairAndRetry) {
                 Label(L10n.text("修复并重试"), systemImage: "wrench.and.screwdriver")
