@@ -90,17 +90,10 @@ if [[ "$skip_notarization" != 1 ]]; then
     xcrun stapler validate "$app_path"
 fi
 
-staging_directory="$temporary_directory/dmg"
-mkdir -p "$staging_directory"
-ditto "$app_path" "$staging_directory/FindDiskKiller.app"
-ln -s /Applications "$staging_directory/Applications"
-
-hdiutil create \
-    -volname "FindDiskKiller" \
-    -srcfolder "$staging_directory" \
-    -format UDZO \
-    -imagekey zlib-level=9 \
-    "$dmg_path"
+/bin/bash "$root_directory/scripts/create-dmg.sh" \
+    "$app_path" \
+    "$dmg_path" \
+    "FindDiskKiller"
 codesign --force --timestamp --sign "$sign_identity" "$dmg_path"
 
 if [[ "$skip_notarization" == 1 ]]; then
