@@ -154,7 +154,8 @@ private func makeController(
     service: FakeTraceHelperService,
     transport: FakeTraceHelperTransport,
     store: FakeRegistrationStore = FakeRegistrationStore(),
-    bundleURL: URL = URL(fileURLWithPath: "/Applications/FindDiskKiller.app")
+    bundleURL: URL = URL(fileURLWithPath: "/Applications/FindDiskKiller.app"),
+    readinessTimeout: Duration = .milliseconds(50)
 ) -> TraceHelperController {
     TraceHelperController(
         service: service,
@@ -164,7 +165,7 @@ private func makeController(
         appBundleIdentifier: "com.jianyintang.FindDiskKiller",
         appBuild: "103",
         registrationSettleTimeout: .milliseconds(50),
-        readinessTimeout: .milliseconds(50),
+        readinessTimeout: readinessTimeout,
         retryDelay: .milliseconds(1),
         packagedServicePresenceOverride: true
     )
@@ -189,7 +190,11 @@ func freshInstallRegistersAndBecomesHealthy() async throws {
 func freshRegistrationWaitsForBootstrapWithoutReplacingTheService() async throws {
     let service = FakeTraceHelperService(status: .notRegistered)
     let transport = FakeTraceHelperTransport([.unavailable, .ready])
-    let controller = makeController(service: service, transport: transport)
+    let controller = makeController(
+        service: service,
+        transport: transport,
+        readinessTimeout: .seconds(2)
+    )
 
     try await controller.prepareForTracing(recoveryMode: .automatic)
 
@@ -217,7 +222,11 @@ func freshRegistrationWaitsForServiceStatusToSettle() async throws {
     let service = FakeTraceHelperService(status: .notRegistered)
     service.registrationStatusDelayReads = 2
     let transport = FakeTraceHelperTransport([.ready])
-    let controller = makeController(service: service, transport: transport)
+    let controller = makeController(
+        service: service,
+        transport: transport,
+        readinessTimeout: .seconds(2)
+    )
 
     try await controller.prepareForTracing(recoveryMode: .automatic)
 
