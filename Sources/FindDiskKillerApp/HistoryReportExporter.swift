@@ -52,7 +52,9 @@ enum HistoryReportExporter {
         var rows = [
             "timestamp_iso8601,duration_seconds,disk_read_bytes,disk_write_bytes,"
                 + "network_receive_bytes,network_send_bytes,average_cpu_percent,"
-                + "peak_cpu_percent,report_coverage_ratio,partial"
+                + "peak_cpu_percent,disk_observed_seconds,network_observed_seconds,"
+                + "cpu_observed_seconds,disk_coverage_ratio,network_coverage_ratio,"
+                + "cpu_coverage_ratio,report_coverage_ratio,partial"
         ]
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
@@ -60,14 +62,24 @@ enum HistoryReportExporter {
             rows.append([
                 csv(formatter.string(from: point.timestamp)),
                 number(point.duration),
-                String(point.diskReadBytes),
-                String(point.diskWriteBytes),
-                String(point.networkReceiveBytes),
-                String(point.networkSendBytes),
+                point.diskObservedSeconds > 0 ? String(point.diskReadBytes) : "",
+                point.diskObservedSeconds > 0 ? String(point.diskWriteBytes) : "",
+                point.networkObservedSeconds > 0 ? String(point.networkReceiveBytes) : "",
+                point.networkObservedSeconds > 0 ? String(point.networkSendBytes) : "",
                 optionalNumber(point.averageCPUPercent),
                 optionalNumber(point.peakCPUPercent),
+                number(point.diskObservedSeconds),
+                number(point.networkObservedSeconds),
+                number(point.cpuObservedSeconds),
+                number(report.summary.diskCoverage),
+                number(report.summary.networkCoverage),
+                number(report.summary.cpuCoverage),
                 number(report.summary.coverage),
-                report.summary.coverage < 0.7 ? "true" : "false"
+                min(
+                    report.summary.diskCoverage,
+                    report.summary.networkCoverage,
+                    report.summary.cpuCoverage
+                ) < 0.7 ? "true" : "false"
             ].joined(separator: ","))
         }
         return Data((rows.joined(separator: "\r\n") + "\r\n").utf8)
@@ -116,6 +128,9 @@ enum HistoryReportExporter {
         let dateFormatter = ISO8601DateFormatter()
         dateFormatter.formatOptions = [.withInternetDateTime]
         let coverage = String(format: "%.1f%%", report.summary.coverage * 100)
+        let diskCoverage = String(format: "%.1f%%", report.summary.diskCoverage * 100)
+        let networkCoverage = String(format: "%.1f%%", report.summary.networkCoverage * 100)
+        let cpuCoverage = String(format: "%.1f%%", report.summary.cpuCoverage * 100)
         let applications = report.applications.prefix(12).enumerated().map { index, app in
             "\(index + 1). \(app.name)  "
                 + "write \(ByteRateFormatter.bytes(app.writeBytes))  "
@@ -127,13 +142,22 @@ enum HistoryReportExporter {
         Range: \(dateFormatter.string(from: report.start)) to \(dateFormatter.string(from: report.end))
         Generated: \(dateFormatter.string(from: Date()))
         Coverage: \(coverage)
+        Disk coverage: \(diskCoverage)
+        CPU coverage: \(cpuCoverage)
+        Network coverage: \(networkCoverage)
 
-        Physical disk writes: \(ByteRateFormatter.bytes(report.summary.diskWriteBytes))
-        Physical disk reads: \(ByteRateFormatter.bytes(report.summary.diskReadBytes))
+        Physical disk writes: \(report.summary.diskObservedSeconds > 0
+            ? ByteRateFormatter.bytes(report.summary.diskWriteBytes)
+            : "Unavailable")
+        Physical disk reads: \(report.summary.diskObservedSeconds > 0
+            ? ByteRateFormatter.bytes(report.summary.diskReadBytes)
+            : "Unavailable")
         Average CPU: \(report.summary.averageCPUPercent.map(PercentFormatter.cpu) ?? "Unavailable")
-        Network transfer: \(ByteRateFormatter.bytes(
-            report.summary.networkReceiveBytes + report.summary.networkSendBytes
-        ))
+        Network transfer: \(report.summary.networkObservedSeconds > 0
+            ? ByteRateFormatter.bytes(
+                report.summary.networkReceiveBytes + report.summary.networkSendBytes
+            )
+            : "Unavailable")
 
         Leading applications (logical activity)
         \(applications.isEmpty ? "No application detail for this period." : applications)

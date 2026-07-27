@@ -213,7 +213,8 @@ struct OverviewView: View {
                 selectedProcessID: selectedProcessID,
                 limit: 12,
                 hoverCoordinator: processHoverCoordinator,
-                onSelect: presentProcess
+                onSelect: presentProcess,
+                isLoading: store.lastUpdatedAt == nil
             )
         }
     }
@@ -516,9 +517,11 @@ struct ProcessTable: View {
     var scrollAxes: Axis.Set = .horizontal
     let hoverCoordinator: ProcessHoverCoordinator
     let onSelect: (ProcessActivity) -> Void
+    var isLoading = false
     @State private var sortKey: ProcessSortKey = .cpuCurrent
     @State private var ascending = false
     @State private var columnWidths = ProcessColumnWidths.load()
+    @State private var availableTableWidth: CGFloat = 0
 
     var body: some View {
         ScrollView(scrollAxes) {
@@ -528,7 +531,9 @@ struct ProcessTable: View {
                     .frame(height: 34)
                 Divider()
 
-                if processSource.isEmpty {
+                if isLoading, processSource.isEmpty {
+                    loadingRows
+                } else if processSource.isEmpty {
                     ContentUnavailableView(L10n.text("正在建立应用基线"), systemImage: "waveform.path.ecg")
                         .frame(width: tableWidth)
                         .frame(minHeight: 180)
@@ -577,7 +582,20 @@ struct ProcessTable: View {
             }
             .frame(width: tableWidth, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .scrollIndicators(.automatic)
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(
+                    key: ProcessTableWidthPreferenceKey.self,
+                    value: geometry.size.width
+                )
+            }
+        }
+        .onPreferenceChange(ProcessTableWidthPreferenceKey.self) { width in
+            guard width.isFinite, width > 0, abs(width - availableTableWidth) > 0.5 else { return }
+            availableTableWidth = width
+        }
         .onHover { isHovered in
             hoverCoordinator.tableHoverChanged(isHovered, processes: processes)
         }
@@ -587,20 +605,21 @@ struct ProcessTable: View {
     }
 
     private func processColumns(isHeader: Bool = false) -> some View {
-        HStack(spacing: 0) {
-            sortButton("应用", key: .name, width: columnWidths[.application])
+        let widths = displayedColumnWidths
+        return HStack(spacing: 0) {
+            sortButton("应用", key: .name, width: widths[.application])
             resizeHandle(after: .application)
-            sortButton("CPU · 5 秒", key: .cpuCurrent, width: columnWidths[.cpu])
+            sortButton("CPU · 5 秒", key: .cpuCurrent, width: widths[.cpu])
             resizeHandle(after: .cpu)
-            sortButton("写入总量", key: .writeTotal, width: columnWidths[.writeTotal])
+            sortButton("写入总量", key: .writeTotal, width: widths[.writeTotal])
             resizeHandle(after: .writeTotal)
-            sortButton("当前写入", key: .writeCurrent, width: columnWidths[.writeCurrent])
+            sortButton("当前写入", key: .writeCurrent, width: widths[.writeCurrent])
             resizeHandle(after: .writeCurrent)
-            sortButton("写入峰值", key: .writePeak, width: columnWidths[.writePeak])
+            sortButton("写入峰值", key: .writePeak, width: widths[.writePeak])
             resizeHandle(after: .writePeak)
-            sortButton("下载平均", key: .networkDownload, width: columnWidths[.networkDownload])
+            sortButton("下载平均", key: .networkDownload, width: widths[.networkDownload])
             resizeHandle(after: .networkDownload)
-            sortButton("上传平均", key: .networkUpload, width: columnWidths[.networkUpload])
+            sortButton("上传平均", key: .networkUpload, width: widths[.networkUpload])
             resizeHandle(after: .networkUpload)
         }
         .font(.caption.weight(isHeader ? .semibold : .regular))
@@ -608,7 +627,8 @@ struct ProcessTable: View {
     }
 
     private func processColumns(process: ProcessActivity) -> some View {
-        HStack(spacing: 0) {
+        let widths = displayedColumnWidths
+        return HStack(spacing: 0) {
             HStack(spacing: 9) {
                 ProcessIcon(process: process, size: 26)
                 VStack(alignment: .leading, spacing: 1) {
@@ -622,35 +642,83 @@ struct ProcessTable: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(width: columnWidths[.application], alignment: .leading)
+            .frame(width: widths[.application], alignment: .leading)
             .help(process.executablePath)
 
             columnGap()
-            metricText(PercentFormatter.cpu(process.currentCPUPercent), width: columnWidths[.cpu])
+            metricText(PercentFormatter.cpu(process.currentCPUPercent), width: widths[.cpu])
             columnGap()
-            metricText(ByteRateFormatter.bytes(process.totalWriteBytes), width: columnWidths[.writeTotal])
+            metricText(ByteRateFormatter.bytes(process.totalWriteBytes), width: widths[.writeTotal])
             columnGap()
-            metricText(ByteRateFormatter.rate(process.currentWriteBytesPerSecond), width: columnWidths[.writeCurrent])
+            metricText(ByteRateFormatter.rate(process.currentWriteBytesPerSecond), width: widths[.writeCurrent])
             columnGap()
-            metricText(ByteRateFormatter.rate(process.peakWriteBytesPerSecond), width: columnWidths[.writePeak])
+            metricText(ByteRateFormatter.rate(process.peakWriteBytesPerSecond), width: widths[.writePeak])
             columnGap()
             if process.isNetworkAvailable {
                 metricText(
                     ByteRateFormatter.rate(process.averageNetworkReceiveBytesPerSecond),
-                    width: columnWidths[.networkDownload]
+                    width: widths[.networkDownload]
                 )
                 columnGap()
                 metricText(
                     ByteRateFormatter.rate(process.averageNetworkSendBytesPerSecond),
-                    width: columnWidths[.networkUpload]
+                    width: widths[.networkUpload]
                 )
                 columnGap()
             } else {
-                metricText(L10n.text("缺口"), width: columnWidths[.networkDownload])
+                metricText(L10n.text("缺口"), width: widths[.networkDownload])
                 columnGap()
-                metricText(L10n.text("缺口"), width: columnWidths[.networkUpload])
+                metricText(L10n.text("缺口"), width: widths[.networkUpload])
                 columnGap()
             }
+        }
+        .font(.callout)
+    }
+
+    private var loadingRows: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(0..<6, id: \.self) { _ in
+                loadingProcessColumns
+                    .padding(.horizontal, 14)
+                    .frame(height: 56)
+                Divider().padding(.leading, 8)
+            }
+        }
+        .redacted(reason: .placeholder)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private var loadingProcessColumns: some View {
+        let widths = displayedColumnWidths
+        return HStack(spacing: 0) {
+            HStack(spacing: 9) {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(.quaternary)
+                    .frame(width: 26, height: 26)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Application activity").lineLimit(1)
+                    Text("Full disk I/O")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(width: widths[.application], alignment: .leading)
+
+            columnGap()
+            metricText("00.0%", width: widths[.cpu])
+            columnGap()
+            metricText("000 MB", width: widths[.writeTotal])
+            columnGap()
+            metricText("0.00 MB/s", width: widths[.writeCurrent])
+            columnGap()
+            metricText("0.00 MB/s", width: widths[.writePeak])
+            columnGap()
+            metricText("0.00 MB/s", width: widths[.networkDownload])
+            columnGap()
+            metricText("0.00 MB/s", width: widths[.networkUpload])
+            columnGap()
         }
         .font(.callout)
     }
@@ -660,7 +728,7 @@ struct ProcessTable: View {
             .monospacedDigit()
             .lineLimit(1)
             .minimumScaleFactor(0.75)
-            .frame(width: width, alignment: .leading)
+            .frame(width: width, alignment: .trailing)
     }
 
     private func columnGap() -> some View {
@@ -677,8 +745,11 @@ struct ProcessTable: View {
     }
 
     private var tableWidth: CGFloat {
-        ProcessColumn.allCases.reduce(28) { $0 + columnWidths[$1] }
-            + CGFloat(ProcessColumn.allCases.count) * ProcessColumn.resizeHandleWidth
+        displayedColumnWidths.tableWidth
+    }
+
+    private var displayedColumnWidths: ProcessColumnWidths {
+        columnWidths.adapted(to: availableTableWidth)
     }
 
     private func sortButton(
@@ -695,6 +766,9 @@ struct ProcessTable: View {
             }
         } label: {
             HStack(spacing: 3) {
+                if key != .name {
+                    Spacer(minLength: 0)
+                }
                 Text(L10n.text(title))
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
@@ -702,10 +776,12 @@ struct ProcessTable: View {
                     Image(systemName: ascending ? "chevron.up" : "chevron.down")
                         .font(.system(size: 8, weight: .bold))
                 }
-                Spacer(minLength: 0)
+                if key == .name {
+                    Spacer(minLength: 0)
+                }
             }
             .padding(.horizontal, 5)
-            .frame(width: width, height: 34, alignment: .leading)
+            .frame(width: width, height: 34, alignment: key == .name ? .leading : .trailing)
             .foregroundStyle(sortKey == key ? Color.primary : Color.secondary)
             .background {
                 if sortKey == key {
@@ -891,7 +967,7 @@ private struct ProcessRowButtonStyle: ButtonStyle {
     }
 }
 
-private enum ProcessColumn: String, CaseIterable {
+enum ProcessColumn: String, CaseIterable {
     case application
     case cpu
     case writeTotal
@@ -901,6 +977,7 @@ private enum ProcessColumn: String, CaseIterable {
     case networkUpload
 
     static let resizeHandleWidth: CGFloat = 12
+    static let adaptiveApplicationUpperBound: CGFloat = 360
 
     var defaultWidth: CGFloat {
         switch self {
@@ -920,10 +997,28 @@ private enum ProcessColumn: String, CaseIterable {
     }
 
     var defaultsKey: String { "processTableColumnWidth.\(rawValue)" }
+
+    var adaptiveWeight: CGFloat {
+        switch self {
+        case .application: 0
+        case .cpu: 0.85
+        case .writeTotal: 1
+        case .writeCurrent, .writePeak: 1.05
+        case .networkDownload, .networkUpload: 1.1
+        }
+    }
 }
 
-private struct ProcessColumnWidths {
+struct ProcessColumnWidths: Equatable {
     private var values: [ProcessColumn: CGFloat]
+
+    static let horizontalPadding: CGFloat = 28
+
+    static var defaults: ProcessColumnWidths {
+        ProcessColumnWidths(values: Dictionary(uniqueKeysWithValues: ProcessColumn.allCases.map {
+            ($0, $0.defaultWidth)
+        }))
+    }
 
     subscript(column: ProcessColumn) -> CGFloat {
         get { values[column] ?? column.defaultWidth }
@@ -931,16 +1026,53 @@ private struct ProcessColumnWidths {
     }
 
     static func load(defaults: UserDefaults = .standard) -> ProcessColumnWidths {
-        ProcessColumnWidths(values: Dictionary(uniqueKeysWithValues: ProcessColumn.allCases.map {
-            let stored = defaults.object(forKey: $0.defaultsKey) as? Double
-            return ($0, CGFloat(stored ?? Double($0.defaultWidth)))
-        }))
+        var widths = ProcessColumnWidths.defaults
+        for column in ProcessColumn.allCases {
+            guard let stored = defaults.object(forKey: column.defaultsKey) as? Double else { continue }
+            widths[column] = CGFloat(stored)
+        }
+        return widths
     }
 
     func save(defaults: UserDefaults = .standard) {
         for column in ProcessColumn.allCases {
             defaults.set(Double(self[column]), forKey: column.defaultsKey)
         }
+    }
+
+    var tableWidth: CGFloat {
+        ProcessColumn.allCases.reduce(Self.horizontalPadding) { $0 + self[$1] }
+            + CGFloat(ProcessColumn.allCases.count) * ProcessColumn.resizeHandleWidth
+    }
+
+    func adapted(to availableWidth: CGFloat) -> ProcessColumnWidths {
+        guard availableWidth.isFinite, availableWidth > tableWidth else { return self }
+
+        var resolved = self
+        var remaining = availableWidth - tableWidth
+        let applicationWidth = self[.application]
+        let applicationTarget = min(
+            max(applicationWidth, availableWidth * 0.22),
+            max(applicationWidth, ProcessColumn.adaptiveApplicationUpperBound)
+        )
+        let applicationGrowth = min(remaining, max(0, applicationTarget - applicationWidth))
+        resolved.values[.application] = applicationWidth + applicationGrowth
+        remaining -= applicationGrowth
+
+        let metricColumns = ProcessColumn.allCases.filter { $0 != .application }
+        let totalWeight = metricColumns.reduce(CGFloat.zero) { $0 + $1.adaptiveWeight }
+        for column in metricColumns {
+            resolved.values[column] = self[column] + remaining * column.adaptiveWeight / totalWeight
+        }
+        return resolved
+    }
+}
+
+private struct ProcessTableWidthPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 

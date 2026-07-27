@@ -18,6 +18,22 @@ enum AppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .reports: "chart.xyaxis.line"
         }
     }
+
+    var navigationPlaceholderKind: SectionNavigationPlaceholderKind {
+        switch self {
+        case .processes: .processes
+        case .reports: .history
+        case .overview: .overview
+        case .disks: .resources
+        }
+    }
+}
+
+enum SectionNavigationPlaceholderKind: Equatable, Sendable {
+    case overview
+    case processes
+    case history
+    case resources
 }
 
 struct RootView: View {
@@ -195,6 +211,7 @@ private struct SectionPreviewInput: Sendable {
 private struct ProcessPreviewRow: Identifiable, Sendable {
     let id: String
     let name: String
+    let subtitle: String
     let cpu: String
     let totalWrite: String
     let currentWrite: String
@@ -205,6 +222,9 @@ private struct ProcessPreviewRow: Identifiable, Sendable {
     init(_ process: ProcessActivity) {
         id = process.id
         name = process.localizedDisplayName
+        subtitle = process.memberCount > 1
+            ? L10n.format("%d 个进程 · 全盘合计", process.memberCount)
+            : L10n.text("全盘 I/O 合计")
         cpu = PercentFormatter.cpu(process.currentCPUPercent)
         totalWrite = ByteRateFormatter.bytes(process.totalWriteBytes)
         currentWrite = ByteRateFormatter.rate(process.currentWriteBytesPerSecond)
@@ -221,6 +241,7 @@ private struct ProcessPreviewRow: Identifiable, Sendable {
         Self(
             id: "placeholder-\(index)",
             name: "Application activity",
+            subtitle: "Full disk I/O",
             cpu: "00.0%",
             totalWrite: "000 MB",
             currentWrite: "0.00 MB/s",
@@ -233,6 +254,7 @@ private struct ProcessPreviewRow: Identifiable, Sendable {
     private init(
         id: String,
         name: String,
+        subtitle: String,
         cpu: String,
         totalWrite: String,
         currentWrite: String,
@@ -242,6 +264,7 @@ private struct ProcessPreviewRow: Identifiable, Sendable {
     ) {
         self.id = id
         self.name = name
+        self.subtitle = subtitle
         self.cpu = cpu
         self.totalWrite = totalWrite
         self.currentWrite = currentWrite
@@ -262,16 +285,22 @@ private struct SectionNavigationPlaceholder: View {
     let section: AppSection
     let snapshot: SectionPreviewSnapshot?
     @Binding var processSearchText: String
+    @State private var processTableWidth: CGFloat = 0
 
     var body: some View {
         Group {
-            if section == .processes {
+            switch section.navigationPlaceholderKind {
+            case .overview:
+                overviewPlaceholder
+            case .processes:
                 processPlaceholder
                     .searchable(
                         text: $processSearchText,
                         prompt: L10n.text("搜索应用或进程")
                     )
-            } else {
+            case .history:
+                HistoryReportNavigationPlaceholder()
+            case .resources:
                 resourcePlaceholder
             }
         }
@@ -299,6 +328,195 @@ private struct SectionNavigationPlaceholder: View {
         .accessibilityElement(children: .combine)
     }
 
+    private var overviewPlaceholder: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 24) {
+                HStack(alignment: .center, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(L10n.text("应用资源行为正常"))
+                            .font(.title2.weight(.semibold))
+                        Text(L10n.text("后台持续观察应用的磁盘、CPU 与网络活动"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Picker(
+                        L10n.text("时间范围"),
+                        selection: Binding.constant(SampleRange.minute)
+                    ) {
+                        ForEach(SampleRange.allCases) { range in
+                            Text(range.localizedTitle).tag(range)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 250)
+                    Button {} label: {
+                        Image(systemName: "pause.fill")
+                    }
+                }
+
+                HStack(spacing: 14) {
+                    overviewMetric("CPU · 最近 5 秒", "00.0%", "cpu", .blue)
+                    Divider().frame(height: 42)
+                    overviewMetric("磁盘写入 · 最近 5 秒", "0.00 MB/s", "pencil.line", .orange)
+                    Divider().frame(height: 42)
+                    overviewMetric("网络 · 最近 5 秒", "0.00 MB/s", "network", .green)
+                    Divider().frame(height: 42)
+                    overviewMetric("可见应用", "000", "square.stack.3d.up", .purple)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    SectionHeading(
+                        L10n.text("磁盘实时"),
+                        subtitle: L10n.text("最近 5 秒的设备读写，按挂载卷名称展示")
+                    )
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 280), spacing: 20)],
+                        alignment: .leading,
+                        spacing: 0
+                    ) {
+                        ForEach(previewVolumes) { volume in
+                            overviewVolumeRow(volume)
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    SectionHeading(
+                        L10n.text("资源趋势"),
+                        subtitle: L10n.text("物理设备吞吐，读取实线、写入虚线")
+                    ) {
+                        Picker(
+                            L10n.text("资源"),
+                            selection: Binding.constant("disk")
+                        ) {
+                            Text(L10n.text("磁盘 I/O")).tag("disk")
+                            Text("CPU").tag("cpu")
+                            Text(L10n.text("网络")).tag("network")
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 250)
+                    }
+                    overviewChartPlaceholder
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.text("正在活动的应用"))
+                                .font(.headline)
+                            Text(L10n.text("一个应用的磁盘、CPU 与网络行为汇总在同一处"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(L10n.text("点击表头排序 · 显示前 12 个"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.bottom, 8)
+
+                    overviewApplicationTable
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+            .padding(.bottom, 28)
+            .redacted(reason: .placeholder)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func overviewMetric(
+        _ title: String,
+        _ value: String,
+        _ symbol: String,
+        _ color: Color
+    ) -> some View {
+        MetricValue(title: title, value: value, symbol: symbol, color: color)
+    }
+
+    private func overviewVolumeRow(_ volume: VolumePreviewRow) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "internaldrive")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 24, height: 24)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(volume.name)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+                Text(L10n.text("设备实时吞吐"))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 10) {
+                Text(ByteRateFormatter.rate(volume.readRate))
+                    .foregroundStyle(.teal)
+                Text(ByteRateFormatter.rate(volume.writeRate))
+                    .foregroundStyle(.orange)
+            }
+            .font(.caption.monospaced().weight(.medium))
+        }
+        .padding(.vertical, 8)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private var overviewChartPlaceholder: some View {
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                ForEach(0..<5, id: \.self) { _ in
+                    Divider()
+                    Spacer()
+                }
+            }
+            HStack(spacing: 14) {
+                Label(L10n.text("读取"), systemImage: "circle.fill")
+                Label(L10n.text("写入"), systemImage: "circle.fill")
+            }
+            .font(.caption)
+            .padding(.leading, 64)
+            .padding(.top, 4)
+        }
+        .frame(height: 176)
+    }
+
+    private var overviewApplicationTable: some View {
+        ScrollView(.horizontal) {
+            VStack(spacing: 0) {
+                previewTableHeader
+                Divider()
+                ForEach(previewProcesses) { process in
+                    previewProcessRow(process)
+                    Divider().padding(.leading, 8)
+                }
+            }
+            .frame(width: previewTableWidth, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .scrollIndicators(.automatic)
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(
+                    key: ProcessPlaceholderWidthPreferenceKey.self,
+                    value: geometry.size.width
+                )
+            }
+        }
+        .onPreferenceChange(ProcessPlaceholderWidthPreferenceKey.self) { width in
+            guard width.isFinite, width > 0, abs(width - processTableWidth) > 0.5 else { return }
+            processTableWidth = width
+        }
+    }
+
     private var processPlaceholder: some View {
         VStack(spacing: 0) {
             HStack {
@@ -315,12 +533,15 @@ private struct SectionNavigationPlaceholder: View {
                 .redacted(reason: .placeholder)
                 .disabled(true)
                 Spacer()
-                statusLabel
+                EvidenceLabel(
+                    text: "I/O · CPU · 网络 · 当前用户可见",
+                    symbol: "person.crop.circle.badge.checkmark"
+                )
             }
             .padding(16)
 
             Divider()
-            ScrollView(.horizontal) {
+            ScrollView([.horizontal, .vertical]) {
                 VStack(spacing: 0) {
                     previewTableHeader
                     Divider()
@@ -329,9 +550,22 @@ private struct SectionNavigationPlaceholder: View {
                         Divider().padding(.leading, 14)
                     }
                 }
-                .frame(width: 909, alignment: .leading)
+                .frame(width: previewTableWidth, alignment: .leading)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .scrollIndicators(.automatic)
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(
+                        key: ProcessPlaceholderWidthPreferenceKey.self,
+                        value: geometry.size.width
+                    )
+                }
+            }
+            .onPreferenceChange(ProcessPlaceholderWidthPreferenceKey.self) { width in
+                guard width.isFinite, width > 0, abs(width - processTableWidth) > 0.5 else { return }
+                processTableWidth = width
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .contentShape(Rectangle())
@@ -413,14 +647,22 @@ private struct SectionNavigationPlaceholder: View {
     }
 
     private var previewTableHeader: some View {
-        HStack(spacing: 0) {
-            previewHeader("应用", width: 250, alignment: .leading)
-            previewHeader("CPU · 5 秒", width: 94)
-            previewHeader("写入总量", width: 105)
-            previewHeader("当前写入", width: 108)
-            previewHeader("写入峰值", width: 108)
-            previewHeader("下载平均", width: 108)
-            previewHeader("上传平均", width: 108)
+        let widths = previewColumnWidths
+        return HStack(spacing: 0) {
+            previewHeader("应用", width: widths[.application], alignment: .leading)
+            previewColumnGap
+            previewHeader("CPU · 5 秒", width: widths[.cpu])
+            previewColumnGap
+            previewHeader("写入总量", width: widths[.writeTotal])
+            previewColumnGap
+            previewHeader("当前写入", width: widths[.writeCurrent])
+            previewColumnGap
+            previewHeader("写入峰值", width: widths[.writePeak])
+            previewColumnGap
+            previewHeader("下载平均", width: widths[.networkDownload])
+            previewColumnGap
+            previewHeader("上传平均", width: widths[.networkUpload])
+            previewColumnGap
         }
         .padding(.horizontal, 14)
         .frame(height: 34)
@@ -438,20 +680,34 @@ private struct SectionNavigationPlaceholder: View {
     }
 
     private func previewProcessRow(_ process: ProcessPreviewRow) -> some View {
-        HStack(spacing: 0) {
+        let widths = previewColumnWidths
+        return HStack(spacing: 0) {
             HStack(spacing: 9) {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(.quaternary)
                     .frame(width: 26, height: 26)
-                Text(process.name).lineLimit(1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(process.name).lineLimit(1)
+                    Text(process.subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
-            .frame(width: 250, alignment: .leading)
-            previewValue(process.cpu, width: 94)
-            previewValue(process.totalWrite, width: 105)
-            previewValue(process.currentWrite, width: 108)
-            previewValue(process.peakWrite, width: 108)
-            previewValue(process.download, width: 108)
-            previewValue(process.upload, width: 108)
+            .frame(width: widths[.application], alignment: .leading)
+            previewColumnGap
+            previewValue(process.cpu, width: widths[.cpu])
+            previewColumnGap
+            previewValue(process.totalWrite, width: widths[.writeTotal])
+            previewColumnGap
+            previewValue(process.currentWrite, width: widths[.writeCurrent])
+            previewColumnGap
+            previewValue(process.peakWrite, width: widths[.writePeak])
+            previewColumnGap
+            previewValue(process.download, width: widths[.networkDownload])
+            previewColumnGap
+            previewValue(process.upload, width: widths[.networkUpload])
+            previewColumnGap
         }
         .padding(.horizontal, 14)
         .frame(height: 56)
@@ -463,6 +719,26 @@ private struct SectionNavigationPlaceholder: View {
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
             .frame(width: width, alignment: .trailing)
+    }
+
+    private var previewColumnWidths: ProcessColumnWidths {
+        ProcessColumnWidths.load().adapted(to: processTableWidth)
+    }
+
+    private var previewTableWidth: CGFloat {
+        previewColumnWidths.tableWidth
+    }
+
+    private var previewColumnGap: some View {
+        Color.clear.frame(width: ProcessColumn.resizeHandleWidth)
+    }
+}
+
+private struct ProcessPlaceholderWidthPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 

@@ -103,11 +103,13 @@ private final class SQLiteConnection: @unchecked Sendable {
 struct HistoryMinuteBucket: Sendable {
     let startEpoch: Int64
     var observedSeconds = 0.0
+    var diskObservedSeconds = 0.0
     var diskReadBytes: UInt64 = 0
     var diskWriteBytes: UInt64 = 0
     var cpuSeconds = 0.0
     var cpuObservedSeconds = 0.0
     var cpuPeak: Double?
+    var networkObservedSeconds = 0.0
     var networkReceiveBytes: UInt64 = 0
     var networkSendBytes: UInt64 = 0
     var applications: [String: MutableApplicationBucket] = [:]
@@ -116,10 +118,16 @@ struct HistoryMinuteBucket: Sendable {
     mutating func add(_ sample: HistorySample) {
         let duration = max(0, min(sample.duration, 60))
         observedSeconds += duration
-        diskReadBytes = diskReadBytes.addingClamped(sample.diskReadBytes)
-        diskWriteBytes = diskWriteBytes.addingClamped(sample.diskWriteBytes)
-        networkReceiveBytes = networkReceiveBytes.addingClamped(sample.networkReceiveBytes)
-        networkSendBytes = networkSendBytes.addingClamped(sample.networkSendBytes)
+        if sample.diskStatsAvailable {
+            diskObservedSeconds += duration
+            diskReadBytes = diskReadBytes.addingClamped(sample.diskReadBytes)
+            diskWriteBytes = diskWriteBytes.addingClamped(sample.diskWriteBytes)
+        }
+        if sample.networkStatsAvailable {
+            networkObservedSeconds += duration
+            networkReceiveBytes = networkReceiveBytes.addingClamped(sample.networkReceiveBytes)
+            networkSendBytes = networkSendBytes.addingClamped(sample.networkSendBytes)
+        }
         if let cpu = sample.cpuPercent, cpu.isFinite {
             let bounded = max(0, cpu)
             cpuSeconds += bounded / 100 * duration
@@ -276,6 +284,7 @@ public actor HistoryRecorder {
 }
 
 public actor HistoryDatabase {
+    private static let currentSchemaVersion: Int32 = 1
     private var connection: SQLiteConnection?
     private let fileURL: URL?
     private let fileOperations: any HistoryFileOperating
@@ -336,11 +345,59 @@ public actor HistoryDatabase {
 
         let connection = try SQLiteConnection(path: path)
         do {
-            try execute(on: connection.handle, sql: schema)
+            try configure(connection.handle)
+            try migrate(connection.handle)
             try protectHistoryFiles(at: fileURL, fileOperations: fileOperations)
             return (connection, fileURL)
         } catch {
             try? connection.close()
+            throw error
+        }
+    }
+
+    private static func configure(_ handle: OpaquePointer) throws {
+        try execute(on: handle, sql: connectionPragmas)
+    }
+
+    private static func migrate(_ handle: OpaquePointer) throws {
+        let version = try pragmaInt(on: handle, name: "user_version")
+        guard version <= currentSchemaVersion else {
+            throw HistoryDatabaseError(message: "Monitoring history was created by a newer app version")
+        }
+        guard version < currentSchemaVersion else {
+            try execute(on: handle, sql: currentSchema)
+            return
+        }
+
+        try execute(on: handle, sql: "BEGIN IMMEDIATE")
+        do {
+            if try tableExists("system_bucket", on: handle) {
+                if try !columnExists("disk_observed_seconds", in: "system_bucket", on: handle) {
+                    try execute(
+                        on: handle,
+                        sql: "ALTER TABLE system_bucket ADD COLUMN disk_observed_seconds REAL NOT NULL DEFAULT 0"
+                    )
+                    try execute(
+                        on: handle,
+                        sql: "UPDATE system_bucket SET disk_observed_seconds = observed_seconds"
+                    )
+                }
+                if try !columnExists("network_observed_seconds", in: "system_bucket", on: handle) {
+                    try execute(
+                        on: handle,
+                        sql: "ALTER TABLE system_bucket ADD COLUMN network_observed_seconds REAL NOT NULL DEFAULT 0"
+                    )
+                    try execute(
+                        on: handle,
+                        sql: "UPDATE system_bucket SET network_observed_seconds = observed_seconds"
+                    )
+                }
+            }
+            try execute(on: handle, sql: currentSchema)
+            try execute(on: handle, sql: "PRAGMA user_version = \(currentSchemaVersion)")
+            try execute(on: handle, sql: "COMMIT")
+        } catch {
+            try? execute(on: handle, sql: "ROLLBACK")
             throw error
         }
     }
@@ -357,14 +414,15 @@ public actor HistoryDatabase {
             return
         }
         let currentSize = totalFileSize()
-        let maintenanceHeadroom: Int64 = configuration.budgetBytes <= 32_000_000
-            ? 8_000_000
-            : 12_000_000
-        guard currentSize + maintenanceHeadroom + 512_000 <= configuration.budgetBytes else {
+        let pressure = Self.storagePressureDecision(
+            currentSize: currentSize,
+            budget: configuration.budgetBytes
+        )
+        guard pressure.canWrite else {
             isPausedForBudget = true
             throw HistoryDatabaseError(message: "Monitoring history reached its storage budget")
         }
-        let shouldCompact = currentSize >= configuration.budgetBytes * 3 / 4
+        let shouldCompact = pressure.shouldCompact
         do {
             try execute("BEGIN IMMEDIATE")
             if shouldCompact {
@@ -539,6 +597,40 @@ public actor HistoryDatabase {
 
     var maintenanceErrorForTesting: String? { lastMaintenanceError }
 
+    var schemaVersionForTesting: Int32 {
+        get throws {
+            try Self.pragmaInt(on: requireConnection().handle, name: "user_version")
+        }
+    }
+
+    func applicationWriteTotalForTesting(
+        startEpoch: Int64,
+        resolution: Int
+    ) throws -> UInt64 {
+        let statement = try prepare(
+            """
+            SELECT COALESCE(SUM(write_bytes), 0) FROM app_bucket
+            WHERE start_epoch = ? AND resolution_seconds = ?
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+        bind([.integer(startEpoch), .integer(Int64(resolution))], to: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+        return unsigned(sqlite3_column_int64(statement, 0))
+    }
+
+    static func storagePressureDecision(
+        currentSize: Int64,
+        budget: Int64
+    ) -> (shouldCompact: Bool, canWrite: Bool) {
+        let maintenanceHeadroom: Int64 = budget <= 32_000_000 ? 8_000_000 : 12_000_000
+        let writeAllowance: Int64 = 512_000
+        return (
+            shouldCompact: currentSize + maintenanceHeadroom + writeAllowance >= budget,
+            canWrite: currentSize + writeAllowance < budget
+        )
+    }
+
     public func performRetentionMaintenance(
         configuration: HistoryConfiguration,
         now: Date = Date()
@@ -576,6 +668,7 @@ public actor HistoryDatabase {
         guard expired > 0 else { return false }
         try execute("BEGIN IMMEDIATE")
         do {
+            try repairCompletedSystemRollups(endingBefore: nowEpoch)
             try applyRetention(
                 nowEpoch: nowEpoch,
                 retention: configuration.retention
@@ -595,16 +688,18 @@ public actor HistoryDatabase {
         try run(
             """
             INSERT OR REPLACE INTO system_bucket
-            (start_epoch, resolution_seconds, observed_seconds, disk_read_bytes,
-             disk_write_bytes, cpu_seconds, cpu_observed_seconds, cpu_peak,
-             network_receive_bytes, network_send_bytes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (start_epoch, resolution_seconds, observed_seconds, disk_observed_seconds,
+             disk_read_bytes, disk_write_bytes, cpu_seconds, cpu_observed_seconds, cpu_peak,
+             network_observed_seconds, network_receive_bytes, network_send_bytes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             values: [
                 .integer(bucket.startEpoch), .integer(Int64(resolution)),
-                .double(bucket.observedSeconds), .integer(sqliteInteger(bucket.diskReadBytes)),
+                .double(bucket.observedSeconds), .double(bucket.diskObservedSeconds),
+                .integer(sqliteInteger(bucket.diskReadBytes)),
                 .integer(sqliteInteger(bucket.diskWriteBytes)), .double(bucket.cpuSeconds),
                 .double(bucket.cpuObservedSeconds), bucket.cpuPeak.map(SQLiteValue.double) ?? .null,
+                .double(bucket.networkObservedSeconds),
                 .integer(sqliteInteger(bucket.networkReceiveBytes)),
                 .integer(sqliteInteger(bucket.networkSendBytes))
             ]
@@ -721,15 +816,87 @@ public actor HistoryDatabase {
             try aggregateApplications(start: end - 3_600, end: end, resolution: 3_600, source: 900)
             try aggregateDevices(start: end - 3_600, end: end, resolution: 3_600, source: 900)
         }
+        try repairCompletedSystemRollups(endingBefore: end)
+    }
+
+    private func repairCompletedSystemRollups(endingBefore end: Int64) throws {
+        let quarterEnd = end - end % 900
+        let repairedQuarters = try repairMissingSystemRollups(
+            sourceResolution: 60,
+            targetResolution: 900,
+            startEpoch: 0,
+            endEpoch: quarterEnd
+        )
+
+        let hourEnd = end - end % 3_600
+        _ = try repairMissingSystemRollups(
+            sourceResolution: 900,
+            targetResolution: 3_600,
+            startEpoch: 0,
+            endEpoch: hourEnd
+        )
+
+        let affectedHours = Set(repairedQuarters.map {
+            Self.alignedDown($0, to: 3_600)
+        })
+        for hourStart in affectedHours where hourStart < hourEnd {
+            try aggregateSystem(
+                start: hourStart,
+                end: hourStart + 3_600,
+                resolution: 3_600,
+                source: 900
+            )
+        }
+    }
+
+    private func repairMissingSystemRollups(
+        sourceResolution: Int,
+        targetResolution: Int,
+        startEpoch: Int64,
+        endEpoch: Int64
+    ) throws -> [Int64] {
+        guard startEpoch < endEpoch else { return [] }
+        let source = try loadTrend(
+            startEpoch: startEpoch,
+            endEpoch: endEpoch,
+            resolution: sourceResolution
+        )
+        guard !source.isEmpty else { return [] }
+        let sourceStarts = Set(source.map {
+            Self.alignedDown(Int64($0.timestamp.timeIntervalSince1970), to: targetResolution)
+        })
+        let existing = try loadTrend(
+            startEpoch: startEpoch - Int64(targetResolution),
+            endEpoch: endEpoch,
+            resolution: targetResolution
+        )
+        let existingStarts = Set(existing.map { point in
+            Self.alignedDown(Int64(point.timestamp.timeIntervalSince1970), to: targetResolution)
+        })
+        let missingStarts = sourceStarts.subtracting(existingStarts).sorted()
+
+        for groupStart in missingStarts {
+            try aggregateSystem(
+                start: groupStart,
+                end: groupStart + Int64(targetResolution),
+                resolution: targetResolution,
+                source: sourceResolution
+            )
+        }
+        return missingStarts
     }
 
     private func aggregateSystem(start: Int64, end: Int64, resolution: Int, source: Int) throws {
         try run(
             """
             INSERT OR REPLACE INTO system_bucket
-            SELECT ?, ?, SUM(observed_seconds), SUM(disk_read_bytes), SUM(disk_write_bytes),
+            (start_epoch, resolution_seconds, observed_seconds, disk_observed_seconds,
+             disk_read_bytes, disk_write_bytes, cpu_seconds, cpu_observed_seconds, cpu_peak,
+             network_observed_seconds, network_receive_bytes, network_send_bytes)
+            SELECT ?, ?, SUM(observed_seconds), SUM(disk_observed_seconds),
+                   SUM(disk_read_bytes), SUM(disk_write_bytes),
                    SUM(cpu_seconds), SUM(cpu_observed_seconds), MAX(cpu_peak),
-                   SUM(network_receive_bytes), SUM(network_send_bytes)
+                   SUM(network_observed_seconds), SUM(network_receive_bytes), SUM(network_send_bytes)
             FROM system_bucket
             WHERE resolution_seconds = ? AND start_epoch >= ? AND start_epoch < ?
             HAVING COUNT(*) > 0
@@ -767,12 +934,14 @@ public actor HistoryDatabase {
             values: [.integer(start), .integer(Int64(resolution))]
         )
         let limit = resolution == 900 ? 32 : 50
-        for (identity, app) in rows.prefix(limit) {
+        var other = MutableApplicationBucket(name: "Other")
+        for (identity, app) in rows where identity == "other" { other.merge(app) }
+        let candidates = rows.filter { $0.0 != "other" }
+        for (identity, app) in candidates.prefix(limit) {
             try insertApplication(identity: identity, app: app, start: start, resolution: resolution)
         }
-        if rows.count > limit {
-            var other = MutableApplicationBucket(name: "Other")
-            for (_, app) in rows.dropFirst(limit) { other.merge(app) }
+        for (_, app) in candidates.dropFirst(limit) { other.merge(app) }
+        if other.activityScore > 0 || other.cpuTimeNanoseconds > 0 {
             try insertApplication(identity: "other", app: other, start: start, resolution: resolution)
         }
     }
@@ -839,46 +1008,97 @@ public actor HistoryDatabase {
     private func loadReportTrend(
         startEpoch: Int64,
         endEpoch: Int64,
-        resolution: Int
+        resolution: Int,
+        referenceEpoch: Int64? = nil
     ) throws -> [HistoryTrendPoint] {
-        guard resolution > 60 else {
-            return try loadTrend(
-                startEpoch: startEpoch,
-                endEpoch: endEpoch,
-                resolution: 60
-            )
-        }
-
-        let tailStart = max(startEpoch, endEpoch - endEpoch % Int64(resolution))
-        var coarse = try loadTrend(
-            startEpoch: startEpoch,
-            endEpoch: tailStart,
-            resolution: resolution
+        let referenceEpoch = referenceEpoch ?? endEpoch
+        let minuteStart = max(startEpoch, alignedUp(referenceEpoch - 86_400, to: 900))
+        let quarterRetentionStart = Int64(
+            HistoryRetention.thirtyDays
+                .cutoffDate(now: Date(timeIntervalSince1970: TimeInterval(referenceEpoch)))
+                .timeIntervalSince1970
         )
+        let quarterStart = max(startEpoch, alignedUp(quarterRetentionStart, to: 3_600))
 
-        // A newly started session may not have reached its first rollup boundary yet.
-        if coarse.isEmpty, tailStart > startEpoch {
-            return try loadTrend(
+        var canonical: [HistoryTrendPoint] = []
+        let hourlyEnd = min(endEpoch, quarterStart)
+        if startEpoch < hourlyEnd {
+            canonical.append(contentsOf: try loadTrend(
                 startEpoch: startEpoch,
-                endEpoch: endEpoch,
-                resolution: 60
-            )
+                endEpoch: hourlyEnd,
+                resolution: 3_600
+            ))
         }
 
-        coarse.append(contentsOf: try loadTrend(
-            startEpoch: tailStart,
-            endEpoch: endEpoch,
-            resolution: 60
-        ))
-        return coarse
+        let quarterRangeStart = max(startEpoch, quarterStart)
+        let quarterEnd = min(endEpoch, minuteStart)
+        if quarterRangeStart < quarterEnd {
+            canonical.append(contentsOf: try loadTrend(
+                startEpoch: quarterRangeStart,
+                endEpoch: quarterEnd,
+                resolution: 900
+            ))
+        }
+
+        let minuteRangeStart = max(startEpoch, minuteStart)
+        if minuteRangeStart < endEpoch {
+            canonical.append(contentsOf: try loadTrend(
+                startEpoch: minuteRangeStart,
+                endEpoch: endEpoch,
+                resolution: 60
+            ))
+        }
+        return Self.aggregateTrend(canonical, resolution: resolution)
+    }
+
+    private static func aggregateTrend(
+        _ points: [HistoryTrendPoint],
+        resolution: Int
+    ) -> [HistoryTrendPoint] {
+        guard resolution > 60, !points.isEmpty else { return points }
+        var result: [HistoryTrendPoint] = []
+        var group: [HistoryTrendPoint] = []
+        var groupKey: Int64?
+
+        func appendGroup(_ group: [HistoryTrendPoint], to result: inout [HistoryTrendPoint]) {
+            guard let first = group.first else { return }
+            result.append(aggregateTrendPoints(
+                group,
+                timestamp: first.timestamp,
+                startsNewSegment: false
+            ))
+        }
+
+        for point in points {
+            let epoch = Int64(point.timestamp.timeIntervalSince1970)
+            let key = epoch - epoch % Int64(resolution)
+            if let groupKey, groupKey != key {
+                appendGroup(group, to: &result)
+                group.removeAll(keepingCapacity: true)
+            }
+            groupKey = key
+            group.append(point)
+        }
+        appendGroup(group, to: &result)
+        return result
+    }
+
+    private func alignedUp(_ epoch: Int64, to resolution: Int64) -> Int64 {
+        let remainder = epoch % resolution
+        return remainder == 0 ? epoch : epoch + resolution - remainder
+    }
+
+    private static func alignedDown(_ epoch: Int64, to resolution: Int) -> Int64 {
+        epoch - epoch % Int64(resolution)
     }
 
     private func loadTrend(startEpoch: Int64, endEpoch: Int64, resolution: Int) throws -> [HistoryTrendPoint] {
         let statement = try prepare(
             """
-            SELECT start_epoch, observed_seconds, disk_read_bytes, disk_write_bytes,
+            SELECT start_epoch, observed_seconds, disk_observed_seconds,
+                   disk_read_bytes, disk_write_bytes,
                    cpu_seconds, cpu_observed_seconds, cpu_peak,
-                   network_receive_bytes, network_send_bytes
+                   network_observed_seconds, network_receive_bytes, network_send_bytes
             FROM system_bucket
             WHERE resolution_seconds = ? AND start_epoch >= ? AND start_epoch < ?
             ORDER BY start_epoch
@@ -889,16 +1109,21 @@ public actor HistoryDatabase {
         var result: [HistoryTrendPoint] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             let observed = sqlite3_column_double(statement, 1)
-            let cpuObserved = sqlite3_column_double(statement, 5)
+            let diskObserved = sqlite3_column_double(statement, 2)
+            let cpuObserved = sqlite3_column_double(statement, 6)
+            let networkObserved = sqlite3_column_double(statement, 8)
             result.append(HistoryTrendPoint(
                 timestamp: Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(statement, 0))),
                 duration: observed,
-                diskReadBytes: unsigned(sqlite3_column_int64(statement, 2)),
-                diskWriteBytes: unsigned(sqlite3_column_int64(statement, 3)),
-                networkReceiveBytes: unsigned(sqlite3_column_int64(statement, 7)),
-                networkSendBytes: unsigned(sqlite3_column_int64(statement, 8)),
-                averageCPUPercent: cpuObserved > 0 ? sqlite3_column_double(statement, 4) / cpuObserved * 100 : nil,
-                peakCPUPercent: sqlite3_column_type(statement, 6) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 6)
+                diskObservedSeconds: diskObserved,
+                diskReadBytes: unsigned(sqlite3_column_int64(statement, 3)),
+                diskWriteBytes: unsigned(sqlite3_column_int64(statement, 4)),
+                networkObservedSeconds: networkObserved,
+                networkReceiveBytes: unsigned(sqlite3_column_int64(statement, 9)),
+                networkSendBytes: unsigned(sqlite3_column_int64(statement, 10)),
+                cpuObservedSeconds: cpuObserved,
+                averageCPUPercent: cpuObserved > 0 ? sqlite3_column_double(statement, 5) / cpuObserved * 100 : nil,
+                peakCPUPercent: sqlite3_column_type(statement, 7) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 7)
             ))
         }
         return result
@@ -910,6 +1135,8 @@ public actor HistoryDatabase {
         var receive: UInt64 = 0
         var send: UInt64 = 0
         var observed = 0.0
+        var diskObserved = 0.0
+        var networkObserved = 0.0
         var weightedCPU = 0.0
         var cpuObserved = 0.0
         var peakCPU: Double?
@@ -919,9 +1146,11 @@ public actor HistoryDatabase {
             receive = receive.addingClamped(point.networkReceiveBytes)
             send = send.addingClamped(point.networkSendBytes)
             observed += point.duration
+            diskObserved += point.diskObservedSeconds
+            networkObserved += point.networkObservedSeconds
             if let cpu = point.averageCPUPercent {
-                weightedCPU += cpu * point.duration
-                cpuObserved += point.duration
+                weightedCPU += cpu * point.cpuObservedSeconds
+                cpuObserved += point.cpuObservedSeconds
             }
             if let peak = point.peakCPUPercent { peakCPU = max(peakCPU ?? peak, peak) }
         }
@@ -933,7 +1162,13 @@ public actor HistoryDatabase {
             averageCPUPercent: cpuObserved > 0 ? weightedCPU / cpuObserved : nil,
             peakCPUPercent: peakCPU,
             observedSeconds: observed,
-            coverage: requestedSeconds > 0 ? min(1, observed / requestedSeconds) : 0
+            coverage: Self.coverage(observed, requestedSeconds: requestedSeconds),
+            diskObservedSeconds: diskObserved,
+            networkObservedSeconds: networkObserved,
+            cpuObservedSeconds: cpuObserved,
+            diskCoverage: Self.coverage(diskObserved, requestedSeconds: requestedSeconds),
+            networkCoverage: Self.coverage(networkObserved, requestedSeconds: requestedSeconds),
+            cpuCoverage: Self.coverage(cpuObserved, requestedSeconds: requestedSeconds)
         )
     }
 
@@ -970,10 +1205,29 @@ public actor HistoryDatabase {
         let trend = try loadReportTrend(
             startEpoch: previousStart,
             endEpoch: startEpoch,
-            resolution: resolution
+            resolution: resolution,
+            referenceEpoch: endEpoch
         )
-        guard !trend.isEmpty else { return nil }
+        return Self.qualifyingPreviousWriteTotal(
+            trend,
+            requestedSeconds: TimeInterval(duration)
+        )
+    }
+
+    static func qualifyingPreviousWriteTotal(
+        _ trend: [HistoryTrendPoint],
+        requestedSeconds: TimeInterval
+    ) -> UInt64? {
+        let diskObserved = trend.reduce(0) { $0 + $1.diskObservedSeconds }
+        guard coverage(diskObserved, requestedSeconds: requestedSeconds) >= 0.7 else { return nil }
         return trend.reduce(UInt64(0)) { $0.addingClamped($1.diskWriteBytes) }
+    }
+
+    private static func coverage(
+        _ observedSeconds: TimeInterval,
+        requestedSeconds: TimeInterval
+    ) -> Double {
+        requestedSeconds > 0 ? min(1, observedSeconds / requestedSeconds) : 0
     }
 
     private func checkpointIfNeeded(
@@ -1029,6 +1283,59 @@ public actor HistoryDatabase {
                 isRetryable: isRetryableSQLiteCode(code)
             )
         }
+    }
+
+    private static func pragmaInt(on handle: OpaquePointer, name: String) throws -> Int32 {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, "PRAGMA \(name)", -1, &statement, nil) == SQLITE_OK,
+              let statement else {
+            throw HistoryDatabaseError(message: "Unable to read monitoring history schema")
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            throw HistoryDatabaseError(message: "Unable to read monitoring history schema")
+        }
+        return sqlite3_column_int(statement, 0)
+    }
+
+    private static func tableExists(_ name: String, on handle: OpaquePointer) throws -> Bool {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            handle,
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK, let statement else {
+            throw HistoryDatabaseError(message: "Unable to inspect monitoring history schema")
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(
+            statement,
+            1,
+            name,
+            -1,
+            unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        )
+        return sqlite3_step(statement) == SQLITE_ROW
+    }
+
+    private static func columnExists(
+        _ column: String,
+        in table: String,
+        on handle: OpaquePointer
+    ) throws -> Bool {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, "PRAGMA table_info(\(table))", -1, &statement, nil) == SQLITE_OK,
+              let statement else {
+            throw HistoryDatabaseError(message: "Unable to inspect monitoring history columns")
+        }
+        defer { sqlite3_finalize(statement) }
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let text = sqlite3_column_text(statement, 1) else { continue }
+            if String(cString: text) == column { return true }
+        }
+        return false
     }
 
     private func run(_ sql: String, values: [SQLiteValue] = []) throws {
@@ -1121,40 +1428,98 @@ public actor HistoryDatabase {
         maximumPoints: Int
     ) -> [HistoryTrendPoint] {
         guard points.count > maximumPoints, maximumPoints > 0 else { return points }
-        let groupSize = Int(ceil(Double(points.count) / Double(maximumPoints)))
-        return stride(from: 0, to: points.count, by: groupSize).map { start in
-            let group = points[start..<min(points.count, start + groupSize)]
-            var read: UInt64 = 0
-            var write: UInt64 = 0
-            var receive: UInt64 = 0
-            var send: UInt64 = 0
-            var duration = 0.0
-            var weightedCPU = 0.0
-            var cpuDuration = 0.0
-            var peakCPU: Double?
-            for point in group {
-                read = read.addingClamped(point.diskReadBytes)
-                write = write.addingClamped(point.diskWriteBytes)
-                receive = receive.addingClamped(point.networkReceiveBytes)
-                send = send.addingClamped(point.networkSendBytes)
-                duration += point.duration
-                if let cpu = point.averageCPUPercent {
-                    weightedCPU += cpu * point.duration
-                    cpuDuration += point.duration
+        var runs: [[HistoryTrendPoint]] = []
+        for point in points {
+            if let previous = runs.last?.last {
+                let expectedStep = max(previous.duration, point.duration)
+                if point.timestamp.timeIntervalSince(previous.timestamp) > expectedStep * 1.8 {
+                    runs.append([point])
+                } else {
+                    runs[runs.count - 1].append(point)
                 }
-                if let peak = point.peakCPUPercent { peakCPU = max(peakCPU ?? peak, peak) }
+            } else {
+                runs.append([point])
             }
-            return HistoryTrendPoint(
-                timestamp: group.first!.timestamp,
-                duration: duration,
-                diskReadBytes: read,
-                diskWriteBytes: write,
-                networkReceiveBytes: receive,
-                networkSendBytes: send,
-                averageCPUPercent: cpuDuration > 0 ? weightedCPU / cpuDuration : nil,
-                peakCPUPercent: peakCPU
-            )
         }
+
+        if runs.count > maximumPoints {
+            return (0..<maximumPoints).compactMap { outputIndex in
+                let lower = outputIndex * runs.count / maximumPoints
+                let upper = (outputIndex + 1) * runs.count / maximumPoints
+                let group = runs[lower..<max(lower + 1, upper)].flatMap { $0 }
+                guard !group.isEmpty else { return nil }
+                let preserveTrailingEndpoint = outputIndex == maximumPoints - 1
+                return aggregateTrendPoints(
+                    group,
+                    timestamp: preserveTrailingEndpoint ? group.last!.timestamp : group.first!.timestamp,
+                    startsNewSegment: outputIndex > 0
+                )
+            }
+        }
+
+        var groupSize = max(1, Int(ceil(Double(points.count) / Double(maximumPoints))))
+        while runs.count <= maximumPoints,
+              runs.reduce(0, { $0 + Int(ceil(Double($1.count) / Double(groupSize))) }) > maximumPoints {
+            groupSize += 1
+        }
+
+        var compacted: [HistoryTrendPoint] = []
+        for (runIndex, run) in runs.enumerated() {
+            for start in stride(from: 0, to: run.count, by: groupSize) {
+                let group = run[start..<min(run.count, start + groupSize)]
+                compacted.append(aggregateTrendPoints(
+                    Array(group),
+                    timestamp: group.first!.timestamp,
+                    startsNewSegment: runIndex > 0 && start == 0
+                ))
+            }
+        }
+        return compacted
+    }
+
+    private static func aggregateTrendPoints(
+        _ points: [HistoryTrendPoint],
+        timestamp: Date,
+        startsNewSegment: Bool
+    ) -> HistoryTrendPoint {
+        var read: UInt64 = 0
+        var write: UInt64 = 0
+        var receive: UInt64 = 0
+        var send: UInt64 = 0
+        var duration = 0.0
+        var diskObserved = 0.0
+        var networkObserved = 0.0
+        var weightedCPU = 0.0
+        var cpuObserved = 0.0
+        var peakCPU: Double?
+        for point in points {
+            read = read.addingClamped(point.diskReadBytes)
+            write = write.addingClamped(point.diskWriteBytes)
+            receive = receive.addingClamped(point.networkReceiveBytes)
+            send = send.addingClamped(point.networkSendBytes)
+            duration += point.duration
+            diskObserved += point.diskObservedSeconds
+            networkObserved += point.networkObservedSeconds
+            if let cpu = point.averageCPUPercent {
+                weightedCPU += cpu * point.cpuObservedSeconds
+                cpuObserved += point.cpuObservedSeconds
+            }
+            if let peak = point.peakCPUPercent { peakCPU = max(peakCPU ?? peak, peak) }
+        }
+        return HistoryTrendPoint(
+            timestamp: timestamp,
+            duration: duration,
+            diskObservedSeconds: diskObserved,
+            diskReadBytes: read,
+            diskWriteBytes: write,
+            networkObservedSeconds: networkObserved,
+            networkReceiveBytes: receive,
+            networkSendBytes: send,
+            cpuObservedSeconds: cpuObserved,
+            averageCPUPercent: cpuObserved > 0 ? weightedCPU / cpuObserved : nil,
+            peakCPUPercent: peakCPU,
+            startsNewSegment: startsNewSegment
+        )
     }
 
     private enum SQLiteValue {
@@ -1164,18 +1529,23 @@ public actor HistoryDatabase {
         case null
     }
 
-    private static let schema = """
+    private static let connectionPragmas = """
     PRAGMA journal_mode=WAL;
     PRAGMA synchronous=NORMAL;
     PRAGMA foreign_keys=ON;
     PRAGMA busy_timeout=2000;
     PRAGMA wal_autocheckpoint=0;
     PRAGMA auto_vacuum=INCREMENTAL;
+    """
+
+    private static let currentSchema = """
     CREATE TABLE IF NOT EXISTS system_bucket (
       start_epoch INTEGER NOT NULL, resolution_seconds INTEGER NOT NULL,
-      observed_seconds REAL NOT NULL, disk_read_bytes INTEGER NOT NULL,
+      observed_seconds REAL NOT NULL, disk_observed_seconds REAL NOT NULL,
+      disk_read_bytes INTEGER NOT NULL,
       disk_write_bytes INTEGER NOT NULL, cpu_seconds REAL NOT NULL,
       cpu_observed_seconds REAL NOT NULL, cpu_peak REAL,
+      network_observed_seconds REAL NOT NULL,
       network_receive_bytes INTEGER NOT NULL, network_send_bytes INTEGER NOT NULL,
       PRIMARY KEY (start_epoch, resolution_seconds)
     ) WITHOUT ROWID;

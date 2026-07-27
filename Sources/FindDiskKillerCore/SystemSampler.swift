@@ -48,15 +48,123 @@ public struct SystemSnapshot: Sendable {
     public let processNetworkAvailable: Bool
 }
 
+struct ProcessNetworkCounter: Equatable, Sendable {
+    let received: UInt64
+    let sent: UInt64
+}
+
+struct ProcessNetworkSample: Sendable {
+    let totals: [Int32: ProcessNetworkCounter]?
+    let isAvailable: Bool
+
+    static let unavailable = Self(totals: nil, isAvailable: false)
+
+    static func available(_ totals: [Int32: ProcessNetworkCounter]) -> Self {
+        Self(totals: totals, isAvailable: true)
+    }
+}
+
+private struct ProcessNetworkIdentity: Hashable, Sendable {
+    let pid: Int32
+    let startAbstime: UInt64
+}
+
+private struct ProcessNetworkObservation: Sendable {
+    let sampledAt: TimeInterval
+    let totals: [ProcessNetworkIdentity: ProcessNetworkCounter]
+}
+
+private struct PendingProcessNetworkDelta: Sendable {
+    var received: UInt64
+    var sent: UInt64
+    var duration: TimeInterval
+}
+
+private struct PublishedProcessNetworkCounter: Sendable {
+    var received: UInt64
+    var sent: UInt64
+    var pending: [PendingProcessNetworkDelta] = []
+    var lastAdvancedAt: TimeInterval
+    var isReady = false
+
+    mutating func advance(to uptime: TimeInterval) {
+        var elapsed = max(0, uptime - lastAdvancedAt)
+        lastAdvancedAt = uptime
+        while elapsed > 0, !pending.isEmpty {
+            let step = min(elapsed, pending[0].duration)
+            let completesDelta = step >= pending[0].duration
+            let receivedStep = completesDelta
+                ? pending[0].received
+                : UInt64(Double(pending[0].received) * step / pending[0].duration)
+            let sentStep = completesDelta
+                ? pending[0].sent
+                : UInt64(Double(pending[0].sent) * step / pending[0].duration)
+            received = Self.addingClamped(received, receivedStep)
+            sent = Self.addingClamped(sent, sentStep)
+            pending[0].received -= receivedStep
+            pending[0].sent -= sentStep
+            pending[0].duration -= step
+            elapsed -= step
+            if completesDelta {
+                pending.removeFirst()
+            }
+        }
+    }
+
+    private static func addingClamped(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
+        let result = lhs.addingReportingOverflow(rhs)
+        return result.overflow ? .max : result.partialValue
+    }
+}
+
+private struct CompletedProcessNetworkRefresh: Sendable {
+    let sample: ProcessNetworkSample
+    let sampledAt: TimeInterval
+    let identitiesByPID: [Int32: ProcessNetworkIdentity]
+}
+
 public actor SystemSampler {
     public static let shared = SystemSampler()
+    private static let minimumProcessNetworkRefreshInterval: TimeInterval = 10
     private var cachedVolumes: [VolumeInfo] = []
     private var lastVolumeRefreshUptime: TimeInterval = -.infinity
     private var volumeRefreshTask: Task<Void, Never>?
     private let diskutilRunner = DiskutilCommandRunner()
+    private let processNetworkRefreshInterval: TimeInterval
+    private let uptimeProvider: @Sendable () -> TimeInterval
+    private let processNetworkSampleProvider: @Sendable () -> ProcessNetworkSample
+    private var lastProcessNetworkRefreshUptime: TimeInterval = -.infinity
+    private var processNetworkRefreshTask: Task<ProcessNetworkSample, Never>?
+    private var processNetworkRefreshGeneration = 0
+    private var processNetworkRefreshStartedAt: TimeInterval = 0
+    private var processNetworkRefreshIdentities: [Int32: ProcessNetworkIdentity] = [:]
+    private var completedProcessNetworkRefresh: CompletedProcessNetworkRefresh?
+    private var previousProcessNetworkObservation: ProcessNetworkObservation?
+    private var publishedProcessNetworkCounters: [ProcessNetworkIdentity: PublishedProcessNetworkCounter] = [:]
+    private var isProcessNetworkSourceAvailable = false
+
+    public init() {
+        processNetworkRefreshInterval = Self.minimumProcessNetworkRefreshInterval
+        uptimeProvider = { ProcessInfo.processInfo.systemUptime }
+        processNetworkSampleProvider = { Self.collectProcessNetworkTotals() }
+    }
+
+    init(
+        processNetworkRefreshInterval: TimeInterval,
+        uptimeProvider: @escaping @Sendable () -> TimeInterval,
+        processNetworkSampleProvider: @escaping @Sendable () -> ProcessNetworkSample
+    ) {
+        self.processNetworkRefreshInterval = processNetworkRefreshInterval.isFinite
+            ? max(Self.minimumProcessNetworkRefreshInterval, processNetworkRefreshInterval)
+            : Self.minimumProcessNetworkRefreshInterval
+        self.uptimeProvider = uptimeProvider
+        self.processNetworkSampleProvider = processNetworkSampleProvider
+        cachedVolumes = Self.collectMountedVolumes().map(\.info)
+        lastVolumeRefreshUptime = uptimeProvider()
+    }
 
     public func collect() -> SystemSnapshot {
-        let uptime = ProcessInfo.processInfo.systemUptime
+        let uptime = uptimeProvider()
         if cachedVolumes.isEmpty {
             cachedVolumes = Self.collectMountedVolumes().map(\.info)
         }
@@ -69,13 +177,14 @@ public actor SystemSampler {
                 finishVolumeRefresh(volumes)
             }
         }
-        let processNetwork = collectProcessNetworkTotals()
+        let processes = collectProcesses(networkTotals: nil)
+        let processNetwork = currentProcessNetworkSample(at: uptime, processes: processes)
         let stats = collectSystemStats()
         let interfaces = collectNetworkInterfaces()
         return SystemSnapshot(
             date: Date(),
             uptime: uptime,
-            processes: collectProcesses(networkTotals: processNetwork.totals),
+            processes: attachProcessNetwork(processNetwork.totals, to: processes),
             disks: collectDisks(),
             volumes: cachedVolumes,
             cpuUserTicks: stats.cpuUserTicks,
@@ -90,7 +199,7 @@ public actor SystemSampler {
     }
 
     private func collectProcesses(
-        networkTotals: [Int32: (received: UInt64, sent: UInt64)]?
+        networkTotals: [Int32: ProcessNetworkCounter]?
     ) -> [RawProcessCounter] {
         let capacity = 8_192
         var buffer = Array(repeating: DMProcessIO(), count: capacity)
@@ -106,8 +215,27 @@ public actor SystemSampler {
                 cpuTimeNanoseconds: sample.cpu_time_ns,
                 bytesRead: sample.bytes_read,
                 bytesWritten: sample.bytes_written,
-                networkBytesReceived: networkTotals.map { $0[sample.pid]?.received ?? 0 },
-                networkBytesSent: networkTotals.map { $0[sample.pid]?.sent ?? 0 }
+                networkBytesReceived: networkTotals?[sample.pid]?.received,
+                networkBytesSent: networkTotals?[sample.pid]?.sent
+            )
+        }
+    }
+
+    private func attachProcessNetwork(
+        _ networkTotals: [Int32: ProcessNetworkCounter]?,
+        to processes: [RawProcessCounter]
+    ) -> [RawProcessCounter] {
+        processes.map { process in
+            RawProcessCounter(
+                pid: process.pid,
+                startAbstime: process.startAbstime,
+                name: process.name,
+                path: process.path,
+                cpuTimeNanoseconds: process.cpuTimeNanoseconds,
+                bytesRead: process.bytesRead,
+                bytesWritten: process.bytesWritten,
+                networkBytesReceived: networkTotals?[process.pid]?.received,
+                networkBytesSent: networkTotals?[process.pid]?.sent
             )
         }
     }
@@ -150,10 +278,7 @@ public actor SystemSampler {
         return (counters, true)
     }
 
-    private func collectProcessNetworkTotals() -> (
-        totals: [Int32: (received: UInt64, sent: UInt64)]?,
-        isAvailable: Bool
-    ) {
+    nonisolated private static func collectProcessNetworkTotals() -> ProcessNetworkSample {
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
@@ -167,7 +292,7 @@ public actor SystemSampler {
         do {
             try process.run()
         } catch {
-            return (nil, false)
+            return .unavailable
         }
 
         let data = output.fileHandleForReading.readDataToEndOfFile()
@@ -175,8 +300,162 @@ public actor SystemSampler {
         guard process.terminationReason == .exit,
               process.terminationStatus == 0,
               let text = String(data: data, encoding: .utf8)
-        else { return (nil, false) }
-        return (ProcessNetworkParser.parse(text), true)
+        else { return .unavailable }
+        return .available(ProcessNetworkParser.parse(text))
+    }
+
+    private func currentProcessNetworkSample(
+        at uptime: TimeInterval,
+        processes: [RawProcessCounter]
+    ) -> ProcessNetworkSample {
+        for identity in Array(publishedProcessNetworkCounters.keys) {
+            publishedProcessNetworkCounters[identity]?.advance(to: uptime)
+        }
+        if let completedProcessNetworkRefresh {
+            applyProcessNetworkRefresh(completedProcessNetworkRefresh, at: uptime)
+            self.completedProcessNetworkRefresh = nil
+        }
+
+        let identitiesByPID = Dictionary(uniqueKeysWithValues: processes.map {
+            ($0.pid, ProcessNetworkIdentity(pid: $0.pid, startAbstime: $0.startAbstime))
+        })
+        let elapsed = uptime - lastProcessNetworkRefreshUptime
+        if processNetworkRefreshTask == nil,
+           !lastProcessNetworkRefreshUptime.isFinite || elapsed >= processNetworkRefreshInterval {
+            scheduleProcessNetworkRefresh(at: uptime, identitiesByPID: identitiesByPID)
+        }
+
+        var totals: [Int32: ProcessNetworkCounter] = [:]
+        for (identity, counter) in publishedProcessNetworkCounters
+            where counter.isReady && identitiesByPID[identity.pid] == identity {
+            totals[identity.pid] = ProcessNetworkCounter(
+                received: counter.received,
+                sent: counter.sent
+            )
+        }
+        return isProcessNetworkSourceAvailable
+            ? .available(totals)
+            : .unavailable
+    }
+
+    private func applyProcessNetworkRefresh(
+        _ refresh: CompletedProcessNetworkRefresh,
+        at uptime: TimeInterval
+    ) {
+        guard refresh.sample.isAvailable, let totals = refresh.sample.totals else {
+            isProcessNetworkSourceAvailable = false
+            previousProcessNetworkObservation = nil
+            publishedProcessNetworkCounters.removeAll()
+            return
+        }
+
+        isProcessNetworkSourceAvailable = true
+        let observation = ProcessNetworkObservation(
+            sampledAt: refresh.sampledAt,
+            totals: Dictionary(uniqueKeysWithValues: totals.compactMap { pid, counter in
+                refresh.identitiesByPID[pid].map { ($0, counter) }
+            })
+        )
+        let currentIdentities = Set(observation.totals.keys)
+        publishedProcessNetworkCounters = publishedProcessNetworkCounters.filter {
+            currentIdentities.contains($0.key)
+        }
+
+        if let previousProcessNetworkObservation {
+            let observedDuration = max(
+                0.1,
+                observation.sampledAt - previousProcessNetworkObservation.sampledAt
+            )
+            for (identity, current) in observation.totals {
+                guard let previous = previousProcessNetworkObservation.totals[identity],
+                      current.received >= previous.received,
+                      current.sent >= previous.sent
+                else {
+                    publishedProcessNetworkCounters[identity] = PublishedProcessNetworkCounter(
+                        received: current.received,
+                        sent: current.sent,
+                        lastAdvancedAt: uptime
+                    )
+                    continue
+                }
+                var published = publishedProcessNetworkCounters[identity]
+                    ?? PublishedProcessNetworkCounter(
+                        received: previous.received,
+                        sent: previous.sent,
+                        lastAdvancedAt: uptime
+                    )
+                published.pending.append(PendingProcessNetworkDelta(
+                    received: current.received - previous.received,
+                    sent: current.sent - previous.sent,
+                    duration: observedDuration
+                ))
+                published.isReady = true
+                publishedProcessNetworkCounters[identity] = published
+            }
+        } else {
+            publishedProcessNetworkCounters = observation.totals.mapValues { counter in
+                PublishedProcessNetworkCounter(
+                    received: counter.received,
+                    sent: counter.sent,
+                    lastAdvancedAt: uptime
+                )
+            }
+        }
+        previousProcessNetworkObservation = observation
+    }
+
+    private func scheduleProcessNetworkRefresh(
+        at uptime: TimeInterval,
+        identitiesByPID: [Int32: ProcessNetworkIdentity]
+    ) {
+        lastProcessNetworkRefreshUptime = uptime
+        processNetworkRefreshGeneration += 1
+        let generation = processNetworkRefreshGeneration
+        processNetworkRefreshStartedAt = uptime
+        processNetworkRefreshIdentities = identitiesByPID
+        let provider = processNetworkSampleProvider
+        let task = Task.detached(priority: .utility) {
+            provider()
+        }
+        processNetworkRefreshTask = task
+        Task { [weak self] in
+            let sample = await task.value
+            await self?.finishProcessNetworkRefresh(
+                sample,
+                generation: generation,
+                sampledAt: uptime,
+                identitiesByPID: identitiesByPID
+            )
+        }
+    }
+
+    private func finishProcessNetworkRefresh(
+        _ sample: ProcessNetworkSample,
+        generation: Int,
+        sampledAt: TimeInterval,
+        identitiesByPID: [Int32: ProcessNetworkIdentity]
+    ) {
+        guard generation == processNetworkRefreshGeneration else { return }
+        completedProcessNetworkRefresh = CompletedProcessNetworkRefresh(
+            sample: sample,
+            sampledAt: sampledAt,
+            identitiesByPID: identitiesByPID
+        )
+        processNetworkRefreshTask = nil
+    }
+
+    func waitForPendingProcessNetworkRefreshForTesting() async {
+        guard let task = processNetworkRefreshTask else { return }
+        let generation = processNetworkRefreshGeneration
+        let sampledAt = processNetworkRefreshStartedAt
+        let identitiesByPID = processNetworkRefreshIdentities
+        let sample = await task.value
+        finishProcessNetworkRefresh(
+            sample,
+            generation: generation,
+            sampledAt: sampledAt,
+            identitiesByPID: identitiesByPID
+        )
     }
 
     private func collectDisks() -> [RawDiskCounter] {
@@ -318,8 +597,8 @@ public actor SystemSampler {
 }
 
 enum ProcessNetworkParser {
-    static func parse(_ text: String) -> [Int32: (received: UInt64, sent: UInt64)] {
-        var totals: [Int32: (received: UInt64, sent: UInt64)] = [:]
+    static func parse(_ text: String) -> [Int32: ProcessNetworkCounter] {
+        var totals: [Int32: ProcessNetworkCounter] = [:]
         for line in text.split(whereSeparator: \Character.isNewline).dropFirst() {
             let columns = line.split(separator: ",", omittingEmptySubsequences: false)
             guard columns.count >= 4 else { continue }
@@ -333,7 +612,7 @@ enum ProcessNetworkParser {
                   let received = UInt64(columns[receivedIndex]),
                   let sent = UInt64(columns[sentIndex])
             else { continue }
-            totals[pid] = (received, sent)
+            totals[pid] = ProcessNetworkCounter(received: received, sent: sent)
         }
         return totals
     }

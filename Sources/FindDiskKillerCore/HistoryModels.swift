@@ -131,9 +131,11 @@ public struct HistorySample: Sendable {
     public let duration: TimeInterval
     public let diskReadBytes: UInt64
     public let diskWriteBytes: UInt64
+    public let diskStatsAvailable: Bool
     public let cpuPercent: Double?
     public let networkReceiveBytes: UInt64
     public let networkSendBytes: UInt64
+    public let networkStatsAvailable: Bool
     public let applications: [HistoryApplicationSample]
     public let devices: [HistoryDeviceSample]
 
@@ -142,9 +144,11 @@ public struct HistorySample: Sendable {
         duration: TimeInterval,
         diskReadBytes: UInt64,
         diskWriteBytes: UInt64,
+        diskStatsAvailable: Bool = true,
         cpuPercent: Double?,
         networkReceiveBytes: UInt64,
         networkSendBytes: UInt64,
+        networkStatsAvailable: Bool = true,
         applications: [HistoryApplicationSample],
         devices: [HistoryDeviceSample]
     ) {
@@ -152,9 +156,11 @@ public struct HistorySample: Sendable {
         self.duration = duration
         self.diskReadBytes = diskReadBytes
         self.diskWriteBytes = diskWriteBytes
+        self.diskStatsAvailable = diskStatsAvailable
         self.cpuPercent = cpuPercent
         self.networkReceiveBytes = networkReceiveBytes
         self.networkSendBytes = networkSendBytes
+        self.networkStatsAvailable = networkStatsAvailable
         self.applications = applications
         self.devices = devices
     }
@@ -169,19 +175,89 @@ public struct HistorySummary: Equatable, Sendable {
     public let peakCPUPercent: Double?
     public let observedSeconds: TimeInterval
     public let coverage: Double
+    public let diskObservedSeconds: TimeInterval
+    public let networkObservedSeconds: TimeInterval
+    public let cpuObservedSeconds: TimeInterval
+    public let diskCoverage: Double
+    public let networkCoverage: Double
+    public let cpuCoverage: Double
+
+    public init(
+        diskReadBytes: UInt64,
+        diskWriteBytes: UInt64,
+        networkReceiveBytes: UInt64,
+        networkSendBytes: UInt64,
+        averageCPUPercent: Double?,
+        peakCPUPercent: Double?,
+        observedSeconds: TimeInterval,
+        coverage: Double,
+        diskObservedSeconds: TimeInterval? = nil,
+        networkObservedSeconds: TimeInterval? = nil,
+        cpuObservedSeconds: TimeInterval? = nil,
+        diskCoverage: Double? = nil,
+        networkCoverage: Double? = nil,
+        cpuCoverage: Double? = nil
+    ) {
+        self.diskReadBytes = diskReadBytes
+        self.diskWriteBytes = diskWriteBytes
+        self.networkReceiveBytes = networkReceiveBytes
+        self.networkSendBytes = networkSendBytes
+        self.averageCPUPercent = averageCPUPercent
+        self.peakCPUPercent = peakCPUPercent
+        self.observedSeconds = observedSeconds
+        self.coverage = coverage
+        self.diskObservedSeconds = diskObservedSeconds ?? observedSeconds
+        self.networkObservedSeconds = networkObservedSeconds ?? observedSeconds
+        self.cpuObservedSeconds = cpuObservedSeconds ?? observedSeconds
+        self.diskCoverage = diskCoverage ?? coverage
+        self.networkCoverage = networkCoverage ?? coverage
+        self.cpuCoverage = cpuCoverage ?? coverage
+    }
 }
 
 public struct HistoryTrendPoint: Identifiable, Equatable, Sendable {
     public let timestamp: Date
     public let duration: TimeInterval
+    public let diskObservedSeconds: TimeInterval
     public let diskReadBytes: UInt64
     public let diskWriteBytes: UInt64
     public let networkReceiveBytes: UInt64
     public let networkSendBytes: UInt64
+    public let networkObservedSeconds: TimeInterval
+    public let cpuObservedSeconds: TimeInterval
     public let averageCPUPercent: Double?
     public let peakCPUPercent: Double?
+    public let startsNewSegment: Bool
 
     public var id: Date { timestamp }
+
+    public init(
+        timestamp: Date,
+        duration: TimeInterval,
+        diskObservedSeconds: TimeInterval? = nil,
+        diskReadBytes: UInt64,
+        diskWriteBytes: UInt64,
+        networkObservedSeconds: TimeInterval? = nil,
+        networkReceiveBytes: UInt64,
+        networkSendBytes: UInt64,
+        cpuObservedSeconds: TimeInterval? = nil,
+        averageCPUPercent: Double?,
+        peakCPUPercent: Double?,
+        startsNewSegment: Bool = false
+    ) {
+        self.timestamp = timestamp
+        self.duration = duration
+        self.diskObservedSeconds = diskObservedSeconds ?? duration
+        self.diskReadBytes = diskReadBytes
+        self.diskWriteBytes = diskWriteBytes
+        self.networkObservedSeconds = networkObservedSeconds ?? duration
+        self.networkReceiveBytes = networkReceiveBytes
+        self.networkSendBytes = networkSendBytes
+        self.cpuObservedSeconds = cpuObservedSeconds ?? (averageCPUPercent == nil ? 0 : duration)
+        self.averageCPUPercent = averageCPUPercent
+        self.peakCPUPercent = peakCPUPercent
+        self.startsNewSegment = startsNewSegment
+    }
 }
 
 public struct HistoryApplicationReport: Identifiable, Equatable, Sendable {

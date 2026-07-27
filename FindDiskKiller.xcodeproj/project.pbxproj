@@ -19,11 +19,13 @@
 		60FBDF8CE690926784724D9B /* codex-openai.png in Resources */ = {isa = PBXBuildFile; fileRef = D8EBB20F5BF3CF0CE623067C /* codex-openai.png */; };
 		61564FA8A1037BE920518107 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 195FD2EA225982A5C2A7D542 /* RootView.swift */; };
 		61C51F635F2288A47E2B3CB8 /* FileAccessTraceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F0023EE9E80BF9FD710B334 /* FileAccessTraceStore.swift */; };
+		69BF51EA97AD722934283F03 /* HistoryTrendChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10C6565E5CC5D4A39D52770 /* HistoryTrendChart.swift */; };
 		69C1E6BAB858EE50DAC40789 /* HistoryApplicationTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 294F590D986AF1CE1F5F6243 /* HistoryApplicationTable.swift */; };
 		6FD59787974F95069F701653 /* HistoryReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4555CB0F323A2704AA5AC37B /* HistoryReportView.swift */; };
 		74DB83B6B7129EE97C114666 /* HistoryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EF3EB111170248B28B520DE /* HistoryModel.swift */; };
 		780A5E1EC904EA5BFF7138E3 /* claude-code.svg in Resources */ = {isa = PBXBuildFile; fileRef = 19522173F0ADEF7848BBB1F9 /* claude-code.svg */; };
 		85D2BDA3102CAF467C9F77BA /* Localization.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8784670E78734B9A225A4E8 /* Localization.swift */; };
+		891960591B0568EA43CC57F4 /* HistoryChartViewport.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCA525FC8E67E0D64066F068 /* HistoryChartViewport.swift */; };
 		99192C06F8FEEAE121E9322F /* claude-code.png in Resources */ = {isa = PBXBuildFile; fileRef = 68194E3D67F4FC76209C94C2 /* claude-code.png */; };
 		9E3B6D513AAF6D1ECFA54F73 /* FindDiskKillerTraceHelper in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = 129601FEC7DAF3B684090C81 /* FindDiskKillerTraceHelper */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A1A5A345383AD5797E0A9A9D /* FindDiskKillerTraceProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = F12401CDA817FB03FD601CF3 /* FindDiskKillerTraceProtocol */; };
@@ -120,11 +122,13 @@
 		A8784670E78734B9A225A4E8 /* Localization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Localization.swift; sourceTree = "<group>"; };
 		B2AC3BDB45CF49DAF90CDD96 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/Localizable.strings; sourceTree = "<group>"; };
 		B41A166BB33A1EC2CC01A3B7 /* SharedComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedComponents.swift; sourceTree = "<group>"; };
+		C10C6565E5CC5D4A39D52770 /* HistoryTrendChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryTrendChart.swift; sourceTree = "<group>"; };
 		C7F04CF503EF4C19FA578DA5 /* TraceHelperMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraceHelperMain.swift; sourceTree = "<group>"; };
 		CACD199CD7651747F61EBE06 /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = ko.lproj/Localizable.strings; sourceTree = "<group>"; };
 		D1C625637CCA25345124CE92 /* pt-BR */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "pt-BR"; path = "pt-BR.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		D8EBB20F5BF3CF0CE623067C /* codex-openai.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "codex-openai.png"; sourceTree = "<group>"; };
 		D9C47FDB065E7C4161197A8B /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/Localizable.strings; sourceTree = "<group>"; };
+		DCA525FC8E67E0D64066F068 /* HistoryChartViewport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryChartViewport.swift; sourceTree = "<group>"; };
 		DEAF50A4052D9A28723D4E58 /* THIRD_PARTY_ASSETS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_ASSETS.md; sourceTree = "<group>"; };
 		E01B15E8F0C14456E698603B /* LoginItemSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginItemSettingsModel.swift; sourceTree = "<group>"; };
 		E10F875FFF3EC9D9FECC30CD /* ProcessIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessIcon.swift; sourceTree = "<group>"; };
@@ -223,7 +227,9 @@
 				7F13AE24E17E72270635D523 /* DisksView.swift */,
 				5A3C91E9D097BF60792BFA1D /* FileAccessTraceView.swift */,
 				294F590D986AF1CE1F5F6243 /* HistoryApplicationTable.swift */,
+				DCA525FC8E67E0D64066F068 /* HistoryChartViewport.swift */,
 				4555CB0F323A2704AA5AC37B /* HistoryReportView.swift */,
+				C10C6565E5CC5D4A39D52770 /* HistoryTrendChart.swift */,
 				5B5CA4BCE3E2500A9F4B1027 /* MenuBarPanel.swift */,
 				7B45AA78FCDDF1D3E2E56551 /* OverviewView.swift */,
 				457028605863AA4C13E784A4 /* ProcessesView.swift */,
@@ -395,9 +401,11 @@
 				B878AAEF8FDB35BB9B078B31 /* FileAccessTraceView.swift in Sources */,
 				CB385437F19C8B95DB52B8A0 /* FindDiskKillerApp.swift in Sources */,
 				69C1E6BAB858EE50DAC40789 /* HistoryApplicationTable.swift in Sources */,
+				891960591B0568EA43CC57F4 /* HistoryChartViewport.swift in Sources */,
 				74DB83B6B7129EE97C114666 /* HistoryModel.swift in Sources */,
 				BC2CAC4DA56D1A99EBC46575 /* HistoryReportExporter.swift in Sources */,
 				6FD59787974F95069F701653 /* HistoryReportView.swift in Sources */,
+				69BF51EA97AD722934283F03 /* HistoryTrendChart.swift in Sources */,
 				85D2BDA3102CAF467C9F77BA /* Localization.swift in Sources */,
 				B974532CF7564AA95797FE6C /* LoginItemSettingsModel.swift in Sources */,
 				D8E39C8B0F6523922443851B /* MenuBarPanel.swift in Sources */,

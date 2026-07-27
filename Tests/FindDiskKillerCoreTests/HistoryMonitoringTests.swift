@@ -24,6 +24,193 @@ import Testing
     #expect(components.hour == 0)
 }
 
+@Test func unavailableMetricsKeepIndependentCoverageInsteadOfRecordingZeroes() async throws {
+    let database = try HistoryDatabase(location: .memory)
+    let recorder = HistoryRecorder(database: database)
+    let start = Date(timeIntervalSince1970: 1_800_000_000)
+
+    await recorder.record(HistorySample(
+        timestamp: start,
+        duration: 60,
+        diskReadBytes: 0,
+        diskWriteBytes: 0,
+        diskStatsAvailable: false,
+        cpuPercent: 20,
+        networkReceiveBytes: 30,
+        networkSendBytes: 40,
+        networkStatsAvailable: true,
+        applications: [],
+        devices: []
+    ))
+    await recorder.record(HistorySample(
+        timestamp: start.addingTimeInterval(60),
+        duration: 60,
+        diskReadBytes: 10,
+        diskWriteBytes: 20,
+        diskStatsAvailable: true,
+        cpuPercent: nil,
+        networkReceiveBytes: 0,
+        networkSendBytes: 0,
+        networkStatsAvailable: false,
+        applications: [],
+        devices: []
+    ))
+    await recorder.flush()
+
+    let report = try await database.report(
+        range: .sevenDays,
+        now: start.addingTimeInterval(120)
+    )
+    #expect(report.summary.diskObservedSeconds == 60)
+    #expect(report.summary.networkObservedSeconds == 60)
+    #expect(report.summary.cpuObservedSeconds == 60)
+    #expect(report.trend.reduce(0) { $0 + $1.diskObservedSeconds } == 60)
+    #expect(report.trend.reduce(0) { $0 + $1.networkObservedSeconds } == 60)
+}
+
+@Test func previousPeriodComparisonRequiresSeventyPercentDiskCoverage() {
+    let start = Date(timeIntervalSince1970: 1_800_000_000)
+    let partial = [HistoryTrendPoint(
+        timestamp: start,
+        duration: 60,
+        diskObservedSeconds: 60,
+        diskReadBytes: 0,
+        diskWriteBytes: 10,
+        networkObservedSeconds: 60,
+        networkReceiveBytes: 0,
+        networkSendBytes: 0,
+        averageCPUPercent: 10,
+        peakCPUPercent: 10
+    )]
+
+    #expect(HistoryDatabase.qualifyingPreviousWriteTotal(
+        partial,
+        requestedSeconds: 100
+    ) == nil)
+    #expect(HistoryDatabase.qualifyingPreviousWriteTotal(
+        partial,
+        requestedSeconds: 80
+    ) == 10)
+}
+
+@Test func sevenDayBudgetCompactsBeforeTheMaintenanceHeadroomWouldPauseWrites() {
+    let decision = HistoryDatabase.storagePressureDecision(
+        currentSize: 23_600_000,
+        budget: 32_000_000
+    )
+    #expect(decision.shouldCompact)
+    #expect(decision.canWrite)
+}
+
+@Test func unversionedHistorySchemaMigratesTransactionallyAndPreservesTotals() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let url = root.appending(path: "legacy.sqlite3")
+    var handle: OpaquePointer?
+    #expect(sqlite3_open(url.path, &handle) == SQLITE_OK)
+    let databaseHandle = try #require(handle)
+    let legacySQL = """
+    CREATE TABLE system_bucket (
+      start_epoch INTEGER NOT NULL, resolution_seconds INTEGER NOT NULL,
+      observed_seconds REAL NOT NULL, disk_read_bytes INTEGER NOT NULL,
+      disk_write_bytes INTEGER NOT NULL, cpu_seconds REAL NOT NULL,
+      cpu_observed_seconds REAL NOT NULL, cpu_peak REAL,
+      network_receive_bytes INTEGER NOT NULL, network_send_bytes INTEGER NOT NULL,
+      PRIMARY KEY (start_epoch, resolution_seconds)
+    ) WITHOUT ROWID;
+    INSERT INTO system_bucket VALUES (1800000000, 60, 60, 4, 8, 6, 60, 12, 16, 32);
+    """
+    #expect(sqlite3_exec(databaseHandle, legacySQL, nil, nil, nil) == SQLITE_OK)
+    sqlite3_close(databaseHandle)
+
+    let database = try HistoryDatabase(location: .file(url))
+    #expect(try await database.schemaVersionForTesting == 1)
+    let report = try await database.report(
+        range: .sevenDays,
+        now: Date(timeIntervalSince1970: 1_800_000_060)
+    )
+    #expect(report.summary.diskWriteBytes == 8)
+    #expect(report.summary.diskObservedSeconds == 60)
+    #expect(report.summary.networkObservedSeconds == 60)
+
+    let reopened = try HistoryDatabase(location: .file(url))
+    #expect(try await reopened.schemaVersionForTesting == 1)
+}
+
+@Test func failedHistoryMigrationRollsBackSchemaChanges() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let url = root.appending(path: "broken-legacy.sqlite3")
+    var handle: OpaquePointer?
+    #expect(sqlite3_open(url.path, &handle) == SQLITE_OK)
+    let databaseHandle = try #require(handle)
+    let legacySQL = """
+    CREATE TABLE system_bucket (
+      start_epoch INTEGER NOT NULL, resolution_seconds INTEGER NOT NULL,
+      observed_seconds REAL NOT NULL, disk_read_bytes INTEGER NOT NULL,
+      disk_write_bytes INTEGER NOT NULL, cpu_seconds REAL NOT NULL,
+      cpu_observed_seconds REAL NOT NULL, cpu_peak REAL,
+      network_receive_bytes INTEGER NOT NULL, network_send_bytes INTEGER NOT NULL,
+      PRIMARY KEY (start_epoch, resolution_seconds)
+    ) WITHOUT ROWID;
+    CREATE VIEW app_daily AS SELECT 1 AS incompatible_fixture;
+    """
+    #expect(sqlite3_exec(databaseHandle, legacySQL, nil, nil, nil) == SQLITE_OK)
+    sqlite3_close(databaseHandle)
+
+    #expect(throws: (any Error).self) {
+        _ = try HistoryDatabase(location: .file(url))
+    }
+
+    var inspectionHandle: OpaquePointer?
+    #expect(sqlite3_open_v2(url.path, &inspectionHandle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK)
+    let inspection = try #require(inspectionHandle)
+    defer { sqlite3_close(inspection) }
+    var statement: OpaquePointer?
+    #expect(sqlite3_prepare_v2(
+        inspection,
+        "SELECT name FROM pragma_table_info('system_bucket') WHERE name = 'disk_observed_seconds'",
+        -1,
+        &statement,
+        nil
+    ) == SQLITE_OK)
+    let columnStatement = try #require(statement)
+    defer { sqlite3_finalize(columnStatement) }
+    #expect(sqlite3_step(columnStatement) == SQLITE_DONE)
+}
+
+@Test func newerHistorySchemaIsRejectedWithoutBeingModified() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let url = root.appending(path: "future.sqlite3")
+    var handle: OpaquePointer?
+    #expect(sqlite3_open(url.path, &handle) == SQLITE_OK)
+    let databaseHandle = try #require(handle)
+    #expect(sqlite3_exec(databaseHandle, "PRAGMA user_version = 2", nil, nil, nil) == SQLITE_OK)
+    sqlite3_close(databaseHandle)
+
+    #expect(throws: (any Error).self) {
+        _ = try HistoryDatabase(location: .file(url))
+    }
+
+    var inspection: OpaquePointer?
+    #expect(sqlite3_open_v2(url.path, &inspection, SQLITE_OPEN_READONLY, nil) == SQLITE_OK)
+    let inspectionHandle = try #require(inspection)
+    defer { sqlite3_close(inspectionHandle) }
+    var statement: OpaquePointer?
+    #expect(sqlite3_prepare_v2(inspectionHandle, "PRAGMA user_version", -1, &statement, nil) == SQLITE_OK)
+    let versionStatement = try #require(statement)
+    defer { sqlite3_finalize(versionStatement) }
+    #expect(sqlite3_step(versionStatement) == SQLITE_ROW)
+    #expect(sqlite3_column_int(versionStatement, 0) == 2)
+}
+
 @Test func oneSecondSamplesCommitExactlyOncePerMinute() async throws {
     let database = try HistoryDatabase(location: .memory)
     let recorder = HistoryRecorder(database: database)
@@ -114,6 +301,66 @@ import Testing
     #expect(report.trend.map(\.diskWriteBytes) == [60, 1])
 }
 
+@Test func longerReportsDoNotLoseRecentDataWhenARollupBoundaryWasMissed() async throws {
+    let database = try HistoryDatabase(location: .memory)
+    let configuration = HistoryConfiguration(isEnabled: true, retention: .oneYear)
+    let recorder = HistoryRecorder(database: database, configuration: configuration)
+    let reference = Int64(1_800_000_000)
+    let hourStart = reference - reference % 3_600
+
+    // Commit one complete hour so an hourly rollup exists, then skip the minute
+    // that would have triggered the next hourly rollup, as happens across sleep.
+    for minute in 0..<119 {
+        await recorder.record(.fixture(
+            at: Date(timeIntervalSince1970: TimeInterval(hourStart + Int64(minute * 60))),
+            duration: 60,
+            diskWriteBytes: 1
+        ))
+    }
+    for minute in 120..<122 {
+        await recorder.record(.fixture(
+            at: Date(timeIntervalSince1970: TimeInterval(hourStart + Int64(minute * 60))),
+            duration: 60,
+            diskWriteBytes: 1
+        ))
+    }
+    await recorder.flush()
+
+    let now = Date(timeIntervalSince1970: TimeInterval(hourStart + 122 * 60))
+    let sevenDays = try await database.report(range: .sevenDays, now: now)
+    let thirtyDays = try await database.report(range: .thirtyDays, now: now)
+    let oneYear = try await database.report(range: .oneYear, now: now)
+
+    #expect(sevenDays.summary.diskWriteBytes == 121)
+    #expect(thirtyDays.summary.diskWriteBytes == sevenDays.summary.diskWriteBytes)
+    #expect(oneYear.summary.diskWriteBytes == thirtyDays.summary.diskWriteBytes)
+
+    for minute in 0..<3 {
+        _ = try await database.performRetentionMaintenance(
+            configuration: configuration,
+            now: now.addingTimeInterval(86_400 + TimeInterval(minute * 60))
+        )
+    }
+    let afterMinuteRetention = now.addingTimeInterval(2 * 86_400)
+    _ = try await database.performRetentionMaintenance(
+        configuration: configuration,
+        now: afterMinuteRetention
+    )
+    let retainedThirtyDays = try await database.report(
+        range: .thirtyDays,
+        now: afterMinuteRetention
+    )
+    #expect(retainedThirtyDays.summary.diskWriteBytes == 121)
+
+    let afterQuarterRetention = now.addingTimeInterval(31 * 86_400)
+    _ = try await database.performRetentionMaintenance(
+        configuration: configuration,
+        now: afterQuarterRetention
+    )
+    let retainedOneYear = try await database.report(range: .oneYear, now: afterQuarterRetention)
+    #expect(retainedOneYear.summary.diskWriteBytes == 121)
+}
+
 @Test func dailyApplicationRankingRemainsExactBeyondMinuteTopK() async throws {
     let database = try HistoryDatabase(location: .memory)
     let recorder = HistoryRecorder(database: database)
@@ -168,6 +415,100 @@ import Testing
     #expect(compacted.reduce(UInt64(0)) { $0 + $1.diskWriteBytes } == 2_403)
     #expect(compacted.compactMap(\.peakCPUPercent).max() == 88)
     #expect(compacted.reduce(0) { $0 + $1.duration } == 720_900)
+}
+
+@Test func trendCompactionPreservesMissingTimeAsANewSegment() {
+    var points = (0..<500).map { index in
+        HistoryTrendPoint(
+            timestamp: Date(timeIntervalSince1970: TimeInterval(index * 3_600)),
+            duration: 3_600,
+            diskReadBytes: 1,
+            diskWriteBytes: 1,
+            networkReceiveBytes: 1,
+            networkSendBytes: 1,
+            averageCPUPercent: 10,
+            peakCPUPercent: 10
+        )
+    }
+    points.append(contentsOf: (0..<500).map { index in
+        HistoryTrendPoint(
+            timestamp: Date(timeIntervalSince1970: TimeInterval((index + 512) * 3_600)),
+            duration: 3_600,
+            diskReadBytes: 1,
+            diskWriteBytes: 1,
+            networkReceiveBytes: 1,
+            networkSendBytes: 1,
+            averageCPUPercent: 10,
+            peakCPUPercent: 10
+        )
+    })
+
+    let compacted = HistoryDatabase.compactTrend(points, maximumPoints: 400)
+
+    #expect(compacted.count <= 400)
+    #expect(compacted.filter(\.startsNewSegment).count == 1)
+    #expect(compacted.reduce(UInt64(0)) { $0 + $1.diskWriteBytes } == 1_000)
+}
+
+@Test func trendCompactionKeepsHighlyFragmentedHistoryBounded() {
+    let points = (0..<1_000).map { index in
+        HistoryTrendPoint(
+            timestamp: Date(timeIntervalSince1970: TimeInterval(index * 120)),
+            duration: 60,
+            diskReadBytes: 1,
+            diskWriteBytes: 1,
+            networkReceiveBytes: 1,
+            networkSendBytes: 1,
+            averageCPUPercent: 10,
+            peakCPUPercent: 10
+        )
+    }
+
+    let compacted = HistoryDatabase.compactTrend(points, maximumPoints: 400)
+
+    #expect(compacted.count == 400)
+    #expect(compacted.dropFirst().allSatisfy { $0.startsNewSegment })
+    #expect(compacted.first?.timestamp == points.first?.timestamp)
+    #expect(compacted.last?.timestamp == points.last?.timestamp)
+    #expect(compacted.reduce(UInt64(0)) { $0 + $1.diskWriteBytes } == 1_000)
+    #expect(compacted.reduce(0) { $0 + $1.duration } == 60_000)
+}
+
+@Test func applicationRollupPreservesExistingOtherAcrossTopKCompaction() async throws {
+    let database = try HistoryDatabase(location: .memory)
+    let recorder = HistoryRecorder(database: database)
+    let reference = Int64(1_800_000_000)
+    let startEpoch = reference - reference % 900
+    var expectedWriteBytes: UInt64 = 0
+
+    for minute in 0..<15 {
+        let applications = (0..<40).map { index -> HistoryApplicationSample in
+            let writeBytes = UInt64(index + 1)
+            expectedWriteBytes += writeBytes
+            return HistoryApplicationSample(
+                identity: "app-\(minute)-\(index)",
+                name: "Application \(minute)-\(index)",
+                readBytes: 0,
+                writeBytes: writeBytes,
+                cpuTimeNanoseconds: 0,
+                networkReceiveBytes: 0,
+                networkSendBytes: 0
+            )
+        }
+        await recorder.record(.fixture(
+            at: Date(timeIntervalSince1970: TimeInterval(startEpoch + Int64(minute * 60))),
+            duration: 60,
+            diskWriteBytes: 0,
+            applications: applications
+        ))
+    }
+    await recorder.flush()
+
+    let total = try await database.applicationWriteTotalForTesting(
+        startEpoch: startEpoch,
+        resolution: 900
+    )
+    #expect(total == expectedWriteBytes)
 }
 
 @Test func historyDatabaseReopensWithoutLosingCommittedMinutes() async throws {
