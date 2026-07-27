@@ -50,6 +50,7 @@ without assembling the story across several tools.
 | **Disks** | Mounted-volume names mapped to physical-device throughput, including external storage |
 | **Drive health** | Native NVMe/SMART evidence such as temperature, host writes, wear, spare capacity, power history, and errors when macOS exposes it |
 | **Menu bar** | A quiet, lightweight view of current activity without notification noise |
+| **Period reports** | Optional local aggregate history with 7-day, 30-day, and one-year trends, coverage, comparisons, and leading applications |
 
 ## A Complete Investigation, Visually
 
@@ -115,6 +116,17 @@ Related measurements are presented together without forcing them to add up.
 Monitoring and analysis happen locally. The current release contains no ads,
 telemetry, analytics, or third-party tracking SDKs, and it does not upload
 process activity, file paths, monitoring history, or disk serial numbers.
+
+Long-term history is off by default. When enabled, per-second samples are first
+aggregated in memory and saved in at most one SQLite transaction per minute.
+Minute detail is retained for 24 hours; longer reports use 15-minute and hourly
+rollups. Strict 7-day, 30-day, and one-local-calendar-year retention options use
+automatic 32 MB, 64 MB, and 128 MB storage budgets, with a 160 MB absolute cap.
+The history database excludes PIDs, full paths, per-second samples, file-trace
+detail, and disk serial numbers, and can be cleared from Settings at any time.
+
+The native macOS login item can start FindDiskKiller quietly in the menu bar.
+Opening the main window after login is a separate user-controlled option.
 
 Basic monitoring does not request administrator approval. When you explicitly
 start a file or folder trace, macOS may ask you to approve FindDiskKiller's

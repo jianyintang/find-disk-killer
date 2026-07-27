@@ -3,6 +3,7 @@ import SwiftUI
 
 enum AppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
     case overview = "现在"
+    case reports = "历史分析"
     case disks = "磁盘"
     case processes = "应用"
 
@@ -14,6 +15,7 @@ enum AppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .overview: "gauge.with.dots.needle.67percent"
         case .disks: "internaldrive"
         case .processes: "square.stack.3d.up"
+        case .reports: "chart.xyaxis.line"
         }
     }
 }
@@ -21,6 +23,7 @@ enum AppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
 struct RootView: View {
     let store: MonitorStore
     let processDetailWindows: ProcessDetailWindowCoordinator
+    let history: HistoryModel
     @State private var requestedSection: AppSection = .overview
     @State private var loadedSection: AppSection = .overview
     @State private var sectionSnapshots: [AppSection: SectionPreviewSnapshot] = [:]
@@ -69,6 +72,8 @@ struct RootView: View {
                 searchText: $processSearchText,
                 processDetailWindows: processDetailWindows
             )
+        case .reports:
+            HistoryReportView(history: history)
         }
     }
 

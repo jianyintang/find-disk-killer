@@ -1,6 +1,6 @@
 # FindDiskKiller Privacy Policy
 
-Effective date: July 24, 2026
+Effective date: July 27, 2026
 
 FindDiskKiller is designed to inspect activity on your Mac without sending that
 activity anywhere. Monitoring and analysis happen locally on the device.
@@ -17,10 +17,25 @@ The app may observe the following information locally to provide its features:
 - file paths selected by you or observed during an active tracing session; and
 - drive identity and health fields that macOS makes available.
 
-This information is not uploaded. Monitoring history is held in memory and is
-cleared when you quit the app or choose **Clear This Session Now**. App
-preferences, such as language and sampling interval, are stored in the app's
-local preferences domain.
+This information is not uploaded. Live charts remain in bounded memory and are
+cleared when you quit the app or choose **Clear Live Session Data**.
+
+Saving monitoring history is optional and disabled by default. When you enable
+it, FindDiskKiller writes one local SQLite transaction per minute containing
+aggregate system, device, and optional application activity. The history
+database does not contain process identifiers, executable or file paths,
+per-second samples, file-trace records, or disk serial numbers. Minute detail
+is kept for no more than 24 hours and is rolled up into 15-minute and hourly
+buckets for longer reports.
+
+You can select a strict retention period of 7 days, 30 days, or one local
+calendar year. Automatic database, WAL, and SHM budgets are 32 MB, 64 MB, and
+128 MB respectively, with an absolute 160 MB limit. When space is constrained,
+application detail may be compacted with a visible quality marker; the app does
+not silently extend retention or upload data. You can pause saving or choose
+**Clear Saved History** at any time. App preferences, such as language,
+sampling interval, retention, and storage budget, remain in the app's local
+preferences domain.
 
 ## Permissions and the Trace Component
 
@@ -44,10 +59,11 @@ website in your browser, where the website operator's privacy terms apply.
 
 ## Data Security
 
-The app uses macOS code signing, Hardened Runtime, XPC code-signing checks, and
-bounded in-memory buffers to reduce exposure. No software can guarantee
-absolute security, but FindDiskKiller intentionally minimizes persistence and
-does not operate a server that receives monitoring data.
+The app uses macOS code signing, Hardened Runtime, XPC code-signing checks,
+bounded in-memory buffers, and owner-only permissions for the optional history
+database. No software can guarantee absolute security, but FindDiskKiller
+intentionally minimizes persistence and does not operate a server that receives
+monitoring data.
 
 ## Changes and Contact
 

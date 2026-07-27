@@ -6,30 +6,27 @@ import SwiftUI
 @main
 struct FindDiskKillerApp: App {
     @NSApplicationDelegateAdaptor(FindDiskKillerApplicationDelegate.self) private var appDelegate
-    @State private var store = MonitorStore()
-    @State private var processDetailWindows = ProcessDetailWindowCoordinator()
+    @State private var runtime = AppRuntime.shared
     @AppStorage("showRateInMenuBar") private var showRateInMenuBar = true
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.system.rawValue
 
     var body: some Scene {
         Window("FindDiskKiller", id: "main") {
             RootView(
-                store: store,
-                processDetailWindows: processDetailWindows
+                store: runtime.store,
+                processDetailWindows: runtime.processDetailWindows,
+                history: runtime.history
             )
                 .frame(minWidth: 920, minHeight: 620)
                 .environment(\.locale, Locale(identifier: selectedLanguage.localeIdentifier))
                 .id(appLanguage)
-                .task {
-                    store.start()
-                }
         }
         .defaultSize(width: 1180, height: 760)
         .commands {
             SidebarCommands()
             CommandMenu(L10n.text("监控")) {
-                Button(L10n.text(store.isCollecting ? "停止采集" : "开始采集")) {
-                    store.isCollecting ? store.stop() : store.start()
+                Button(L10n.text(runtime.store.isCollecting ? "停止采集" : "开始采集")) {
+                    runtime.store.isCollecting ? runtime.store.stop() : runtime.store.start()
                 }
                 .keyboardShortcut(".", modifiers: [.command])
             }
@@ -41,10 +38,10 @@ struct FindDiskKillerApp: App {
             for: ProcessActivity.ID.self
         ) { $processID in
             if let processID,
-               let presentation = processDetailWindows.presentation(for: processID) {
+               let presentation = runtime.processDetailWindows.presentation(for: processID) {
                 ProcessDetailWindowRoot(
-                    store: store,
-                    coordinator: processDetailWindows,
+                    store: runtime.store,
+                    coordinator: runtime.processDetailWindows,
                     presentation: presentation
                 )
                 .environment(\.locale, Locale(identifier: selectedLanguage.localeIdentifier))
@@ -60,15 +57,15 @@ struct FindDiskKillerApp: App {
         .windowResizability(.contentMinSize)
 
         MenuBarExtra {
-            MenuBarPanel(store: store)
+            MenuBarPanel(store: runtime.store)
                 .frame(width: 340)
                 .environment(\.locale, Locale(identifier: selectedLanguage.localeIdentifier))
                 .id(appLanguage)
         } label: {
             if showRateInMenuBar {
                 Label(
-                    store.isDiskAvailable
-                        ? ByteRateFormatter.rate(store.currentWriteRate)
+                    runtime.store.isDiskAvailable
+                        ? ByteRateFormatter.rate(runtime.store.currentWriteRate)
                         : "--",
                     systemImage: menuBarSymbol
                 )
@@ -80,7 +77,7 @@ struct FindDiskKillerApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsView(store: store)
+            SettingsView(store: runtime.store, history: runtime.history)
                 .environment(\.locale, Locale(identifier: selectedLanguage.localeIdentifier))
                 .id(appLanguage)
         }
@@ -91,7 +88,7 @@ struct FindDiskKillerApp: App {
     }
 
     private var menuBarSymbol: String {
-        switch store.health {
+        switch runtime.store.health {
         case .elevated: "exclamationmark.triangle.fill"
         case .unavailable: "xmark.octagon.fill"
         case .stopped: "pause.circle"
@@ -100,7 +97,26 @@ struct FindDiskKillerApp: App {
     }
 }
 
+@MainActor
 final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
+    private let runtime: AppRuntime
+    private let reopenMainWindow: @MainActor (NSApplication) -> Bool
+    private var observesWorkspaceLifecycle = false
+    private var isWaitingForTerminationFlush = false
+
+    override convenience init() {
+        self.init(runtime: .shared)
+    }
+
+    init(
+        runtime: AppRuntime,
+        reopenMainWindow: (@MainActor (NSApplication) -> Bool)? = nil
+    ) {
+        self.runtime = runtime
+        self.reopenMainWindow = reopenMainWindow ?? Self.restoreMainWindow
+        super.init()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--unregister-trace-helper") {
             NSApp.setActivationPolicy(.prohibited)
@@ -138,7 +154,76 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
-        NSApp.setActivationPolicy(.regular)
+        runtime.launch()
+        observeWorkspaceLifecycle()
+        let isDefaultLaunch = notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey]
+            as? Bool ?? true
+        let shouldShowWindow = UserDefaults.standard.bool(forKey: "openMainWindowAtLogin")
+        if !isDefaultLaunch && !shouldShowWindow {
+            NSApp.setActivationPolicy(.accessory)
+            DispatchQueue.main.async {
+                NSApp.windows.forEach { $0.orderOut(nil) }
+            }
+        } else {
+            NSApp.setActivationPolicy(.regular)
+        }
+    }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        sender.setActivationPolicy(.regular)
+        sender.activate(ignoringOtherApps: true)
+        return reopenMainWindow(sender)
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isWaitingForTerminationFlush else { return .terminateLater }
+        isWaitingForTerminationFlush = true
+        Task { @MainActor [runtime] in
+            _ = await runtime.prepareForTermination()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
+    private func observeWorkspaceLifecycle() {
+        guard !observesWorkspaceLifecycle else { return }
+        observesWorkspaceLifecycle = true
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(
+            self,
+            selector: #selector(workspaceWillSleep(_:)),
+            name: NSWorkspace.willSleepNotification,
+            object: nil
+        )
+        center.addObserver(
+            self,
+            selector: #selector(workspaceDidWake(_:)),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
+    }
+
+    @objc private func workspaceWillSleep(_ notification: Notification) {
+        Task { @MainActor [runtime] in
+            await runtime.prepareForSleep()
+        }
+    }
+
+    @objc private func workspaceDidWake(_ notification: Notification) {
+        runtime.resumeAfterWake()
+    }
+
+    private static func restoreMainWindow(in application: NSApplication) -> Bool {
+        guard let mainWindow = application.windows.first(where: {
+            $0.identifier?.rawValue == "main" || $0.title == "FindDiskKiller"
+        }) else {
+            return false
+        }
+        mainWindow.makeKeyAndOrderFront(nil)
+        return true
     }
 
     @MainActor
