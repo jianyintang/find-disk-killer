@@ -5,7 +5,7 @@ project:
 
 test:
 	@echo "Running non-privileged unit tests (the App and Trace Helper will not be launched)."
-	swift test
+	swift test --no-parallel
 
 test-privileged:
 	@test "$(ALLOW_PRIVILEGED_TEST)" = "1" || (echo "Refusing to launch the privileged Helper test. Re-run once with ALLOW_PRIVILEGED_TEST=1 after installing the signed release App." >&2; exit 64)

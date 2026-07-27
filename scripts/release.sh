@@ -48,7 +48,7 @@ archive_path="$release_directory/FindDiskKiller.xcarchive"
 dmg_path="$release_directory/FindDiskKiller-$version.dmg"
 
 cd "$root_directory"
-swift test
+swift test --no-parallel
 xcodegen generate
 if [[ ${ALLOW_DIRTY:-0} != 1 && -n "$(git status --porcelain)" ]]; then
     echo "XcodeGen changed tracked release files. Regenerate and commit them before releasing." >&2

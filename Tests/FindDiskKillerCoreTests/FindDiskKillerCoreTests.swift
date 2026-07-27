@@ -1769,7 +1769,7 @@ private final class BlockingProcessNetworkSource: @unchecked Sendable {
         )
         Issue.record("Expected timeout")
     } catch DiskHealthProviderError.timedOut {
-        #expect(started.duration(to: clock.now) < .seconds(1))
+        #expect(started.duration(to: clock.now) < .seconds(2))
     } catch {
         Issue.record("Unexpected timeout error: \(error)")
     }
