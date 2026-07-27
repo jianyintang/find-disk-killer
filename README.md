@@ -179,8 +179,12 @@ xcodebuild \
 Run the core test suite:
 
 ```bash
-swift test
+make test
 ```
+
+This target is fully non-privileged: it does not launch the App, register the
+Trace Helper, or request an administrator password. Helper registration and
+recovery behavior are covered by dependency-injected unit tests.
 
 The unsigned development build can validate the base monitoring experience,
 but it cannot complete privileged file or folder tracing. The App and helper
@@ -210,14 +214,19 @@ DMG_TEMPLATE=artifacts/FindDiskKiller-1.0.1-101/FindDiskKiller-1.0.1.dmg \
   make release VERSION=1.0.2 BUILD_NUMBER=102
 ```
 
-Before publishing, install the exact signed release app in `/Applications` and run the privileged tracing gate once:
+Before publishing, install the exact signed release app in `/Applications` and
+run the privileged tracing gate once. This gate is deliberately separate from
+automated tests and requires an explicit opt-in:
 
 ```bash
-EXPECTED_VERSION=1.0.3 EXPECTED_BUILD=103 \
-  scripts/verify-installed-trace-helper.sh
+EXPECTED_VERSION=1.0.3 EXPECTED_BUILD=103 ALLOW_PRIVILEGED_TEST=1 \
+  make test-privileged
 ```
 
 The gate verifies the embedded helper identity, performs a real file-I/O trace, confirms the launchd service is running, and rejects any new launch-constraint violation.
+An attempt marker prevents an accidental second run for the same version and
+build. A maintainer can set `FORCE_PRIVILEGED_TEST=1` only after diagnosing a
+failed first attempt.
 
 ## Architecture
 

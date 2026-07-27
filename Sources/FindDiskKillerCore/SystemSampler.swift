@@ -87,7 +87,9 @@ private struct PublishedProcessNetworkCounter: Sendable {
     var lastAdvancedAt: TimeInterval
     var isReady = false
 
-    mutating func advance(to uptime: TimeInterval) {
+    mutating func advance(to uptime: TimeInterval) -> Bool {
+        let previousReceived = received
+        let previousSent = sent
         var elapsed = max(0, uptime - lastAdvancedAt)
         lastAdvancedAt = uptime
         while elapsed > 0, !pending.isEmpty {
@@ -109,6 +111,7 @@ private struct PublishedProcessNetworkCounter: Sendable {
                 pending.removeFirst()
             }
         }
+        return received != previousReceived || sent != previousSent
     }
 
     private static func addingClamped(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
@@ -123,6 +126,11 @@ private struct CompletedProcessNetworkRefresh: Sendable {
     let identitiesByPID: [Int32: ProcessNetworkIdentity]
 }
 
+private struct CurrentProcessNetworkState: Sendable {
+    let sample: ProcessNetworkSample
+    let retiredProcesses: [RawProcessCounter]
+}
+
 public actor SystemSampler {
     public static let shared = SystemSampler()
     private static let minimumProcessNetworkRefreshInterval: TimeInterval = 10
@@ -133,6 +141,7 @@ public actor SystemSampler {
     private let processNetworkRefreshInterval: TimeInterval
     private let uptimeProvider: @Sendable () -> TimeInterval
     private let processNetworkSampleProvider: @Sendable () -> ProcessNetworkSample
+    private let processCounterProvider: @Sendable () -> [RawProcessCounter]
     private var lastProcessNetworkRefreshUptime: TimeInterval = -.infinity
     private var processNetworkRefreshTask: Task<ProcessNetworkSample, Never>?
     private var processNetworkRefreshGeneration = 0
@@ -141,12 +150,14 @@ public actor SystemSampler {
     private var completedProcessNetworkRefresh: CompletedProcessNetworkRefresh?
     private var previousProcessNetworkObservation: ProcessNetworkObservation?
     private var publishedProcessNetworkCounters: [ProcessNetworkIdentity: PublishedProcessNetworkCounter] = [:]
+    private var cachedProcessCounters: [ProcessNetworkIdentity: RawProcessCounter] = [:]
     private var isProcessNetworkSourceAvailable = false
 
     public init() {
         processNetworkRefreshInterval = Self.minimumProcessNetworkRefreshInterval
         uptimeProvider = { ProcessInfo.processInfo.systemUptime }
         processNetworkSampleProvider = { Self.collectProcessNetworkTotals() }
+        processCounterProvider = { Self.collectProcesses() }
     }
 
     init(
@@ -154,11 +165,26 @@ public actor SystemSampler {
         uptimeProvider: @escaping @Sendable () -> TimeInterval,
         processNetworkSampleProvider: @escaping @Sendable () -> ProcessNetworkSample
     ) {
+        self.init(
+            processNetworkRefreshInterval: processNetworkRefreshInterval,
+            uptimeProvider: uptimeProvider,
+            processNetworkSampleProvider: processNetworkSampleProvider,
+            processCounterProvider: { Self.collectProcesses() }
+        )
+    }
+
+    init(
+        processNetworkRefreshInterval: TimeInterval,
+        uptimeProvider: @escaping @Sendable () -> TimeInterval,
+        processNetworkSampleProvider: @escaping @Sendable () -> ProcessNetworkSample,
+        processCounterProvider: @escaping @Sendable () -> [RawProcessCounter]
+    ) {
         self.processNetworkRefreshInterval = processNetworkRefreshInterval.isFinite
             ? max(Self.minimumProcessNetworkRefreshInterval, processNetworkRefreshInterval)
             : Self.minimumProcessNetworkRefreshInterval
         self.uptimeProvider = uptimeProvider
         self.processNetworkSampleProvider = processNetworkSampleProvider
+        self.processCounterProvider = processCounterProvider
         cachedVolumes = Self.collectMountedVolumes().map(\.info)
         lastVolumeRefreshUptime = uptimeProvider()
     }
@@ -177,14 +203,14 @@ public actor SystemSampler {
                 finishVolumeRefresh(volumes)
             }
         }
-        let processes = collectProcesses(networkTotals: nil)
-        let processNetwork = currentProcessNetworkSample(at: uptime, processes: processes)
+        let processes = processCounterProvider()
+        let processNetwork = currentProcessNetworkState(at: uptime, processes: processes)
         let stats = collectSystemStats()
         let interfaces = collectNetworkInterfaces()
         return SystemSnapshot(
             date: Date(),
             uptime: uptime,
-            processes: attachProcessNetwork(processNetwork.totals, to: processes),
+            processes: attachProcessNetwork(processNetwork, to: processes),
             disks: collectDisks(),
             volumes: cachedVolumes,
             cpuUserTicks: stats.cpuUserTicks,
@@ -194,13 +220,11 @@ public actor SystemSampler {
             networkInterfaces: interfaces.counters,
             cpuStatsAvailable: stats.isAvailable,
             networkInterfacesAvailable: interfaces.isAvailable,
-            processNetworkAvailable: processNetwork.isAvailable
+            processNetworkAvailable: processNetwork.sample.isAvailable
         )
     }
 
-    private func collectProcesses(
-        networkTotals: [Int32: ProcessNetworkCounter]?
-    ) -> [RawProcessCounter] {
+    nonisolated private static func collectProcesses() -> [RawProcessCounter] {
         let capacity = 8_192
         var buffer = Array(repeating: DMProcessIO(), count: capacity)
         let count = Int(dm_collect_process_io(&buffer, Int32(capacity)))
@@ -215,17 +239,17 @@ public actor SystemSampler {
                 cpuTimeNanoseconds: sample.cpu_time_ns,
                 bytesRead: sample.bytes_read,
                 bytesWritten: sample.bytes_written,
-                networkBytesReceived: networkTotals?[sample.pid]?.received,
-                networkBytesSent: networkTotals?[sample.pid]?.sent
+                networkBytesReceived: nil,
+                networkBytesSent: nil
             )
         }
     }
 
     private func attachProcessNetwork(
-        _ networkTotals: [Int32: ProcessNetworkCounter]?,
+        _ state: CurrentProcessNetworkState,
         to processes: [RawProcessCounter]
     ) -> [RawProcessCounter] {
-        processes.map { process in
+        let current = processes.map { process in
             RawProcessCounter(
                 pid: process.pid,
                 startAbstime: process.startAbstime,
@@ -234,10 +258,11 @@ public actor SystemSampler {
                 cpuTimeNanoseconds: process.cpuTimeNanoseconds,
                 bytesRead: process.bytesRead,
                 bytesWritten: process.bytesWritten,
-                networkBytesReceived: networkTotals?[process.pid]?.received,
-                networkBytesSent: networkTotals?[process.pid]?.sent
+                networkBytesReceived: state.sample.totals?[process.pid]?.received,
+                networkBytesSent: state.sample.totals?[process.pid]?.sent
             )
         }
+        return current + state.retiredProcesses
     }
 
     private func collectSystemStats() -> (
@@ -304,38 +329,90 @@ public actor SystemSampler {
         return .available(ProcessNetworkParser.parse(text))
     }
 
-    private func currentProcessNetworkSample(
+    private func currentProcessNetworkState(
         at uptime: TimeInterval,
         processes: [RawProcessCounter]
-    ) -> ProcessNetworkSample {
+    ) -> CurrentProcessNetworkState {
+        let identitiesByPID = Dictionary(uniqueKeysWithValues: processes.map {
+            ($0.pid, ProcessNetworkIdentity(pid: $0.pid, startAbstime: $0.startAbstime))
+        })
+        for process in processes {
+            let identity = ProcessNetworkIdentity(pid: process.pid, startAbstime: process.startAbstime)
+            cachedProcessCounters[identity] = process
+        }
+
+        var advancedIdentities: Set<ProcessNetworkIdentity> = []
         for identity in Array(publishedProcessNetworkCounters.keys) {
-            publishedProcessNetworkCounters[identity]?.advance(to: uptime)
+            if publishedProcessNetworkCounters[identity]?.advance(to: uptime) == true {
+                advancedIdentities.insert(identity)
+            }
         }
         if let completedProcessNetworkRefresh {
             applyProcessNetworkRefresh(completedProcessNetworkRefresh, at: uptime)
             self.completedProcessNetworkRefresh = nil
         }
 
-        let identitiesByPID = Dictionary(uniqueKeysWithValues: processes.map {
-            ($0.pid, ProcessNetworkIdentity(pid: $0.pid, startAbstime: $0.startAbstime))
-        })
         let elapsed = uptime - lastProcessNetworkRefreshUptime
         if processNetworkRefreshTask == nil,
            !lastProcessNetworkRefreshUptime.isFinite || elapsed >= processNetworkRefreshInterval {
             scheduleProcessNetworkRefresh(at: uptime, identitiesByPID: identitiesByPID)
         }
 
+        let latestObservedIdentities = Set(
+            previousProcessNetworkObservation?.totals.keys.map { $0 } ?? []
+        )
         var totals: [Int32: ProcessNetworkCounter] = [:]
         for (identity, counter) in publishedProcessNetworkCounters
-            where counter.isReady && identitiesByPID[identity.pid] == identity {
+            where counter.isReady
+                && identitiesByPID[identity.pid] == identity
+                && (latestObservedIdentities.contains(identity)
+                    || !counter.pending.isEmpty
+                    || advancedIdentities.contains(identity)) {
             totals[identity.pid] = ProcessNetworkCounter(
                 received: counter.received,
                 sent: counter.sent
             )
         }
-        return isProcessNetworkSourceAvailable
+        let sample: ProcessNetworkSample = isProcessNetworkSourceAvailable
             ? .available(totals)
             : .unavailable
+        let currentIdentities = Set(identitiesByPID.values)
+        let retiredProcesses: [RawProcessCounter] = publishedProcessNetworkCounters.compactMap {
+            identity, counter in
+            guard !currentIdentities.contains(identity),
+                  counter.isReady,
+                  !counter.pending.isEmpty || advancedIdentities.contains(identity),
+                  let process = cachedProcessCounters[identity]
+            else { return nil }
+            return RawProcessCounter(
+                pid: process.pid,
+                startAbstime: process.startAbstime,
+                name: process.name,
+                path: process.path,
+                cpuTimeNanoseconds: process.cpuTimeNanoseconds,
+                bytesRead: process.bytesRead,
+                bytesWritten: process.bytesWritten,
+                networkBytesReceived: counter.received,
+                networkBytesSent: counter.sent
+            )
+        }
+
+        publishedProcessNetworkCounters = publishedProcessNetworkCounters.filter { identity, counter in
+            currentIdentities.contains(identity) && latestObservedIdentities.contains(identity)
+                || !counter.pending.isEmpty
+                || advancedIdentities.contains(identity)
+        }
+        var retainedIdentities = currentIdentities
+        retainedIdentities.formUnion(publishedProcessNetworkCounters.keys)
+        if let previousProcessNetworkObservation {
+            retainedIdentities.formUnion(previousProcessNetworkObservation.totals.keys)
+        }
+        cachedProcessCounters = cachedProcessCounters.filter { retainedIdentities.contains($0.key) }
+
+        return CurrentProcessNetworkState(
+            sample: sample,
+            retiredProcesses: sample.isAvailable ? retiredProcesses : []
+        )
     }
 
     private func applyProcessNetworkRefresh(
@@ -356,11 +433,6 @@ public actor SystemSampler {
                 refresh.identitiesByPID[pid].map { ($0, counter) }
             })
         )
-        let currentIdentities = Set(observation.totals.keys)
-        publishedProcessNetworkCounters = publishedProcessNetworkCounters.filter {
-            currentIdentities.contains($0.key)
-        }
-
         if let previousProcessNetworkObservation {
             let observedDuration = max(
                 0.1,
@@ -371,11 +443,17 @@ public actor SystemSampler {
                       current.received >= previous.received,
                       current.sent >= previous.sent
                 else {
-                    publishedProcessNetworkCounters[identity] = PublishedProcessNetworkCounter(
-                        received: current.received,
-                        sent: current.sent,
-                        lastAdvancedAt: uptime
-                    )
+                    if var published = publishedProcessNetworkCounters[identity],
+                       published.isReady || !published.pending.isEmpty {
+                        published.lastAdvancedAt = uptime
+                        publishedProcessNetworkCounters[identity] = published
+                    } else {
+                        publishedProcessNetworkCounters[identity] = PublishedProcessNetworkCounter(
+                            received: current.received,
+                            sent: current.sent,
+                            lastAdvancedAt: uptime
+                        )
+                    }
                     continue
                 }
                 var published = publishedProcessNetworkCounters[identity]

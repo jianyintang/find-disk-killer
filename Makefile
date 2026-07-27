@@ -1,10 +1,15 @@
-.PHONY: project test lint release
+.PHONY: project test test-privileged lint release
 
 project:
 	xcodegen generate
 
 test:
+	@echo "Running non-privileged unit tests (the App and Trace Helper will not be launched)."
 	swift test
+
+test-privileged:
+	@test "$(ALLOW_PRIVILEGED_TEST)" = "1" || (echo "Refusing to launch the privileged Helper test. Re-run once with ALLOW_PRIVILEGED_TEST=1 after installing the signed release App." >&2; exit 64)
+	ALLOW_PRIVILEGED_TEST=1 /bin/bash scripts/verify-installed-trace-helper.sh
 
 lint:
 	plutil -lint Sources/FindDiskKillerApp/Resources/PrivacyInfo.xcprivacy

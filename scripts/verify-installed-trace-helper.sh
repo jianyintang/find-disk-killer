@@ -8,6 +8,13 @@ expected_build=${EXPECTED_BUILD:-}
 service_label=com.jianyintang.FindDiskKiller.TraceHelper.v2
 helper_executable_name=com.jianyintang.FindDiskKiller.TraceHelper
 
+[[ ${ALLOW_PRIVILEGED_TEST:-0} == 1 ]] || {
+    echo "Refusing to launch a test that can request administrator authorization." >&2
+    echo "Use the non-privileged 'make test' target for automated verification." >&2
+    echo "For the single release-host smoke test, explicitly set ALLOW_PRIVILEGED_TEST=1." >&2
+    exit 64
+}
+
 [[ "$app_path" == /Applications/*.app ]] || {
     echo "The installed helper test only accepts an app in /Applications" >&2
     exit 64
@@ -30,6 +37,21 @@ fi
 if [[ -n "$expected_build" && "$build" != "$expected_build" ]]; then
     echo "Expected build $expected_build, found $build" >&2
     exit 1
+fi
+
+attempt_directory="${TMPDIR:-/tmp}/find-disk-killer-privileged-tests-$UID"
+attempt_marker="$attempt_directory/$version-$build.started"
+mkdir -p "$attempt_directory"
+if [[ -e "$attempt_marker" && ${FORCE_PRIVILEGED_TEST:-0} != 1 ]]; then
+    echo "The privileged Helper test was already started for FindDiskKiller $version ($build)." >&2
+    echo "It will not be repeated automatically. Set FORCE_PRIVILEGED_TEST=1 only after diagnosing the previous attempt." >&2
+    exit 75
+fi
+if [[ ${FORCE_PRIVILEGED_TEST:-0} == 1 ]]; then
+    : > "$attempt_marker"
+elif ! (set -o noclobber; : > "$attempt_marker") 2>/dev/null; then
+    echo "Another privileged Helper test is already starting for FindDiskKiller $version ($build)." >&2
+    exit 75
 fi
 
 temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/find-disk-killer-smoke.XXXXXX")
