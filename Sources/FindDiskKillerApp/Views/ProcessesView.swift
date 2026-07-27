@@ -34,7 +34,8 @@ struct ProcessesView: View {
                 selectedProcessID: selection,
                 scrollAxes: [.horizontal, .vertical],
                 hoverCoordinator: processHoverCoordinator,
-                onSelect: presentProcess
+                onSelect: presentProcess,
+                isLoading: store.lastUpdatedAt == nil && searchText.isEmpty
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }

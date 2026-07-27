@@ -32,7 +32,9 @@ public final class MonitorStore {
         }
     }
     public var isFollowingLive = true
-    public var samplingInterval: TimeInterval = 1
+    public static let defaultSamplingInterval: TimeInterval = 3
+    public static let samplingIntervalRange: ClosedRange<TimeInterval> = 1...60
+    public private(set) var samplingInterval = defaultSamplingInterval
 
     private static let elevatedDeviceWriteRate = 20_000_000.0
     private static let elevatedProcessWriteRate = 5_000_000.0
@@ -216,13 +218,35 @@ public final class MonitorStore {
         health = .starting
         startedAt = startedAt ?? Date()
 
+        startSamplingLoop()
+    }
+
+    public func setSamplingInterval(_ interval: TimeInterval) {
+        let normalized = Self.normalizedSamplingInterval(interval)
+        guard normalized != samplingInterval else { return }
+        samplingInterval = normalized
+        guard samplingTask != nil else { return }
+        samplingTask?.cancel()
+        samplingTask = nil
+        startSamplingLoop()
+    }
+
+    public static func normalizedSamplingInterval(_ interval: TimeInterval) -> TimeInterval {
+        guard interval.isFinite else { return defaultSamplingInterval }
+        return min(
+            samplingIntervalRange.upperBound,
+            max(samplingIntervalRange.lowerBound, interval.rounded())
+        )
+    }
+
+    private func startSamplingLoop() {
         let sampleProvider = self.sampleProvider
         samplingTask = Task { [weak self] in
             while !Task.isCancelled {
                 let snapshot = await sampleProvider()
                 guard !Task.isCancelled else { return }
                 self?.ingest(snapshot)
-                let interval = self?.samplingInterval ?? 1
+                let interval = self?.samplingInterval ?? Self.defaultSamplingInterval
                 try? await Task.sleep(for: .seconds(interval))
             }
         }
@@ -328,9 +352,11 @@ public final class MonitorStore {
                 duration: duration,
                 diskReadBytes: diskHistory.read,
                 diskWriteBytes: diskHistory.write,
+                diskStatsAvailable: isDiskAvailable,
                 cpuPercent: systemHistory.cpuPercent,
                 networkReceiveBytes: systemHistory.networkReceive,
                 networkSendBytes: systemHistory.networkSend,
+                networkStatsAvailable: isSystemNetworkAvailable,
                 applications: applicationHistory,
                 devices: diskHistory.devices
             )

@@ -9,6 +9,7 @@ import Testing
     let text = try #require(String(data: data, encoding: .utf8))
 
     #expect(text.hasPrefix("timestamp_iso8601,duration_seconds,disk_read_bytes"))
+    #expect(text.contains("disk_coverage_ratio,network_coverage_ratio,cpu_coverage_ratio"))
     #expect(text.contains("report_coverage_ratio,partial\r\n"))
     #expect(text.contains("0.500000,true"))
     #expect(!text.contains("/Applications"))

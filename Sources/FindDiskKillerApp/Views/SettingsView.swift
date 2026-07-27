@@ -6,7 +6,7 @@ struct SettingsView: View {
     let store: MonitorStore
     let history: HistoryModel
     @AppStorage("showRateInMenuBar") private var showRateInMenuBar = true
-    @AppStorage("sampleInterval") private var sampleInterval = 1.0
+    @AppStorage("sampleInterval") private var sampleInterval = MonitorStore.defaultSamplingInterval
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.system.rawValue
     @AppStorage("openMainWindowAtLogin") private var openMainWindowAtLogin = false
     @State private var loginItem = LoginItemSettingsModel()
@@ -64,14 +64,42 @@ struct SettingsView: View {
 
                 Section {
                     Toggle(L10n.text("在菜单栏显示写入速率"), isOn: $showRateInMenuBar)
-                    LabeledContent(L10n.text("采样间隔")) {
-                        Picker(L10n.text("采样间隔"), selection: $sampleInterval) {
-                            Text(L10n.text("1 秒")).tag(1.0)
-                            Text(L10n.text("2 秒")).tag(2.0)
+                    VStack(spacing: 8) {
+                        HStack(spacing: 12) {
+                            Text(L10n.text("采样间隔"))
+                            Spacer(minLength: 24)
+                            HStack(spacing: 5) {
+                                TextField(
+                                    L10n.text("采样间隔"),
+                                    value: samplingIntervalBinding,
+                                    format: .number.precision(.fractionLength(0))
+                                )
+                                .labelsHidden()
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 42)
+                                Text(L10n.text("秒"))
+                                    .fixedSize()
+                            }
                         }
+
+                        Slider(
+                            value: samplingIntervalBinding,
+                            in: MonitorStore.samplingIntervalRange,
+                            step: 1
+                        )
                         .labelsHidden()
-                        .frame(width: 120)
+                        .accessibilityLabel(L10n.text("采样间隔"))
+
+                        HStack {
+                            Text("1")
+                            Spacer()
+                            Text("60")
+                        }
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
                     }
+                    .padding(.vertical, 3)
                 }
             }
             .formStyle(.grouped)
@@ -283,7 +311,8 @@ struct SettingsView: View {
             Text(L10n.text("已有历史可在停止保存后继续查看；删除后无法恢复。"))
         }
         .task {
-            store.samplingInterval = sampleInterval
+            store.setSamplingInterval(sampleInterval)
+            sampleInterval = store.samplingInterval
             refreshServiceStates()
             await history.refreshStorage()
         }
@@ -293,7 +322,7 @@ struct SettingsView: View {
             historyWasCleared = false
         }
         .onChange(of: sampleInterval) { _, newValue in
-            store.samplingInterval = newValue
+            store.setSamplingInterval(newValue)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshServiceStates()
@@ -307,6 +336,17 @@ struct SettingsView: View {
         default:
             true
         }
+    }
+
+    private var samplingIntervalBinding: Binding<Double> {
+        Binding(
+            get: { sampleInterval },
+            set: { value in
+                let normalized = MonitorStore.normalizedSamplingInterval(value)
+                sampleInterval = normalized
+                store.setSamplingInterval(normalized)
+            }
+        )
     }
 
     private var traceHelperStatusText: String {

@@ -4,6 +4,7 @@ import SwiftUI
 
 struct HistoryApplicationTable: View {
     let applications: [HistoryApplicationReport]
+    var isLoading = false
 
     @State private var sortMetric: ApplicationHistorySortMetric = .write
     @State private var ascending = false
@@ -32,6 +33,9 @@ struct HistoryApplicationTable: View {
         .onChange(of: ascending) { _, _ in
             ensureVisibleSelection()
         }
+        .redacted(reason: isLoading ? .placeholder : [])
+        .allowsHitTesting(!isLoading)
+        .accessibilityHidden(isLoading)
     }
 
     private var wideLayout: some View {
@@ -70,33 +74,43 @@ struct HistoryApplicationTable: View {
             }
             Divider()
 
-            ForEach(Array(sortedApplications.enumerated()), id: \.element.id) { index, application in
-                Button {
-                    selectedApplicationID = application.id
-                    tableHasFocus = true
-                } label: {
-                    applicationRow(application, rank: index + 1, compact: compact)
+            if isLoading {
+                ForEach(0..<5, id: \.self) { index in
+                    loadingApplicationRow(rank: index + 1, compact: compact)
                         .frame(height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .background(rowBackground(for: application.id))
-                .overlay(alignment: .leading) {
-                    if selectedApplicationID == application.id {
-                        Rectangle()
-                            .fill(Color.accentColor.opacity(tableHasFocus ? 0.9 : 0.55))
-                            .frame(width: 2)
+                    if index < 4 {
+                        Divider().padding(.leading, 40)
                     }
                 }
-                .onHover { isHovered in
-                    hoveredApplicationID = isHovered ? application.id : nil
-                }
-                .accessibilityLabel(displayName(for: application))
-                .accessibilityValue(accessibilitySummary(for: application, rank: index + 1))
-                .accessibilityHint(L10n.text("按下打开详情"))
+            } else {
+                ForEach(Array(sortedApplications.enumerated()), id: \.element.id) { index, application in
+                    Button {
+                        selectedApplicationID = application.id
+                        tableHasFocus = true
+                    } label: {
+                        applicationRow(application, rank: index + 1, compact: compact)
+                            .frame(height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(rowBackground(for: application.id))
+                    .overlay(alignment: .leading) {
+                        if selectedApplicationID == application.id {
+                            Rectangle()
+                                .fill(Color.accentColor.opacity(tableHasFocus ? 0.9 : 0.55))
+                                .frame(width: 2)
+                        }
+                    }
+                    .onHover { isHovered in
+                        hoveredApplicationID = isHovered ? application.id : nil
+                    }
+                    .accessibilityLabel(displayName(for: application))
+                    .accessibilityValue(accessibilitySummary(for: application, rank: index + 1))
+                    .accessibilityHint(L10n.text("按下打开详情"))
 
-                if index < sortedApplications.count - 1 {
-                    Divider().padding(.leading, 40)
+                    if index < sortedApplications.count - 1 {
+                        Divider().padding(.leading, 40)
+                    }
                 }
             }
         }
@@ -199,6 +213,7 @@ struct HistoryApplicationTable: View {
             }
         } label: {
             HStack(spacing: 3) {
+                Spacer(minLength: 0)
                 Text(metric.title)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
@@ -206,9 +221,8 @@ struct HistoryApplicationTable: View {
                     Image(systemName: ascending ? "chevron.up" : "chevron.down")
                         .font(.system(size: 8, weight: .bold))
                 }
-                Spacer(minLength: 0)
             }
-            .frame(width: width, height: 34, alignment: .leading)
+            .frame(width: width, height: 34, alignment: .trailing)
             .foregroundStyle(sortMetric == metric ? Color.primary : Color.secondary)
             .contentShape(Rectangle())
         }
@@ -241,6 +255,36 @@ struct HistoryApplicationTable: View {
         .font(.callout)
     }
 
+    private func loadingApplicationRow(rank: Int, compact: Bool) -> some View {
+        HStack(spacing: 8) {
+            rankLabel(rank)
+            HStack(spacing: 9) {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(.quaternary)
+                    .frame(width: 26, height: 26)
+                Text("Application name")
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 7) {
+                Capsule().fill(.quaternary).frame(width: 50, height: 4)
+                Text("00%").frame(width: 38, alignment: .trailing)
+            }
+            .frame(width: 105, alignment: .leading)
+
+            metricText("000 GB", width: 92)
+            if !compact {
+                metricText("000 GB", width: 92)
+                metricText("00小时", width: 86)
+                metricText("000 GB", width: 96)
+            }
+        }
+        .padding(.horizontal, 8)
+        .font(.callout)
+    }
+
     private func rankLabel(_ rank: Int) -> some View {
         Text("#\(rank)")
             .font(.caption.monospacedDigit().weight(rank <= 3 ? .semibold : .regular))
@@ -251,9 +295,7 @@ struct HistoryApplicationTable: View {
     private func applicationIdentity(_ application: HistoryApplicationReport) -> some View {
         HStack(spacing: 9) {
             HistoryApplicationIcon(
-                identity: application.id,
-                fallbackInitial: initial(for: application),
-                fallbackColor: identityColor(for: application)
+                identity: application.id
             )
 
             Text(displayName(for: application))
@@ -297,13 +339,13 @@ struct HistoryApplicationTable: View {
 
     @ViewBuilder
     private var applicationDetail: some View {
-        if let selectedApplication {
+        if isLoading {
+            loadingApplicationDetail
+        } else if let selectedApplication {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
                     HistoryApplicationIcon(
                         identity: selectedApplication.id,
-                        fallbackInitial: initial(for: selectedApplication),
-                        fallbackColor: identityColor(for: selectedApplication),
                         size: 32
                     )
                     VStack(alignment: .leading, spacing: 2) {
@@ -340,6 +382,45 @@ struct HistoryApplicationTable: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .contain)
         }
+    }
+
+    private var loadingApplicationDetail: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(.quaternary)
+                    .frame(width: 32, height: 32)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Application name")
+                        .font(.headline)
+                        .lineLimit(1)
+                    Text("#1")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 24) {
+                    loadingDetailMetrics
+                }
+                .frame(minWidth: 620, alignment: .leading)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    loadingDetailMetrics
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var loadingDetailMetrics: some View {
+        detailMetric(L10n.text("写入"), "000 GB", "square.and.arrow.down")
+        detailMetric(L10n.text("读取"), "000 GB", "square.and.arrow.up")
+        detailMetric("CPU", "00小时", "cpu")
+        detailMetric(L10n.text("网络"), "000 GB", "network")
+        detailMetric(L10n.text("写入占比"), "00%", "chart.bar.fill")
     }
 
     private func detailMetric(_ title: String, _ value: String, _ symbol: String) -> some View {
@@ -405,12 +486,6 @@ struct HistoryApplicationTable: View {
         application.id == "other" ? L10n.text("其他") : application.name
     }
 
-    private func initial(for application: HistoryApplicationReport) -> String {
-        guard application.id != "other" else { return "…" }
-        let name = displayName(for: application).trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.first.map { String($0).uppercased() } ?? "?"
-    }
-
     private func identityColor(for application: HistoryApplicationReport) -> Color {
         let palette: [Color] = [.blue, .teal, .orange, .indigo, .green, .pink]
         var hash: UInt64 = 14_695_981_039_346_656_037
@@ -463,8 +538,6 @@ struct HistoryApplicationTable: View {
 
 private struct HistoryApplicationIcon: View {
     let identity: String
-    let fallbackInitial: String
-    let fallbackColor: Color
     var size: CGFloat = 26
     @State private var applicationIcon: NSImage?
 
@@ -474,12 +547,14 @@ private struct HistoryApplicationIcon: View {
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.high)
+                    .scaledToFit()
             } else {
-                Text(fallbackInitial)
-                    .font(.system(size: size * 0.42, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(fallbackColor, in: RoundedRectangle(cornerRadius: size * 0.22))
+                Image(systemName: identity == "other" ? "ellipsis" : "terminal")
+                    .resizable()
+                    .scaledToFit()
+                    .padding(size * 0.2)
+                    .foregroundStyle(.secondary)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
             }
         }
         .frame(width: size, height: size)

@@ -95,6 +95,8 @@
 "在菜单栏显示写入速率" = "Mostrar a taxa de gravação na barra de menus";
 "采样间隔" = "Intervalo de coleta";
 "1 秒" = "1 segundo";
+"%.0f 秒" = "%.0f s";
+"秒" = "s";
 "2 秒" = "2 segundos";
 "通用" = "Geral";
 "普通历史" = "Histórico padrão";
@@ -413,3 +415,9 @@
 "请在安装窗口中将 FindDiskKiller 拖入“应用程序”，然后重新打开。" = "Arraste o FindDiskKiller para Aplicativos no instalador e abra-o novamente.";
 "请将 FindDiskKiller 移入“应用程序”文件夹，然后重新打开。" = "Mova o FindDiskKiller para a pasta Aplicativos e abra-o novamente.";
 "正在更新" = "Atualizando";
+"缩小时间轴" = "Reduzir linha do tempo";
+"浏览时间轴" = "Navegar pela linha do tempo";
+"放大时间轴" = "Ampliar linha do tempo";
+"%.0f 分钟" = "%.0f min";
+"%.0f 小时" = "%.0f h";
+"%.0f 天" = "%.0f dias";

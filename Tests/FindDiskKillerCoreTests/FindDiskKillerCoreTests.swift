@@ -810,6 +810,355 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(snapshot.volumes.contains { $0.mountPath == "/" })
 }
 
+@Test func samplerRefreshesProcessNetworkAtMostOncePerTenSeconds() async {
+    let clock = LockedSamplerClock(now: 1_000)
+    let source = StubProcessNetworkSource(results: [
+        .available([getpid(): .init(received: 100, sent: 200)]),
+        .available([getpid(): .init(received: 300, sent: 500)])
+    ])
+    let sampler = SystemSampler(
+        processNetworkRefreshInterval: 1,
+        uptimeProvider: clock.read,
+        processNetworkSampleProvider: source.sample
+    )
+
+    let initial = await sampler.collect()
+    #expect(!initial.processNetworkAvailable)
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+
+    for second in 0...9 {
+        clock.set(1_000 + TimeInterval(second))
+        let cached = await sampler.collect()
+        #expect(cached.processNetworkAvailable)
+    }
+    #expect(source.callCount == 1)
+
+    clock.set(1_010)
+    let whileRefreshing = await sampler.collect()
+    #expect(whileRefreshing.processNetworkAvailable)
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+
+    #expect(source.callCount == 2)
+    let refreshedBaseline = await sampler.collect()
+    let baselineProcess = refreshedBaseline.processes.first { $0.pid == getpid() }
+    #expect(baselineProcess?.networkBytesReceived == 100)
+    #expect(baselineProcess?.networkBytesSent == 200)
+
+    clock.set(1_020)
+    let smoothed = await sampler.collect()
+    let currentProcess = smoothed.processes.first { $0.pid == getpid() }
+    #expect(currentProcess?.networkBytesReceived == 300)
+    #expect(currentProcess?.networkBytesSent == 500)
+    #expect(smoothed.processes.filter { $0.pid != getpid() }.allSatisfy {
+        $0.networkBytesReceived == nil && $0.networkBytesSent == nil
+    })
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+}
+
+@MainActor
+@Test func samplerSpreadsNetworkDeltaAcrossTheObservedNetworkInterval() async {
+    let clock = LockedSamplerClock(now: 3_000)
+    let source = StubProcessNetworkSource(results: [
+        .available([getpid(): .init(received: 100, sent: 200)]),
+        .available([getpid(): .init(received: 1_100, sent: 2_200)])
+    ])
+    let sampler = SystemSampler(
+        processNetworkRefreshInterval: 10,
+        uptimeProvider: clock.read,
+        processNetworkSampleProvider: source.sample
+    )
+    let store = MonitorStore()
+
+    func ingestCurrentProcess(_ snapshot: SystemSnapshot) {
+        store.ingest(SystemSnapshot(
+            date: snapshot.date,
+            uptime: snapshot.uptime,
+            processes: snapshot.processes.filter { $0.pid == getpid() },
+            disks: snapshot.disks,
+            volumes: snapshot.volumes,
+            cpuUserTicks: snapshot.cpuUserTicks,
+            cpuSystemTicks: snapshot.cpuSystemTicks,
+            cpuNiceTicks: snapshot.cpuNiceTicks,
+            cpuIdleTicks: snapshot.cpuIdleTicks,
+            networkInterfaces: snapshot.networkInterfaces,
+            cpuStatsAvailable: snapshot.cpuStatsAvailable,
+            networkInterfacesAvailable: snapshot.networkInterfacesAvailable,
+            processNetworkAvailable: snapshot.processNetworkAvailable
+        ))
+    }
+
+    _ = await sampler.collect()
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+    ingestCurrentProcess(await sampler.collect())
+
+    clock.set(3_010)
+    _ = await sampler.collect()
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+    ingestCurrentProcess(await sampler.collect())
+
+    clock.set(3_013)
+    let firstSmoothedSnapshot = await sampler.collect()
+    let firstSmoothedProcess = firstSmoothedSnapshot.processes.first { $0.pid == getpid() }
+    #expect(firstSmoothedProcess?.networkBytesReceived == 400)
+    #expect(firstSmoothedProcess?.networkBytesSent == 800)
+    ingestCurrentProcess(firstSmoothedSnapshot)
+    await store.waitForPendingProcessSummary()
+    let firstRate = store.processes.first { $0.pids.contains(getpid()) }
+    #expect(abs((firstRate?.currentNetworkReceiveBytesPerSecond ?? 0) - 100) < 0.001)
+    #expect(abs((firstRate?.currentNetworkSendBytesPerSecond ?? 0) - 200) < 0.001)
+
+    clock.set(3_016)
+    let secondSmoothedSnapshot = await sampler.collect()
+    let secondSmoothedProcess = secondSmoothedSnapshot.processes.first { $0.pid == getpid() }
+    #expect(secondSmoothedProcess?.networkBytesReceived == 700)
+    #expect(secondSmoothedProcess?.networkBytesSent == 1_400)
+    ingestCurrentProcess(secondSmoothedSnapshot)
+    await store.waitForPendingProcessSummary()
+    let secondRate = store.processes.first { $0.pids.contains(getpid()) }
+    #expect(abs((secondRate?.currentNetworkReceiveBytesPerSecond ?? 0) - 100) < 0.001)
+    #expect(abs((secondRate?.currentNetworkSendBytesPerSecond ?? 0) - 200) < 0.001)
+    #expect(secondRate?.totalNetworkReceivedBytes == 600)
+    #expect(secondRate?.totalNetworkSentBytes == 1_200)
+}
+
+@Test func samplerDoesNotBlockMainCollectionOnProcessNetworkRefresh() async {
+    let clock = LockedSamplerClock(now: 1_500)
+    let source = BlockingProcessNetworkSource(
+        result: .available([getpid(): .init(received: 100, sent: 200)])
+    )
+    let sampler = SystemSampler(
+        processNetworkRefreshInterval: 10,
+        uptimeProvider: clock.read,
+        processNetworkSampleProvider: source.sample
+    )
+    let watchdog = Task.detached {
+        try? await Task.sleep(for: .seconds(2))
+        guard !Task.isCancelled else { return }
+        source.release()
+    }
+
+    let initial = await sampler.collect()
+    let completedSynchronously = source.hasCompleted
+    source.release()
+    watchdog.cancel()
+
+    #expect(!initial.processNetworkAvailable)
+    #expect(!completedSynchronously)
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+    #expect((await sampler.collect()).processNetworkAvailable)
+}
+
+@Test func samplerPublishesObservedNetworkTailAfterProcessExits() async {
+    let pid: Int32 = 42_424
+    let clock = LockedSamplerClock(now: 4_000)
+    let processes = StubProcessCounterSource(current: [networkProcessFixture(pid: pid)])
+    let network = StubProcessNetworkSource(results: [
+        .available([pid: .init(received: 100, sent: 200)]),
+        .available([pid: .init(received: 6_100, sent: 12_200)])
+    ])
+    let sampler = SystemSampler(
+        processNetworkRefreshInterval: 10,
+        uptimeProvider: clock.read,
+        processNetworkSampleProvider: network.sample,
+        processCounterProvider: processes.sample
+    )
+
+    _ = await sampler.collect()
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+    _ = await sampler.collect()
+
+    clock.set(4_060)
+    _ = await sampler.collect()
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+    processes.set([])
+    let retiredBaseline = await sampler.collect()
+    #expect(retiredBaseline.processes.first { $0.pid == pid }?.networkBytesReceived == 100)
+    #expect(retiredBaseline.processes.first { $0.pid == pid }?.networkBytesSent == 200)
+
+    clock.set(4_120)
+    let retiredFinal = await sampler.collect()
+    #expect(retiredFinal.processes.first { $0.pid == pid }?.networkBytesReceived == 6_100)
+    #expect(retiredFinal.processes.first { $0.pid == pid }?.networkBytesSent == 12_200)
+}
+
+@Test func samplerPreservesPendingNetworkDeltaAcrossCounterReset() async {
+    let pid: Int32 = 42_425
+    let clock = LockedSamplerClock(now: 5_000)
+    let processes = StubProcessCounterSource(current: [networkProcessFixture(pid: pid)])
+    let network = StubProcessNetworkSource(results: [
+        .available([pid: .init(received: 100, sent: 200)]),
+        .available([pid: .init(received: 1_100, sent: 2_200)]),
+        .available([pid: .init(received: 50, sent: 75)])
+    ])
+    let sampler = SystemSampler(
+        processNetworkRefreshInterval: 10,
+        uptimeProvider: clock.read,
+        processNetworkSampleProvider: network.sample,
+        processCounterProvider: processes.sample
+    )
+
+    _ = await sampler.collect()
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+    _ = await sampler.collect()
+
+    clock.set(5_010)
+    _ = await sampler.collect()
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+    clock.set(5_015)
+    _ = await sampler.collect()
+
+    clock.set(5_020)
+    _ = await sampler.collect()
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+    let afterReset = await sampler.collect()
+    #expect(afterReset.processes.first { $0.pid == pid }?.networkBytesReceived == 600)
+    #expect(afterReset.processes.first { $0.pid == pid }?.networkBytesSent == 1_200)
+
+    clock.set(5_025)
+    let completedTail = await sampler.collect()
+    #expect(completedTail.processes.first { $0.pid == pid }?.networkBytesReceived == 1_100)
+    #expect(completedTail.processes.first { $0.pid == pid }?.networkBytesSent == 2_200)
+}
+
+@Test func samplerPublishesProcessNetworkFailureWithoutRapidRetry() async {
+    let clock = LockedSamplerClock(now: 2_000)
+    let source = StubProcessNetworkSource(results: [
+        .available([getpid(): .init(received: 100, sent: 200)]),
+        .unavailable,
+        .available([getpid(): .init(received: 400, sent: 800)])
+    ])
+    let sampler = SystemSampler(
+        processNetworkRefreshInterval: 10,
+        uptimeProvider: clock.read,
+        processNetworkSampleProvider: source.sample
+    )
+
+    _ = await sampler.collect()
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+    #expect((await sampler.collect()).processNetworkAvailable)
+
+    clock.set(2_010)
+    #expect((await sampler.collect()).processNetworkAvailable)
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+
+    let failed = await sampler.collect()
+    #expect(!failed.processNetworkAvailable)
+    #expect(failed.processes.allSatisfy {
+        $0.networkBytesReceived == nil && $0.networkBytesSent == nil
+    })
+
+    clock.set(2_019)
+    _ = await sampler.collect()
+    #expect(source.callCount == 2)
+
+    clock.set(2_020)
+    _ = await sampler.collect()
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+    #expect(source.callCount == 3)
+    #expect((await sampler.collect()).processNetworkAvailable)
+}
+
+private final class LockedSamplerClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: TimeInterval
+
+    init(now: TimeInterval) {
+        value = now
+    }
+
+    func read() -> TimeInterval {
+        lock.withLock { value }
+    }
+
+    func set(_ value: TimeInterval) {
+        lock.withLock { self.value = value }
+    }
+}
+
+private final class StubProcessNetworkSource: @unchecked Sendable {
+    private let lock = NSLock()
+    private var results: [ProcessNetworkSample]
+    private var invocationCount = 0
+
+    init(results: [ProcessNetworkSample]) {
+        self.results = results
+    }
+
+    var callCount: Int {
+        lock.withLock { invocationCount }
+    }
+
+    func sample() -> ProcessNetworkSample {
+        lock.withLock {
+            invocationCount += 1
+            return results.isEmpty ? .unavailable : results.removeFirst()
+        }
+    }
+}
+
+private final class StubProcessCounterSource: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: [RawProcessCounter]
+
+    init(current: [RawProcessCounter]) {
+        self.current = current
+    }
+
+    func sample() -> [RawProcessCounter] {
+        lock.withLock { current }
+    }
+
+    func set(_ current: [RawProcessCounter]) {
+        lock.withLock { self.current = current }
+    }
+}
+
+private func networkProcessFixture(pid: Int32) -> RawProcessCounter {
+    RawProcessCounter(
+        pid: pid,
+        startAbstime: 99,
+        name: "network-fixture",
+        path: "/usr/bin/network-fixture",
+        cpuTimeNanoseconds: 0,
+        bytesRead: 0,
+        bytesWritten: 0,
+        networkBytesReceived: nil,
+        networkBytesSent: nil
+    )
+}
+
+private final class BlockingProcessNetworkSource: @unchecked Sendable {
+    private let condition = NSCondition()
+    private let result: ProcessNetworkSample
+    private var isReleased = false
+    private var completed = false
+
+    init(result: ProcessNetworkSample) {
+        self.result = result
+    }
+
+    var hasCompleted: Bool {
+        condition.withLock { completed }
+    }
+
+    func sample() -> ProcessNetworkSample {
+        condition.lock()
+        while !isReleased {
+            condition.wait()
+        }
+        completed = true
+        condition.unlock()
+        return result
+    }
+
+    func release() {
+        condition.withLock {
+            isReleased = true
+            condition.broadcast()
+        }
+    }
+}
+
 @Test func samplerReportsProcessCPUInActivityMonitorUnits() async {
     let first = await SystemSampler.shared.collect()
     guard let firstProcess = first.processes.first(where: { $0.pid == getpid() }) else {

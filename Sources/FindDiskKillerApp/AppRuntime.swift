@@ -22,6 +22,7 @@ final class AppRuntime {
         store: MonitorStore = MonitorStore(),
         history: HistoryModel = HistoryModel(),
         processDetailWindows: ProcessDetailWindowCoordinator = ProcessDetailWindowCoordinator(),
+        defaults: UserDefaults = .standard,
         flushHistory: (@MainActor () async -> Void)? = nil
     ) {
         self.store = store
@@ -31,6 +32,10 @@ final class AppRuntime {
             await store.flushHistory()
             await history.refreshStorage()
         }
+        let storedInterval = (defaults.object(forKey: "sampleInterval") as? NSNumber)?.doubleValue
+            ?? MonitorStore.defaultSamplingInterval
+        store.setSamplingInterval(storedInterval)
+        defaults.set(store.samplingInterval, forKey: "sampleInterval")
     }
 
     func launch() {

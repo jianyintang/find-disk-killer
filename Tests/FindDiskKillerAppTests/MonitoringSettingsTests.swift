@@ -33,6 +33,39 @@ private struct LoginFixtureError: LocalizedError {
 }
 
 @MainActor
+@Test func samplingIntervalDefaultsToThreeSecondsAndClampsToSupportedBounds() {
+    let store = MonitorStore()
+
+    #expect(store.samplingInterval == 3)
+    store.setSamplingInterval(0)
+    #expect(store.samplingInterval == 1)
+    store.setSamplingInterval(90)
+    #expect(store.samplingInterval == 60)
+    store.setSamplingInterval(7.6)
+    #expect(store.samplingInterval == 8)
+}
+
+@MainActor
+@Test func runtimeLoadsThePersistedSamplingIntervalBeforeCollectionStarts() throws {
+    let suiteName = "SamplingIntervalTests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    defaults.set(12.0, forKey: "sampleInterval")
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = MonitorStore()
+
+    _ = AppRuntime(
+        store: store,
+        history: HistoryModel(databaseURL: root.appending(path: "monitor.sqlite3")),
+        defaults: defaults
+    )
+
+    #expect(store.samplingInterval == 12)
+}
+
+@MainActor
 @Test func loginItemModelTracksEffectiveSystemState() {
     let service = FakeLoginItemService(status: .requiresApproval)
     let model = LoginItemSettingsModel(service: service)
