@@ -67,24 +67,32 @@ struct FileAccessTraceSelection: Equatable, Sendable {
     }
 }
 
-private struct FileAccessTraceEngineUpdate: Sendable {
+struct FileAccessTraceEngineUpdate: Sendable {
     let snapshot: FileAccessTraceSnapshot
     let terminalFailure: Bool
 }
 
-private actor FileAccessTraceEngine {
+actor FileAccessTraceEngine {
+    typealias DescriptorKindResolver = @Sendable (
+        ProcessSession,
+        Int32
+    ) -> FileDescriptorKind
+
     private var parser = FileAccessTraceStreamParser()
     private var aggregator: FileAccessTraceAggregator
     private let target: FileAccessTraceTarget
     private var descriptors = FileAccessTraceDescriptorIndex()
+    private let descriptorKind: DescriptorKindResolver
 
     init(
         target: FileAccessTraceTarget,
         startedAt: Date,
         sessions: [ProcessSession],
-        openFiles: [OpenFileRecord]
+        openFiles: [OpenFileRecord],
+        descriptorKind: @escaping DescriptorKindResolver = FileDescriptorInspector.kind
     ) {
         self.target = target
+        self.descriptorKind = descriptorKind
         aggregator = FileAccessTraceAggregator(target: target, startedAt: startedAt)
         let sessionsByPID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.pid, $0) })
         for file in openFiles {
@@ -134,6 +142,18 @@ private actor FileAccessTraceEngine {
                     process: resolvedProcess,
                     fileDescriptor: parsed.fileDescriptor
                 )
+                if path == nil,
+                   let tracedProcess = record.process,
+                   let fileDescriptor = parsed.fileDescriptor,
+                   descriptorKind(
+                       ProcessSession(
+                           pid: tracedProcess.pid,
+                           startAbstime: tracedProcess.startAbstime
+                       ),
+                       fileDescriptor
+                   ) == .nonVnode {
+                    continue
+                }
                 let volumeIdentifier = volumeIdentifier(for: path)
                 aggregator.ingest(FileAccessTraceEvent(
                     timestamp: parsed.timestamp,

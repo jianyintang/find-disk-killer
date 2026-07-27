@@ -591,6 +591,58 @@ int dm_collect_open_files(
     return output_count;
 }
 
+int dm_file_descriptor_kind(
+    int32_t pid,
+    uint64_t expected_start_abstime,
+    int32_t file_descriptor
+) {
+    if (pid <= 0 || file_descriptor < 0) {
+        return -1;
+    }
+
+    struct rusage_info_v4 usage = {0};
+    if (proc_pid_rusage(pid, RUSAGE_INFO_V4, (rusage_info_t *)&usage) != 0
+        || usage.ri_proc_start_abstime != expected_start_abstime) {
+        return -1;
+    }
+
+    int required_bytes = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
+    if (required_bytes <= 0) {
+        return -1;
+    }
+    size_t maximum_bytes = 8192 * sizeof(struct proc_fdinfo);
+    size_t capacity = (size_t)required_bytes + 32 * sizeof(struct proc_fdinfo);
+    if (capacity > maximum_bytes) {
+        capacity = maximum_bytes;
+    }
+    struct proc_fdinfo *fds = calloc(1, capacity);
+    if (fds == NULL) {
+        return -1;
+    }
+    int actual_bytes = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds, (int)capacity);
+    if (actual_bytes <= 0) {
+        free(fds);
+        return -1;
+    }
+
+    int result = -1;
+    int count = actual_bytes / (int)sizeof(struct proc_fdinfo);
+    for (int index = 0; index < count; index++) {
+        if (fds[index].proc_fd == file_descriptor) {
+            result = fds[index].proc_fdtype == PROX_FDTYPE_VNODE ? 1 : 0;
+            break;
+        }
+    }
+    free(fds);
+
+    struct rusage_info_v4 final_usage = {0};
+    if (proc_pid_rusage(pid, RUSAGE_INFO_V4, (rusage_info_t *)&final_usage) != 0
+        || final_usage.ri_proc_start_abstime != expected_start_abstime) {
+        return -1;
+    }
+    return result;
+}
+
 int dm_collect_disk_io(DMDiskIO *buffer, int capacity) {
     if (buffer == NULL || capacity <= 0) {
         return 0;

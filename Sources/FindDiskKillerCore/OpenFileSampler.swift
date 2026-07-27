@@ -10,6 +10,29 @@ public enum OpenFileAccessMode: String, Sendable {
     case unknown
 }
 
+public enum FileDescriptorKind: Equatable, Sendable {
+    case vnode
+    case nonVnode
+    case unavailable
+}
+
+public enum FileDescriptorInspector {
+    public static func kind(
+        process: ProcessSession,
+        fileDescriptor: Int32
+    ) -> FileDescriptorKind {
+        switch dm_file_descriptor_kind(
+            process.pid,
+            process.startAbstime,
+            fileDescriptor
+        ) {
+        case 1: .vnode
+        case 0: .nonVnode
+        default: .unavailable
+        }
+    }
+}
+
 public struct OpenFileRecord: Identifiable, Sendable {
     public let pid: Int32
     public let fileDescriptor: Int32

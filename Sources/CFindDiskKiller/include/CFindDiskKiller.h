@@ -82,6 +82,11 @@ int dm_collect_open_files(
     int *budget_exhausted,
     int *error_code
 );
+int dm_file_descriptor_kind(
+    int32_t pid,
+    uint64_t expected_start_abstime,
+    int32_t file_descriptor
+);
 DMFSEventWatcher *dm_fsevent_watcher_create(const char *root_path);
 int dm_fsevent_watcher_start(DMFSEventWatcher *watcher);
 int dm_fsevent_watcher_drain(

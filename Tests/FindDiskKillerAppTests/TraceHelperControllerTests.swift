@@ -532,6 +532,177 @@ func failedStartPreservesResultsUntilANewSessionIDIsReceived() async throws {
     store.stop()
 }
 
+@Test
+func electronFSUsageFixtureResolvesOpenDescriptorAndCountsWrite() async throws {
+    let process = TraceHelperProcessIdentity(
+        pid: 28_104,
+        startAbstime: 4_170_074_877_576,
+        displayName: "Electron"
+    )
+    let target = try FileAccessTraceTarget(
+        path: "/Users/example/.redeven/local-environment/diagnostics",
+        volumeIdentifier: "volume-a",
+        kind: .directory,
+        isCaseSensitive: false
+    )
+    let startedAt = try traceFixtureDate(hour: 15, minute: 47, second: 0)
+    let engine = FileAccessTraceEngine(
+        target: target,
+        startedAt: startedAt,
+        sessions: [ProcessSession(pid: process.pid, startAbstime: process.startAbstime)],
+        openFiles: [],
+        descriptorKind: { _, _ in .unavailable }
+    )
+    let path = "/Users/example/.redeven/local-environment/diagnostics/desktop-events.jsonl"
+    let openLine = "15:47:01.804268 open F=75 (_WCA_______X___) \(path) 0.000150 Electron.18306140"
+    let writeLine = "15:47:01.804384 write F=75 B=0x14e 0.000056 Electron.18306139"
+    #expect(FileAccessTraceDescriptorParser.parse(line: openLine) == .opened(
+        fileDescriptor: 75,
+        path: path
+    ))
+    guard case .event(let parsedWrite) = FileAccessTraceParser.parse(
+        line: writeLine,
+        on: try traceFixtureDate(hour: 15, minute: 47, second: 2)
+    ) else {
+        Issue.record("Expected the captured Electron write row to parse")
+        return
+    }
+    #expect(parsedWrite.timestamp >= startedAt)
+    let payload = TraceHelperDrainPayload(
+        records: [
+            TraceHelperRecord(
+                line: openLine,
+                process: process
+            ),
+            TraceHelperRecord(
+                line: writeLine,
+                process: process
+            ),
+            TraceHelperRecord(
+                line: "15:47:01.804527 close F=75 0.000083 Electron.18306137",
+                process: process
+            )
+        ],
+        droppedRecordCount: 0,
+        isFinished: false,
+        exitCode: nil
+    )
+
+    let update = await engine.consume(
+        payload,
+        at: try traceFixtureDate(hour: 15, minute: 47, second: 2)
+    )
+
+    #expect(update.snapshot.coverage == .complete)
+    #expect(update.snapshot.requestedReadBytes == 0)
+    #expect(update.snapshot.requestedWriteBytes == 0x14e)
+    #expect(update.snapshot.files.first?.path == path)
+    #expect(update.snapshot.processes.first?.identity.pid == process.pid)
+}
+
+@Test
+func electronNonVnodeReadDoesNotCreateAFileCoverageGap() async throws {
+    let process = TraceHelperProcessIdentity(
+        pid: 28_106,
+        startAbstime: 4_170_079_334_674,
+        displayName: "Electron Helper"
+    )
+    let target = try FileAccessTraceTarget(
+        path: "/private/var/folders/example/T",
+        volumeIdentifier: "volume-a",
+        kind: .directory,
+        isCaseSensitive: false
+    )
+    let startedAt = try traceFixtureDate(hour: 15, minute: 47, second: 0)
+    let engine = FileAccessTraceEngine(
+        target: target,
+        startedAt: startedAt,
+        sessions: [ProcessSession(pid: process.pid, startAbstime: process.startAbstime)],
+        openFiles: [],
+        descriptorKind: { session, fileDescriptor in
+            #expect(session.pid == process.pid)
+            #expect(fileDescriptor == 23)
+            return .nonVnode
+        }
+    )
+    let payload = TraceHelperDrainPayload(
+        records: [TraceHelperRecord(
+            line: "15:47:02.734963 read F=23 B=0x12 0.000009 Electron Helper.18306121",
+            process: process
+        )],
+        droppedRecordCount: 0,
+        isFinished: false,
+        exitCode: nil
+    )
+
+    let update = await engine.consume(
+        payload,
+        at: try traceFixtureDate(hour: 15, minute: 47, second: 3)
+    )
+
+    #expect(update.snapshot.coverage == .complete)
+    #expect(update.snapshot.requestedReadBytes == 0)
+    #expect(update.snapshot.requestedWriteBytes == 0)
+    #expect(update.snapshot.files.isEmpty)
+    #expect(update.snapshot.processes.isEmpty)
+}
+
+@Test(arguments: [FileDescriptorKind.vnode, .unavailable])
+func electronPathlessFileReadIsNotSilentlyDiscarded(
+    descriptorKind: FileDescriptorKind
+) async throws {
+    let process = TraceHelperProcessIdentity(
+        pid: 28_106,
+        startAbstime: 4_170_079_334_674,
+        displayName: "Electron Helper"
+    )
+    let target = try FileAccessTraceTarget(
+        path: "/private/var/folders/example/T",
+        volumeIdentifier: "volume-a",
+        kind: .directory,
+        isCaseSensitive: false
+    )
+    let engine = FileAccessTraceEngine(
+        target: target,
+        startedAt: try traceFixtureDate(hour: 15, minute: 47, second: 0),
+        sessions: [ProcessSession(pid: process.pid, startAbstime: process.startAbstime)],
+        openFiles: [],
+        descriptorKind: { _, _ in descriptorKind }
+    )
+    let payload = TraceHelperDrainPayload(
+        records: [TraceHelperRecord(
+            line: "15:47:02.734963 read F=23 B=0x12 0.000009 Electron Helper.18306121",
+            process: process
+        )],
+        droppedRecordCount: 0,
+        isFinished: false,
+        exitCode: nil
+    )
+
+    let update = await engine.consume(
+        payload,
+        at: try traceFixtureDate(hour: 15, minute: 47, second: 3)
+    )
+
+    #expect(update.snapshot.coverage == .partial(droppedEventCount: 1))
+    #expect(update.snapshot.requestedReadBytes == 0)
+    #expect(update.snapshot.files.isEmpty)
+    #expect(update.snapshot.processes.isEmpty)
+}
+
+private func traceFixtureDate(hour: Int, minute: Int, second: Int) throws -> Date {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try #require(TimeZone(identifier: "Asia/Shanghai"))
+    return try #require(calendar.date(from: DateComponents(
+        year: 2026,
+        month: 7,
+        day: 27,
+        hour: hour,
+        minute: minute,
+        second: second
+    )))
+}
+
 @MainActor
 private func waitUntil(
     timeout: Duration = .seconds(2),

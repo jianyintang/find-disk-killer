@@ -940,6 +940,45 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(snapshot.records.isEmpty)
 }
 
+@Test func fileDescriptorInspectorDistinguishesFilesFromNonVnodes() async throws {
+    let system = await SystemSampler.shared.collect()
+    guard let process = system.processes.first(where: { $0.pid == getpid() }) else {
+        Issue.record("Calling process was not visible")
+        return
+    }
+    let session = ProcessSession(pid: process.pid, startAbstime: process.startAbstime)
+    let file = FileManager.default.temporaryDirectory
+        .appendingPathComponent("find-disk-killer-fd-kind-\(UUID().uuidString)")
+    try Data("fixture".utf8).write(to: file)
+    defer { try? FileManager.default.removeItem(at: file) }
+    let fileDescriptor = Darwin.open(file.path, O_RDONLY)
+    #expect(fileDescriptor >= 0)
+    defer {
+        if fileDescriptor >= 0 { Darwin.close(fileDescriptor) }
+    }
+    var pipeDescriptors = [Int32](repeating: -1, count: 2)
+    #expect(Darwin.pipe(&pipeDescriptors) == 0)
+    defer {
+        pipeDescriptors.filter { $0 >= 0 }.forEach { Darwin.close($0) }
+    }
+
+    #expect(FileDescriptorInspector.kind(
+        process: session,
+        fileDescriptor: fileDescriptor
+    ) == .vnode)
+    #expect(FileDescriptorInspector.kind(
+        process: session,
+        fileDescriptor: pipeDescriptors[0]
+    ) == .nonVnode)
+    #expect(FileDescriptorInspector.kind(
+        process: ProcessSession(
+            pid: process.pid,
+            startAbstime: process.startAbstime &+ 1
+        ),
+        fileDescriptor: fileDescriptor
+    ) == .unavailable)
+}
+
 @Test func openFileBudgetSanitizesInvalidPublicLimits() {
     let budget = OpenFileSampler.Budget(
         maximumProcesses: -1,
