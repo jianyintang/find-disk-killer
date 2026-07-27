@@ -138,6 +138,7 @@ public final class MonitorStore {
         var name: String
         var path: String
         var appBundlePath: String?
+        var bundleIdentifier: String?
         var pids: Set<Int32>
         var sessions: Set<ProcessSession>
         var brand: ProcessBrand?
@@ -184,8 +185,30 @@ public final class MonitorStore {
     private var processSummaryTask: Task<Void, Never>?
     private var processSummaryGeneration = 0
     private var lastHistoryTrimAt: Date?
+    private var historyRecorder: HistoryRecorder?
+    private var historyRecordingTask: Task<Void, Never>?
+    private let sampleProvider: @Sendable () async -> SystemSnapshot
+    private let historyIdentityProvider: any HistoryIdentityProviding
 
-    public init() {}
+    public init(historyRecorder: HistoryRecorder? = nil) {
+        self.historyRecorder = historyRecorder
+        sampleProvider = { await SystemSampler.shared.collect() }
+        historyIdentityProvider = HistoryIdentityProvider.shared
+    }
+
+    init(
+        historyRecorder: HistoryRecorder? = nil,
+        sampleProvider: @escaping @Sendable () async -> SystemSnapshot,
+        historyIdentityProvider: any HistoryIdentityProviding = HistoryIdentityProvider.shared
+    ) {
+        self.historyRecorder = historyRecorder
+        self.sampleProvider = sampleProvider
+        self.historyIdentityProvider = historyIdentityProvider
+    }
+
+    public func attachHistoryRecorder(_ recorder: HistoryRecorder) {
+        historyRecorder = recorder
+    }
 
     public func start() {
         guard samplingTask == nil else { return }
@@ -193,9 +216,11 @@ public final class MonitorStore {
         health = .starting
         startedAt = startedAt ?? Date()
 
+        let sampleProvider = self.sampleProvider
         samplingTask = Task { [weak self] in
             while !Task.isCancelled {
-                let snapshot = await SystemSampler.shared.collect()
+                let snapshot = await sampleProvider()
+                guard !Task.isCancelled else { return }
                 self?.ingest(snapshot)
                 let interval = self?.samplingInterval ?? 1
                 try? await Task.sleep(for: .seconds(interval))
@@ -210,23 +235,36 @@ public final class MonitorStore {
         processSummaryTask = nil
         isCollecting = false
         health = .stopped
+        resetCounterBaselines()
+        enqueueHistoryFlush()
     }
 
     public func restart() {
         stop()
+        start()
+    }
+
+    public func resetCounterBaselines() {
         priorProcesses.removeAll(keepingCapacity: true)
         priorDisks.removeAll(keepingCapacity: true)
         recentDiskSamples.removeAll(keepingCapacity: true)
         priorUptime = nil
         priorSystemTotals = nil
         priorNetworkInterfaces.removeAll(keepingCapacity: true)
-        diskSegment = 0
-        cpuSegment = 0
-        networkSegment = 0
         diskWasAvailable = false
         cpuWasAvailable = false
         networkWasAvailable = false
-        start()
+        isDiskAvailable = false
+        isSystemCPUAvailable = false
+        isSystemNetworkAvailable = false
+        isProcessNetworkAvailable = false
+    }
+
+    public func flushHistory() async {
+        let pending = historyRecordingTask
+        await pending?.value
+        guard !Task.isCancelled else { return }
+        await historyRecorder?.flush()
     }
 
     public func clearHistory() {
@@ -259,6 +297,7 @@ public final class MonitorStore {
     }
 
     func ingest(_ snapshot: SystemSnapshot) {
+        let hasPriorSample = priorUptime != nil
         let duration = max(0.1, snapshot.uptime - (priorUptime ?? snapshot.uptime))
         priorUptime = snapshot.uptime
         lastUpdatedAt = snapshot.date
@@ -268,9 +307,13 @@ public final class MonitorStore {
         visibleProcessCount = snapshot.processes.count
         isProcessNetworkAvailable = snapshot.processNetworkAvailable
 
-        ingestDisks(snapshot.disks, at: snapshot.date, duration: duration)
-        ingestSystem(snapshot, duration: duration)
-        ingestProcesses(snapshot.processes, at: snapshot.date, duration: duration)
+        let diskHistory = ingestDisks(snapshot.disks, at: snapshot.date, duration: duration)
+        let systemHistory = ingestSystem(snapshot, duration: duration)
+        let applicationHistory = ingestProcesses(
+            snapshot.processes,
+            at: snapshot.date,
+            duration: duration
+        )
         trimHistoryIfNeeded(at: snapshot.date)
         scheduleProcessSummaryRebuild(at: snapshot.date, priority: .utility)
         updateHealth(at: snapshot.date)
@@ -278,9 +321,40 @@ public final class MonitorStore {
         if case .starting = health, points.count >= 2 {
             health = .normal
         }
+
+        if hasPriorSample, let historyRecorder {
+            let historySample = HistorySample(
+                timestamp: snapshot.date,
+                duration: duration,
+                diskReadBytes: diskHistory.read,
+                diskWriteBytes: diskHistory.write,
+                cpuPercent: systemHistory.cpuPercent,
+                networkReceiveBytes: systemHistory.networkReceive,
+                networkSendBytes: systemHistory.networkSend,
+                applications: applicationHistory,
+                devices: diskHistory.devices
+            )
+            let pending = historyRecordingTask
+            historyRecordingTask = Task {
+                await pending?.value
+                await historyRecorder.record(historySample)
+            }
+        }
     }
 
-    private func ingestSystem(_ snapshot: SystemSnapshot, duration: TimeInterval) {
+    private func enqueueHistoryFlush() {
+        guard let historyRecorder else { return }
+        let pending = historyRecordingTask
+        historyRecordingTask = Task {
+            await pending?.value
+            await historyRecorder.flush()
+        }
+    }
+
+    private func ingestSystem(
+        _ snapshot: SystemSnapshot,
+        duration: TimeInterval
+    ) -> (cpuPercent: Double?, networkReceive: UInt64, networkSend: UInt64) {
         let current = SystemTotals(
             cpuUser: snapshot.cpuUserTicks,
             cpuSystem: snapshot.cpuSystemTicks,
@@ -312,6 +386,8 @@ public final class MonitorStore {
 
         var receiveRate: Double?
         var sendRate: Double?
+        var receivedDeltaForHistory: UInt64 = 0
+        var sentDeltaForHistory: UInt64 = 0
         if snapshot.networkInterfacesAvailable {
             var receivedDelta: UInt64 = 0
             var sentDelta: UInt64 = 0
@@ -326,6 +402,8 @@ public final class MonitorStore {
                 ($0.index, NetworkInterfaceTotals(received: $0.bytesReceived, sent: $0.bytesSent))
             })
             if matchedInterfaceCount > 0 {
+                receivedDeltaForHistory = receivedDelta
+                sentDeltaForHistory = sentDelta
                 receiveRate = Double(receivedDelta) / duration
                 sendRate = Double(sentDelta) / duration
             }
@@ -350,13 +428,21 @@ public final class MonitorStore {
         if systemPoints.count > 3_600 {
             systemPoints.removeFirst(systemPoints.count - 3_600)
         }
+        return (cpuPercent, receivedDeltaForHistory, sentDeltaForHistory)
     }
 
-    private func ingestDisks(_ counters: [RawDiskCounter], at date: Date, duration: TimeInterval) {
+    private func ingestDisks(
+        _ counters: [RawDiskCounter],
+        at date: Date,
+        duration: TimeInterval
+    ) -> (read: UInt64, write: UInt64, devices: [HistoryDeviceSample]) {
         var diskRows: [DiskActivity] = []
         var totalReadRate = 0.0
         var totalWriteRate = 0.0
         var hasPhysicalSample = false
+        var totalReadBytes: UInt64 = 0
+        var totalWriteBytes: UInt64 = 0
+        var historyDevices: [HistoryDeviceSample] = []
 
         for counter in counters {
             let current = DiskTotals(
@@ -391,6 +477,17 @@ public final class MonitorStore {
                 hasPhysicalSample = true
                 totalReadRate += readRate
                 totalWriteRate += writeRate
+                totalReadBytes = Self.addingClamped(totalReadBytes, readDelta)
+                totalWriteBytes = Self.addingClamped(totalWriteBytes, writeDelta)
+                historyDevices.append(HistoryDeviceSample(
+                    identity: historyIdentityProvider.deviceIdentity(
+                        registryID: counter.registryID,
+                        bsdName: counter.bsdName
+                    ),
+                    name: counter.name,
+                    readBytes: readDelta,
+                    writeBytes: writeDelta
+                ))
             }
             diskRows.append(DiskActivity(
                 id: counter.registryID,
@@ -429,13 +526,14 @@ public final class MonitorStore {
         if points.count > 3_600 {
             points.removeFirst(points.count - 3_600)
         }
+        return (totalReadBytes, totalWriteBytes, historyDevices)
     }
 
     private func ingestProcesses(
         _ counters: [RawProcessCounter],
         at date: Date,
         duration: TimeInterval
-    ) {
+    ) -> [HistoryApplicationSample] {
         var groupedDeltas: [String: (
             read: UInt64,
             written: UInt64,
@@ -473,6 +571,8 @@ public final class MonitorStore {
                 name: classification.displayName,
                 path: counter.path,
                 appBundlePath: classification.appBundlePath,
+                bundleIdentifier: classification.appBundlePath
+                    .flatMap { Bundle(path: $0)?.bundleIdentifier },
                 pids: [],
                 sessions: [],
                 brand: classification.brand,
@@ -534,6 +634,27 @@ public final class MonitorStore {
                 networkAvailable: delta.networkAvailable
             ))
         }
+
+        return groupedDeltas.compactMap { groupID, delta in
+            guard let metadata = groupMetadata[groupID] else { return nil }
+            return HistoryApplicationSample(
+                identity: historyIdentityProvider.applicationIdentity(
+                    bundleIdentifier: metadata.bundleIdentifier,
+                    fallbackIdentity: groupID
+                ),
+                name: metadata.name,
+                readBytes: delta.read,
+                writeBytes: delta.written,
+                cpuTimeNanoseconds: delta.cpu,
+                networkReceiveBytes: delta.networkReceived,
+                networkSendBytes: delta.networkSent
+            )
+        }
+    }
+
+    nonisolated private static func addingClamped(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
+        let result = lhs.addingReportingOverflow(rhs)
+        return result.overflow ? .max : result.partialValue
     }
 
     private func scheduleProcessSummaryRebuild(

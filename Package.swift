@@ -26,7 +26,12 @@ let package = Package(
         ),
         .target(
             name: "FindDiskKillerCore",
-            dependencies: ["CFindDiskKiller"]
+            dependencies: ["CFindDiskKiller"],
+            linkerSettings: [
+                .linkedLibrary("sqlite3"),
+                .linkedFramework("Security"),
+                .linkedFramework("LocalAuthentication")
+            ]
         ),
         .target(name: "FindDiskKillerTraceProtocol"),
         .target(

@@ -25,5 +25,19 @@ The component accepts bounded, structured requests and can only launch
 `/usr/bin/fs_usage` with a fixed argument shape. It does not execute a shell or
 accept an arbitrary executable, path, environment, or command line.
 
+## Optional Monitoring History
+
+Saved monitoring history is disabled by default and remains local. When the
+user enables it, aggregate data is stored under
+`~/Library/Application Support/com.jianyintang.FindDiskKiller/History` in a
+`0700` directory with `0600` database, WAL, and SHM files. The database excludes
+PIDs, complete executable and file paths, trace records, disk serial numbers,
+and per-second samples. Path-derived identities use an installation-specific
+Keychain HMAC key rather than a reversible or unsalted path hash.
+
+Diagnostic summaries must not include paths, application lists, resource
+measurements, or device serial numbers. Clearing all saved history removes the
+SQLite sidecar files and rotates the history identity key.
+
 Release artifacts must be signed with the documented Developer ID identity,
 notarized by Apple, stapled, and published with a SHA-256 checksum.

@@ -89,6 +89,7 @@ struct MenuBarPanel: View {
 
             HStack {
                 Button {
+                    NSApp.setActivationPolicy(.regular)
                     openWindow(id: "main")
                     NSApp.activate(ignoringOtherApps: true)
                 } label: {
