@@ -16,6 +16,7 @@
 		3A0561811B6D242B8FDAC73C /* MonitorChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = 095D33516AF500CF80F1DB90 /* MonitorChart.swift */; };
 		4F55C539B0DCFB72B948CB3D /* UpdaterSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE55FF164FA95751B15D33DF /* UpdaterSettingsSection.swift */; };
 		53876D451A4594C01FB8550C /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 56A2D4A3EC905FA5D0BA2A45 /* Sparkle */; };
+		3AB42A16B49F82400C7FF300 /* AgentStorageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B6407D04086DD337BBFE898 /* AgentStorageView.swift */; };
 		58317958E5A70F2938AF8B08 /* ProcessesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 457028605863AA4C13E784A4 /* ProcessesView.swift */; };
 		5DF5AAA84094D4331DDAF9BC /* TraceHelperMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7F04CF503EF4C19FA578DA5 /* TraceHelperMain.swift */; };
 		5E24EACD1AFFADC97204287F /* DisksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F13AE24E17E72270635D523 /* DisksView.swift */; };
@@ -53,6 +54,7 @@
 		EC249E190109F76E7790D340 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 710BED35EF73FDAAD7FBB024 /* Localizable.strings */; };
 		F5E7955B1A19F150460C4A82 /* SharedComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B41A166BB33A1EC2CC01A3B7 /* SharedComponents.swift */; };
 		F5E8B4AA33295C07BCE0F750 /* AboutPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4774912235CC4A05F06D35F7 /* AboutPage.swift */; };
+		F7658E946A5B496036ED45DA /* AgentStorageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4553CEB12FD65DB0D81627E2 /* AgentStorageModel.swift */; };
 		F9330F09999DF74A07CFD4C2 /* AppRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = F233B95DF10CF40F0DE7228B /* AppRuntime.swift */; };
 		FA64CAF12CFFF37C9F591513 /* TraceHelperController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51F7C0EAECA734CA262A07EC /* TraceHelperController.swift */; };
 /* End PBXBuildFile section */
@@ -105,10 +107,12 @@
 		1F0023EE9E80BF9FD710B334 /* FileAccessTraceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileAccessTraceStore.swift; sourceTree = "<group>"; };
 		294F590D986AF1CE1F5F6243 /* HistoryApplicationTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryApplicationTable.swift; sourceTree = "<group>"; };
 		2CD437307D2C3FFC14DBC510 /* AppNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppNavigation.swift; sourceTree = "<group>"; };
+		2B6407D04086DD337BBFE898 /* AgentStorageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStorageView.swift; sourceTree = "<group>"; };
 		2E4F31444D331C3EA7FFE338 /* HistoryReportExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryReportExporter.swift; sourceTree = "<group>"; };
 		397BF22044FB3F231AE3EF11 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		3BDED8FB2CC79A69D2E701EF /* TraceActivityRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraceActivityRegistry.swift; sourceTree = "<group>"; };
 		3C5B6D633FF601F496BFED97 /* ProcessHoverCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessHoverCard.swift; sourceTree = "<group>"; };
+		4553CEB12FD65DB0D81627E2 /* AgentStorageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStorageModel.swift; sourceTree = "<group>"; };
 		4555CB0F323A2704AA5AC37B /* HistoryReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryReportView.swift; sourceTree = "<group>"; };
 		457028605863AA4C13E784A4 /* ProcessesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessesView.swift; sourceTree = "<group>"; };
 		4774912235CC4A05F06D35F7 /* AboutPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutPage.swift; sourceTree = "<group>"; };
@@ -239,6 +243,7 @@
 			isa = PBXGroup;
 			children = (
 				4774912235CC4A05F06D35F7 /* AboutPage.swift */,
+				2B6407D04086DD337BBFE898 /* AgentStorageView.swift */,
 				7F13AE24E17E72270635D523 /* DisksView.swift */,
 				5A3C91E9D097BF60792BFA1D /* FileAccessTraceView.swift */,
 				294F590D986AF1CE1F5F6243 /* HistoryApplicationTable.swift */,
@@ -275,6 +280,7 @@
 			isa = PBXGroup;
 			children = (
 				2CD437307D2C3FFC14DBC510 /* AppNavigation.swift */,
+				4553CEB12FD65DB0D81627E2 /* AgentStorageModel.swift */,
 				F233B95DF10CF40F0DE7228B /* AppRuntime.swift */,
 				AE77A398DCA93D9D1D69BAF1 /* BrandLinks.swift */,
 				1F0023EE9E80BF9FD710B334 /* FileAccessTraceStore.swift */,
@@ -419,6 +425,8 @@
 			files = (
 				F5E8B4AA33295C07BCE0F750 /* AboutPage.swift in Sources */,
 				38188339774F720B848980D0 /* AppNavigation.swift in Sources */,
+				F7658E946A5B496036ED45DA /* AgentStorageModel.swift in Sources */,
+				3AB42A16B49F82400C7FF300 /* AgentStorageView.swift in Sources */,
 				F9330F09999DF74A07CFD4C2 /* AppRuntime.swift in Sources */,
 				9DA65F4A10AA2A81637FBC85 /* BrandLinks.swift in Sources */,
 				5E24EACD1AFFADC97204287F /* DisksView.swift in Sources */,

@@ -9,6 +9,7 @@ final class AppRuntime {
 
     let store: MonitorStore
     let history: HistoryModel
+    let agentStorage: AgentStorageModel
     let processDetailWindows: ProcessDetailWindowCoordinator
     let navigation: AppNavigationCoordinator
     let traceActivityRegistry: TraceActivityRegistry
@@ -25,6 +26,7 @@ final class AppRuntime {
     init(
         store: MonitorStore = MonitorStore(),
         history: HistoryModel = HistoryModel(),
+        agentStorage: AgentStorageModel = AgentStorageModel(),
         processDetailWindows: ProcessDetailWindowCoordinator = ProcessDetailWindowCoordinator(),
         navigation: AppNavigationCoordinator = AppNavigationCoordinator(),
         traceActivityRegistry: TraceActivityRegistry = TraceActivityRegistry(),
@@ -33,6 +35,7 @@ final class AppRuntime {
     ) {
         self.store = store
         self.history = history
+        self.agentStorage = agentStorage
         self.processDetailWindows = processDetailWindows
         self.navigation = navigation
         self.traceActivityRegistry = traceActivityRegistry
@@ -69,6 +72,7 @@ final class AppRuntime {
         } else {
             store.resetCounterBaselines()
         }
+        await agentStorage.prepareForSleep()
         await flushHistoryAction()
     }
 
@@ -79,6 +83,7 @@ final class AppRuntime {
         if shouldResumeAfterWake, isStarted {
             store.start()
         }
+        agentStorage.resumeAfterWake()
         shouldResumeAfterWake = false
     }
 
@@ -88,9 +93,12 @@ final class AppRuntime {
         startTask?.cancel()
         store.stop()
         let completion = FirstLifecycleCompletion()
+        let agentStorage = self.agentStorage
         let flushHistoryAction = self.flushHistoryAction
-        let flushTask = Task { @MainActor in
-            await flushHistoryAction()
+        let shutdownTask = Task { @MainActor in
+            async let stopAgentStorage: Void = agentStorage.prepareForTermination()
+            async let flushHistory: Void = flushHistoryAction()
+            _ = await (stopAgentStorage, flushHistory)
             await completion.resolve(true)
         }
         let timeoutTask = Task {
@@ -102,7 +110,7 @@ final class AppRuntime {
         if completed {
             timeoutTask.cancel()
         } else {
-            flushTask.cancel()
+            shutdownTask.cancel()
         }
         return completed
     }

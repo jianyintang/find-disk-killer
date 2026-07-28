@@ -3,9 +3,10 @@ import SwiftUI
 
 enum AppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
     case overview = "现在"
-    case reports = "历史分析"
-    case disks = "磁盘"
     case processes = "应用"
+    case agentStorage = "AI 空间"
+    case disks = "磁盘"
+    case reports = "历史分析"
 
     var id: String { rawValue }
     var title: String { L10n.text(rawValue) }
@@ -15,6 +16,7 @@ enum AppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .overview: "gauge.with.dots.needle.67percent"
         case .disks: "internaldrive"
         case .processes: "square.stack.3d.up"
+        case .agentStorage: "sparkles"
         case .reports: "chart.xyaxis.line"
         }
     }
@@ -22,16 +24,22 @@ enum AppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
     var navigationPlaceholderKind: SectionNavigationPlaceholderKind {
         switch self {
         case .processes: .processes
+        case .agentStorage: .agentStorage
         case .reports: .history
         case .overview: .overview
         case .disks: .resources
         }
+    }
+
+    var showsMonitoringToolbar: Bool {
+        self != .agentStorage
     }
 }
 
 enum SectionNavigationPlaceholderKind: Equatable, Sendable {
     case overview
     case processes
+    case agentStorage
     case history
     case resources
 }
@@ -42,6 +50,7 @@ struct RootView: View {
     let history: HistoryModel
     let navigation: AppNavigationCoordinator
     let updates: UpdateCoordinator
+    let agentStorage: AgentStorageModel
     @State private var requestedSection: AppSection
     @State private var loadedSection: AppSection
     @State private var sectionSnapshots: [AppSection: SectionPreviewSnapshot] = [:]
@@ -51,12 +60,14 @@ struct RootView: View {
         store: MonitorStore,
         processDetailWindows: ProcessDetailWindowCoordinator,
         history: HistoryModel,
+        agentStorage: AgentStorageModel,
         navigation: AppNavigationCoordinator,
         updates: UpdateCoordinator
     ) {
         self.store = store
         self.processDetailWindows = processDetailWindows
         self.history = history
+        self.agentStorage = agentStorage
         self.navigation = navigation
         self.updates = updates
         _requestedSection = State(initialValue: navigation.lastMonitoringDestination)
@@ -92,7 +103,11 @@ struct RootView: View {
                 auxiliaryDetail
             }
                 .navigationTitle(detailTitle)
-                .toolbar { StatusToolbar(store: store) }
+                .toolbar {
+                    if isShowingAuxiliaryPage || requestedSection.showsMonitoringToolbar {
+                        StatusToolbar(store: store)
+                    }
+                }
                 .task(id: requestedSection) {
                     await loadRequestedSection()
                 }
@@ -115,7 +130,8 @@ struct RootView: View {
                 store: store,
                 history: history,
                 navigation: navigation,
-                updates: updates
+                updates: updates,
+                agentStorage: agentStorage
             )
         case .about:
             AboutPage()
@@ -139,6 +155,7 @@ struct RootView: View {
             SectionNavigationPlaceholder(
                 section: requestedSection,
                 snapshot: sectionSnapshots[requestedSection],
+                agentStorageProgress: agentStorage.progress,
                 processSearchText: $processSearchText
             )
         }
@@ -157,6 +174,8 @@ struct RootView: View {
                 searchText: $processSearchText,
                 processDetailWindows: processDetailWindows
             )
+        case .agentStorage:
+            AgentStorageView(model: agentStorage)
         case .reports:
             HistoryReportView(history: history) {
                 navigation.showSettings(.dataAndPrivacy)
@@ -182,12 +201,16 @@ struct RootView: View {
         guard target != loadedSection else { return }
         let departing = loadedSection
 
-        do {
-            // Coalesce rapid navigation so only the page the user settles on builds its
-            // charts and scrolling hierarchy. The cached placeholder is already visible.
-            try await Task.sleep(for: .milliseconds(120))
-        } catch {
-            return
+        if target == .agentStorage {
+            await Task.yield()
+        } else {
+            do {
+                // Coalesce rapid navigation so only the page the user settles on builds its
+                // charts and scrolling hierarchy. The cached placeholder is already visible.
+                try await Task.sleep(for: .milliseconds(120))
+            } catch {
+                return
+            }
         }
         guard !Task.isCancelled, requestedSection == target else { return }
 
@@ -358,6 +381,7 @@ private struct VolumePreviewRow: Identifiable, Sendable {
 private struct SectionNavigationPlaceholder: View {
     let section: AppSection
     let snapshot: SectionPreviewSnapshot?
+    let agentStorageProgress: AgentStorageScanProgress
     @Binding var processSearchText: String
     @State private var processTableWidth: CGFloat = 0
 
@@ -372,6 +396,8 @@ private struct SectionNavigationPlaceholder: View {
                         text: $processSearchText,
                         prompt: L10n.text("搜索应用或进程")
                     )
+            case .agentStorage:
+                agentStoragePlaceholder
             case .history:
                 HistoryReportNavigationPlaceholder()
             case .resources:
@@ -696,6 +722,11 @@ private struct SectionNavigationPlaceholder: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    private var agentStoragePlaceholder: some View {
+        AgentStorageOverviewSkeleton(progress: agentStorageProgress)
+        .allowsHitTesting(false)
     }
 
     private var previewProcesses: [ProcessPreviewRow] {

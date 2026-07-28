@@ -3,6 +3,63 @@ import FindDiskKillerCore
 import FindDiskKillerTraceProtocol
 import SwiftUI
 
+enum MainWindowMetrics {
+    static let minimumWidth: CGFloat = 920
+    static let minimumHeight: CGFloat = 620
+    static let sidebarIdealWidth: CGFloat = 210
+    static let providerOverviewContentWidth: CGFloat = 1_080
+    static let defaultWidth: CGFloat = sidebarIdealWidth + providerOverviewContentWidth + 50
+    static let defaultHeight: CGFloat = 760
+}
+
+private struct AgentStorageRefreshActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+private struct AgentStorageBackActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+extension FocusedValues {
+    var agentStorageRefreshAction: (() -> Void)? {
+        get { self[AgentStorageRefreshActionKey.self] }
+        set { self[AgentStorageRefreshActionKey.self] = newValue }
+    }
+
+    var agentStorageBackAction: (() -> Void)? {
+        get { self[AgentStorageBackActionKey.self] }
+        set { self[AgentStorageBackActionKey.self] = newValue }
+    }
+}
+
+private struct MonitoringCommands: Commands {
+    let store: MonitorStore
+    @FocusedValue(\.agentStorageRefreshAction) private var refreshAgentStorage
+    @FocusedValue(\.agentStorageBackAction) private var leaveAgentStorageProvider
+
+    var body: some Commands {
+        CommandMenu(L10n.text("监控")) {
+            Button(L10n.text(store.isCollecting ? "停止采集" : "开始采集")) {
+                store.isCollecting ? store.stop() : store.start()
+            }
+            .keyboardShortcut(".", modifiers: [.command])
+            Divider()
+            Button(L10n.text("刷新 AI 空间")) {
+                refreshAgentStorage?()
+            }
+            .keyboardShortcut("r", modifiers: [.command])
+            .disabled(refreshAgentStorage == nil)
+        }
+        CommandGroup(after: .sidebar) {
+            Button(L10n.text("返回 AI 空间")) {
+                leaveAgentStorageProvider?()
+            }
+            .keyboardShortcut("[", modifiers: [.command])
+            .disabled(leaveAgentStorageProvider == nil)
+        }
+    }
+}
+
 @main
 struct FindDiskKillerApp: App {
     @NSApplicationDelegateAdaptor(FindDiskKillerApplicationDelegate.self) private var appDelegate
@@ -16,23 +73,22 @@ struct FindDiskKillerApp: App {
                 store: runtime.store,
                 processDetailWindows: runtime.processDetailWindows,
                 history: runtime.history,
+                agentStorage: runtime.agentStorage,
                 navigation: runtime.navigation,
                 updates: runtime.updates
             )
-                .frame(minWidth: 920, minHeight: 620)
+                .frame(
+                    minWidth: MainWindowMetrics.minimumWidth,
+                    minHeight: MainWindowMetrics.minimumHeight
+                )
                 .environment(\.locale, Locale(identifier: selectedLanguage.localeIdentifier))
                 .id(appLanguage)
         }
-        .defaultSize(width: 1180, height: 760)
+        .defaultSize(width: MainWindowMetrics.defaultWidth, height: MainWindowMetrics.defaultHeight)
         .commands {
             SidebarCommands()
             FindDiskKillerCommands(runtime: runtime)
-            CommandMenu(L10n.text("监控")) {
-                Button(L10n.text(runtime.store.isCollecting ? "停止采集" : "开始采集")) {
-                    runtime.store.isCollecting ? runtime.store.stop() : runtime.store.start()
-                }
-                .keyboardShortcut(".", modifiers: [.command])
-            }
+            MonitoringCommands(store: runtime.store)
         }
 
         WindowGroup(
@@ -79,7 +135,6 @@ struct FindDiskKillerApp: App {
             }
         }
         .menuBarExtraStyle(.window)
-
     }
 
     private var selectedLanguage: AppLanguage {

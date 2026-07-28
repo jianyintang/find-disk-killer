@@ -188,6 +188,39 @@ private struct LoginFixtureError: LocalizedError {
 }
 
 @MainActor
+@Test func terminationDeadlineAlsoBoundsAnAgentScanThatIgnoresCancellation() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    let suiteName = "TerminationAgentStorageTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer {
+        try? FileManager.default.removeItem(at: root)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+    let scan = UncooperativeAgentStorageScan()
+    let agentStorage = AgentStorageModel(defaults: defaults) { configuration in
+        await scan.run(configuration)
+    }
+    let runtime = AppRuntime(
+        store: MonitorStore(),
+        history: HistoryModel(databaseURL: root.appending(path: "monitor.sqlite3")),
+        agentStorage: agentStorage
+    ) {}
+    agentStorage.refresh()
+    while !(await scan.hasStarted) {
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    let clock = ContinuousClock()
+    let started = clock.now
+
+    let completed = await runtime.prepareForTermination(timeout: .milliseconds(20))
+
+    #expect(!completed)
+    #expect(started.duration(to: clock.now) < .seconds(1))
+    await scan.finish()
+}
+
+@MainActor
 @Test func applicationReopenRestoresTheMainWindowAndRegularActivationPolicy() throws {
     let root = FileManager.default.temporaryDirectory
         .appending(path: UUID().uuidString, directoryHint: .isDirectory)
@@ -208,6 +241,40 @@ private struct LoginFixtureError: LocalizedError {
     #expect(handled)
     #expect(restoredMainWindow)
     #expect(application.activationPolicy() == .regular)
+}
+
+private actor UncooperativeAgentStorageScan {
+    private(set) var hasStarted = false
+    private var continuation: CheckedContinuation<AgentStorageSnapshot, Never>?
+
+    func run(_ configuration: AgentStorageScanner.Configuration) async -> AgentStorageSnapshot {
+        _ = configuration
+        hasStarted = true
+        return await withCheckedContinuation { continuation = $0 }
+    }
+
+    func finish() {
+        continuation?.resume(returning: AgentStorageSnapshot(
+            scannedAt: Date(),
+            families: [],
+            globalItems: [],
+            unattributedItems: [],
+            providers: [],
+            sources: [],
+            coverage: AgentStorageCoverage(
+                measuredBytes: 0,
+                classifiedBytes: 0,
+                measuredEntryCount: 0,
+                skippedEntryCount: 0,
+                unstableEntryCount: 0,
+                overflowed: false,
+                reconciliationDelta: 0,
+                isComplete: true
+            ),
+            crossAgentSharedBytes: 0
+        ))
+        continuation = nil
+    }
 }
 
 private extension SystemSnapshot {

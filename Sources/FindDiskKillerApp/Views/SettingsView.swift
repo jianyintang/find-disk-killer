@@ -12,10 +12,14 @@ struct SettingsPage: View {
     let history: HistoryModel
     let navigation: AppNavigationCoordinator
     let updates: UpdateCoordinator
+    let agentStorage: AgentStorageModel
     @AppStorage("showRateInMenuBar") private var showRateInMenuBar = true
     @AppStorage("sampleInterval") private var sampleInterval = MonitorStore.defaultSamplingInterval
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.system.rawValue
     @AppStorage("openMainWindowAtLogin") private var openMainWindowAtLogin = false
+    @AppStorage(AgentStoragePreferences.autoScanKey) private var agentStorageAutoScan = true
+    @AppStorage(AgentStoragePreferences.hidePrivateDetailsKey)
+    private var hidesAgentStoragePrivateDetails = false
     @State private var loginItem = LoginItemSettingsModel()
     @State private var traceHelperState: TraceHelperServiceState = .notRegistered
     @State private var historyWasCleared = false
@@ -133,6 +137,78 @@ struct SettingsPage: View {
 
                 case .dataAndPrivacy:
             Form {
+                Section(L10n.text("AI Agent 空间")) {
+                    Toggle(
+                        L10n.text("自动扫描 AI Agent 空间"),
+                        isOn: $agentStorageAutoScan
+                    )
+                    Toggle(
+                        L10n.text("隐藏聊天标题和完整路径"),
+                        isOn: $hidesAgentStoragePrivateDetails
+                    )
+
+                    Text(L10n.text("分析完全在本机进行；不会上传标题、路径或占用数据。"))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let sources = agentStorage.snapshot?.sources, !sources.isEmpty {
+                        ForEach(sources) { source in
+                            LabeledContent {
+                                Text(agentStoragePath(source.path))
+                                    .font(.caption.monospaced())
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            } label: {
+                                Label(source.displayName, systemImage: source.provider == .codex
+                                    ? "terminal"
+                                    : "sparkles")
+                            }
+                        }
+                    }
+
+                    ForEach(agentStorage.customRoots, id: \.path) { root in
+                        HStack {
+                            Label(L10n.text("手动数据位置"), systemImage: "folder.badge.plus")
+                            Spacer()
+                            Text(agentStoragePath(root.path))
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Button {
+                                agentStorage.removeCustomRoot(root)
+                            } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .buttonStyle(.plain)
+                            .help(L10n.text("移除数据位置"))
+                        }
+                    }
+
+                    HStack {
+                        Button(action: addAgentStorageLocation) {
+                            Label(L10n.text("添加数据位置"), systemImage: "folder.badge.plus")
+                        }
+                        Spacer()
+                        Button {
+                            agentStorage.isScanning ? agentStorage.stop() : agentStorage.refresh()
+                        } label: {
+                            Label(
+                                L10n.text(agentStorage.isScanning ? "停止本次扫描" : "立即刷新"),
+                                systemImage: agentStorage.isScanning ? "stop.fill" : "arrow.clockwise"
+                            )
+                        }
+                    }
+
+                    if let error = agentStorage.customRootError {
+                        SettingsInlineStatus(
+                            text: error,
+                            systemImage: "exclamationmark.triangle",
+                            color: .orange
+                        )
+                    }
+                }
+
                 Section(L10n.text("监测历史")) {
                     Toggle(
                         L10n.text("保存监测历史"),
@@ -329,6 +405,9 @@ struct SettingsPage: View {
         .onChange(of: sampleInterval) { _, newValue in
             store.setSamplingInterval(newValue)
         }
+        .onChange(of: agentStorageAutoScan) { _, newValue in
+            agentStorage.automaticallyScans = newValue
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshServiceStates()
         }
@@ -354,6 +433,21 @@ struct SettingsPage: View {
             get: { navigation.settingsPane },
             set: { navigation.settingsPane = $0 }
         )
+    }
+
+    private func addAgentStorageLocation() {
+        let panel = NSOpenPanel()
+        panel.title = L10n.text("选择 AI Agent 数据位置")
+        panel.prompt = L10n.text("添加")
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        agentStorage.addCustomRoot(url)
+    }
+
+    private func agentStoragePath(_ path: String) -> String {
+        hidesAgentStoragePrivateDetails ? L10n.text("路径已隐藏") : path
     }
 
     private var traceHelperCanBeRemoved: Bool {
