@@ -1,72 +1,147 @@
 import CryptoKit
+import Darwin
 import Foundation
-import LocalAuthentication
-import Security
 
 protocol HistoryIdentityProviding: Sendable {
     func applicationIdentity(bundleIdentifier: String?, fallbackIdentity: String) -> String
     func deviceIdentity(registryID: UInt64, bsdName: String) -> String
     func rotate() throws
+    func validate() throws
+}
+
+extension HistoryIdentityProviding {
+    func validate() throws {}
 }
 
 protocol HistoryIdentityKeyStoring: Sendable {
     func loadKey() throws -> Data?
     func saveKey(_ key: Data) throws
-    func deleteKey() throws
 }
 
-struct HistoryKeychainStore: HistoryIdentityKeyStoring {
-    private let service = "com.jianyintang.FindDiskKiller.history-identity"
-    private let account = "installation-key-v1"
+struct HistoryFileKeyStore: HistoryIdentityKeyStoring {
+    static let productionBundleIdentifier = "com.jianyintang.FindDiskKiller"
+    static let keyFileName = "identity-key-v1"
+
+    let keyURL: URL
+
+    init(keyURL: URL = Self.defaultKeyURL()) {
+        self.keyURL = keyURL
+    }
 
     func loadKey() throws -> Data? {
-        var query = noninteractiveQuery
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = item as? Data else {
-            throw KeychainError(status: status)
-        }
-        return data
+        guard FileManager.default.fileExists(atPath: keyURL.path) else { return nil }
+        try protectContainer()
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: keyURL.path
+        )
+        return try Data(contentsOf: keyURL)
     }
 
     func saveKey(_ key: Data) throws {
-        var query = baseQuery
-        query[kSecValueData as String] = key
-        let status = SecItemAdd(query as CFDictionary, nil)
-        if status == errSecDuplicateItem {
-            let update = [kSecValueData as String: key] as CFDictionary
-            let updateStatus = SecItemUpdate(noninteractiveQuery as CFDictionary, update)
-            guard updateStatus == errSecSuccess else { throw KeychainError(status: updateStatus) }
-        } else if status != errSecSuccess {
-            throw KeychainError(status: status)
+        try protectContainer()
+        let temporaryURL = keyURL.deletingLastPathComponent().appending(
+            path: ".\(keyURL.lastPathComponent).\(UUID().uuidString).tmp",
+            directoryHint: .notDirectory
+        )
+        guard FileManager.default.createFile(
+            atPath: temporaryURL.path,
+            contents: nil,
+            attributes: [.posixPermissions: 0o600]
+        ) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+
+        let handle = try FileHandle(forWritingTo: temporaryURL)
+        do {
+            try handle.write(contentsOf: key)
+            try handle.synchronize()
+            try handle.close()
+        } catch {
+            try? handle.close()
+            throw error
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: temporaryURL.path
+        )
+        guard Darwin.rename(temporaryURL.path, keyURL.path) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
     }
 
-    func deleteKey() throws {
-        let status = SecItemDelete(noninteractiveQuery as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainError(status: status)
+    static func defaultKeyURL(
+        bundleIdentifier: String?,
+        applicationSupportURL: URL,
+        temporaryDirectory: URL,
+        processIdentifier: Int32
+    ) -> URL {
+        let directory = storageDirectory(
+            bundleIdentifier: bundleIdentifier,
+            applicationSupportURL: applicationSupportURL,
+            temporaryDirectory: temporaryDirectory,
+            processIdentifier: processIdentifier
+        )
+        return directory.appending(path: keyFileName, directoryHint: .notDirectory)
+    }
+
+    private func protectContainer() throws {
+        let directory = keyURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: directory.path
+        )
+        var protectedDirectory = directory
+        var resourceValues = URLResourceValues()
+        resourceValues.isExcludedFromBackup = true
+        try protectedDirectory.setResourceValues(resourceValues)
+    }
+
+    private static func defaultKeyURL() -> URL {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let applicationSupport = home
+            .appending(path: "Library", directoryHint: .isDirectory)
+            .appending(path: "Application Support", directoryHint: .isDirectory)
+        return defaultKeyURL(
+            bundleIdentifier: Bundle.main.bundleIdentifier,
+            applicationSupportURL: applicationSupport,
+            temporaryDirectory: FileManager.default.temporaryDirectory,
+            processIdentifier: ProcessInfo.processInfo.processIdentifier
+        )
+    }
+
+    private static func storageDirectory(
+        bundleIdentifier: String?,
+        applicationSupportURL: URL,
+        temporaryDirectory: URL,
+        processIdentifier: Int32
+    ) -> URL {
+        let directory: URL
+        if bundleIdentifier == productionBundleIdentifier {
+            directory = applicationSupportURL
+                .appending(path: productionBundleIdentifier, directoryHint: .isDirectory)
+                .appending(path: "History", directoryHint: .isDirectory)
+        } else {
+            directory = temporaryDirectory
+                .appending(
+                    path: "FindDiskKiller-\(processIdentifier)",
+                    directoryHint: .isDirectory
+                )
+                .appending(path: "History", directoryHint: .isDirectory)
         }
+        return directory
     }
+}
 
-    private var baseQuery: [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        ]
-    }
-
-    private var noninteractiveQuery: [String: Any] {
-        var query = baseQuery
-        let context = LAContext()
-        context.interactionNotAllowed = true
-        query[kSecUseAuthenticationContext as String] = context
-        return query
+struct HistoryIdentityStorageError: Error, LocalizedError, Sendable {
+    var errorDescription: String? {
+        "Unable to protect the local monitoring identity"
     }
 }
 
@@ -75,16 +150,24 @@ final class HistoryIdentityProvider: HistoryIdentityProviding, @unchecked Sendab
 
     private let lock = NSLock()
     private let keyStore: any HistoryIdentityKeyStoring
+    private let initializationError: HistoryIdentityStorageError?
     private var key: Data
 
-    init(keyStore: any HistoryIdentityKeyStoring = HistoryKeychainStore()) {
+    init(keyStore: any HistoryIdentityKeyStoring = HistoryFileKeyStore()) {
         self.keyStore = keyStore
-        if let saved = try? keyStore.loadKey(), saved.count == 32 {
-            key = saved
-        } else {
+        do {
+            if let saved = try keyStore.loadKey(), saved.count == 32 {
+                key = saved
+            } else {
+                let generated = Self.randomKey()
+                try keyStore.saveKey(generated)
+                key = generated
+            }
+            initializationError = nil
+        } catch {
             let generated = Self.randomKey()
             key = generated
-            try? keyStore.saveKey(generated)
+            initializationError = HistoryIdentityStorageError()
         }
     }
 
@@ -100,9 +183,16 @@ final class HistoryIdentityProvider: HistoryIdentityProviding, @unchecked Sendab
     }
 
     func rotate() throws {
-        let replacement = Self.randomKey()
-        try keyStore.saveKey(replacement)
-        lock.withLock { key = replacement }
+        try validate()
+        try lock.withLock {
+            let replacement = Self.randomKey()
+            try keyStore.saveKey(replacement)
+            key = replacement
+        }
+    }
+
+    func validate() throws {
+        if let initializationError { throw initializationError }
     }
 
     private func digest(_ value: String) -> String {
@@ -115,17 +205,7 @@ final class HistoryIdentityProvider: HistoryIdentityProviding, @unchecked Sendab
     }
 
     private static func randomKey() -> Data {
-        var data = Data(repeating: 0, count: 32)
-        let status = data.withUnsafeMutableBytes { buffer in
-            SecRandomCopyBytes(kSecRandomDefault, 32, buffer.baseAddress!)
-        }
-        if status != errSecSuccess {
-            return Data(SHA256.hash(data: Data(UUID().uuidString.utf8)))
-        }
-        return data
+        var generator = SystemRandomNumberGenerator()
+        return Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
     }
-}
-
-private struct KeychainError: Error {
-    let status: OSStatus
 }

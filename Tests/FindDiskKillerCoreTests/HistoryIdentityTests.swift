@@ -24,6 +24,162 @@ import Testing
     #expect(!first.contains("/usr/bin/tool"))
 }
 
+@Test func historyFileIdentityKeyPersistsWithOwnerOnlyProtection() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let keyURL = root
+        .appending(path: "History", directoryHint: .isDirectory)
+        .appending(path: "identity-key-v1", directoryHint: .notDirectory)
+    let store = HistoryFileKeyStore(keyURL: keyURL)
+
+    let firstProvider = HistoryIdentityProvider(keyStore: store)
+    let firstIdentity = firstProvider.applicationIdentity(
+        bundleIdentifier: nil,
+        fallbackIdentity: "/usr/bin/tool"
+    )
+    let savedKey = try Data(contentsOf: keyURL)
+    let secondProvider = HistoryIdentityProvider(keyStore: store)
+    let secondIdentity = secondProvider.applicationIdentity(
+        bundleIdentifier: nil,
+        fallbackIdentity: "/usr/bin/tool"
+    )
+
+    let directory = keyURL.deletingLastPathComponent()
+    let directoryMode = try #require(
+        FileManager.default.attributesOfItem(atPath: directory.path)[.posixPermissions]
+            as? NSNumber
+    )
+    let keyMode = try #require(
+        FileManager.default.attributesOfItem(atPath: keyURL.path)[.posixPermissions]
+            as? NSNumber
+    )
+    let resourceValues = try directory.resourceValues(forKeys: [.isExcludedFromBackupKey])
+    #expect(savedKey.count == 32)
+    #expect(firstIdentity == secondIdentity)
+    #expect(directoryMode.intValue & 0o777 == 0o700)
+    #expect(keyMode.intValue & 0o777 == 0o600)
+    #expect(resourceValues.isExcludedFromBackup == true)
+}
+
+@Test func historyFileIdentityRotationReplacesThePersistedKey() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let keyURL = root
+        .appending(path: "History", directoryHint: .isDirectory)
+        .appending(path: "identity-key-v1", directoryHint: .notDirectory)
+    let provider = HistoryIdentityProvider(keyStore: HistoryFileKeyStore(keyURL: keyURL))
+    let firstKey = try Data(contentsOf: keyURL)
+    let firstIdentity = provider.applicationIdentity(
+        bundleIdentifier: nil,
+        fallbackIdentity: "/usr/bin/tool"
+    )
+
+    try provider.rotate()
+
+    let secondKey = try Data(contentsOf: keyURL)
+    let secondIdentity = provider.applicationIdentity(
+        bundleIdentifier: nil,
+        fallbackIdentity: "/usr/bin/tool"
+    )
+    #expect(firstKey != secondKey)
+    #expect(firstIdentity != secondIdentity)
+    #expect(secondKey.count == 32)
+}
+
+@Test func historyIdentityDefaultPathSeparatesProductionFromTestProcesses() {
+    let applicationSupport = URL(filePath: "/Users/example/Library/Application Support")
+    let temporaryDirectory = URL(filePath: "/private/tmp")
+
+    let production = HistoryFileKeyStore.defaultKeyURL(
+        bundleIdentifier: HistoryFileKeyStore.productionBundleIdentifier,
+        applicationSupportURL: applicationSupport,
+        temporaryDirectory: temporaryDirectory,
+        processIdentifier: 42
+    )
+    let test = HistoryFileKeyStore.defaultKeyURL(
+        bundleIdentifier: "com.apple.dt.xctest.tool",
+        applicationSupportURL: applicationSupport,
+        temporaryDirectory: temporaryDirectory,
+        processIdentifier: 42
+    )
+
+    #expect(production.path == "/Users/example/Library/Application Support/com.jianyintang.FindDiskKiller/History/identity-key-v1")
+    #expect(test.path == "/private/tmp/FindDiskKiller-42/History/identity-key-v1")
+}
+
+@Test func historyFileIdentityLoadRepairsExistingProtection() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let directory = root.appending(path: "History", directoryHint: .isDirectory)
+    let keyURL = directory.appending(path: "identity-key-v1", directoryHint: .notDirectory)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try Data(repeating: 7, count: 32).write(to: keyURL)
+    try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: directory.path)
+    try FileManager.default.setAttributes([.posixPermissions: 0o666], ofItemAtPath: keyURL.path)
+
+    _ = try HistoryFileKeyStore(keyURL: keyURL).loadKey()
+
+    let directoryMode = try #require(
+        FileManager.default.attributesOfItem(atPath: directory.path)[.posixPermissions]
+            as? NSNumber
+    )
+    let keyMode = try #require(
+        FileManager.default.attributesOfItem(atPath: keyURL.path)[.posixPermissions]
+            as? NSNumber
+    )
+    let resourceValues = try directory.resourceValues(forKeys: [.isExcludedFromBackupKey])
+    #expect(directoryMode.intValue & 0o777 == 0o700)
+    #expect(keyMode.intValue & 0o777 == 0o600)
+    #expect(resourceValues.isExcludedFromBackup == true)
+}
+
+@Test func historyIdentityStorageFailuresAreReportedToTheDatabase() {
+    let loadFailure = MemoryIdentityKeyStore()
+    loadFailure.failLoads = true
+    let loadProvider = HistoryIdentityProvider(keyStore: loadFailure)
+    #expect(throws: HistoryIdentityStorageError.self) {
+        try loadProvider.validate()
+    }
+
+    let saveFailure = MemoryIdentityKeyStore()
+    saveFailure.failSaves = true
+    let saveProvider = HistoryIdentityProvider(keyStore: saveFailure)
+    #expect(throws: HistoryIdentityStorageError.self) {
+        _ = try HistoryDatabase(
+            location: .memory,
+            fileOperations: LiveHistoryFileOperations(),
+            identityProvider: saveProvider
+        )
+    }
+}
+
+@Test func historyIdentityRotationsRemainAtomicAcrossConcurrentCallers() async throws {
+    let store = ConcurrentSaveTrackingKeyStore()
+    let provider = HistoryIdentityProvider(keyStore: store)
+    store.resetTracking()
+
+    let tasks = (0..<8).map { _ in
+        Task.detached { try provider.rotate() }
+    }
+    for task in tasks {
+        try await task.value
+    }
+
+    let currentIdentity = provider.applicationIdentity(
+        bundleIdentifier: nil,
+        fallbackIdentity: "/usr/bin/tool"
+    )
+    let reloadedIdentity = HistoryIdentityProvider(keyStore: store).applicationIdentity(
+        bundleIdentifier: nil,
+        fallbackIdentity: "/usr/bin/tool"
+    )
+    #expect(store.maximumConcurrentSaves == 1)
+    #expect(currentIdentity == reloadedIdentity)
+}
+
 @MainActor
 @Test func monitorStoreUsesBundleIdentityAndHMACDeviceIdentity() throws {
     let root = FileManager.default.temporaryDirectory
@@ -270,21 +426,60 @@ import Testing
 private final class MemoryIdentityKeyStore: HistoryIdentityKeyStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var key: Data?
+    private var shouldFailLoads = false
     private var shouldFailSaves = false
+
+    var failLoads: Bool {
+        get { lock.withLock { shouldFailLoads } }
+        set { lock.withLock { shouldFailLoads = newValue } }
+    }
 
     var failSaves: Bool {
         get { lock.withLock { shouldFailSaves } }
         set { lock.withLock { shouldFailSaves = newValue } }
     }
 
-    func loadKey() throws -> Data? { lock.withLock { key } }
+    func loadKey() throws -> Data? {
+        try lock.withLock {
+            if shouldFailLoads { throw FixtureKeyError.failed }
+            return key
+        }
+    }
     func saveKey(_ key: Data) throws {
         try lock.withLock {
             if shouldFailSaves { throw FixtureKeyError.failed }
             self.key = key
         }
     }
-    func deleteKey() throws { lock.withLock { key = nil } }
+}
+
+private final class ConcurrentSaveTrackingKeyStore: HistoryIdentityKeyStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var key: Data?
+    private var activeSaveCount = 0
+    private var recordedMaximumConcurrentSaves = 0
+
+    var maximumConcurrentSaves: Int {
+        lock.withLock { recordedMaximumConcurrentSaves }
+    }
+
+    func resetTracking() {
+        lock.withLock { recordedMaximumConcurrentSaves = 0 }
+    }
+
+    func loadKey() throws -> Data? { lock.withLock { key } }
+
+    func saveKey(_ key: Data) throws {
+        lock.withLock {
+            activeSaveCount += 1
+            recordedMaximumConcurrentSaves = max(recordedMaximumConcurrentSaves, activeSaveCount)
+        }
+        Thread.sleep(forTimeInterval: 0.01)
+        lock.withLock {
+            self.key = key
+            activeSaveCount -= 1
+        }
+    }
 }
 
 private final class RecordingHistoryIdentityProvider: HistoryIdentityProviding, @unchecked Sendable {

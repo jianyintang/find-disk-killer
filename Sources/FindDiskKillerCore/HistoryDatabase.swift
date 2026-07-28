@@ -302,11 +302,13 @@ public actor HistoryDatabase {
 
     public init(location: HistoryDatabaseLocation) throws {
         let operations = LiveHistoryFileOperations()
+        let identityProvider = HistoryIdentityProvider.shared
+        try identityProvider.validate()
         let setup = try Self.openDatabase(location: location, fileOperations: operations)
         connection = setup.connection
         fileURL = setup.fileURL
         fileOperations = operations
-        identityProvider = HistoryIdentityProvider.shared
+        self.identityProvider = identityProvider
     }
 
     init(
@@ -314,6 +316,7 @@ public actor HistoryDatabase {
         fileOperations: any HistoryFileOperating,
         identityProvider: any HistoryIdentityProviding
     ) throws {
+        try identityProvider.validate()
         let setup = try Self.openDatabase(
             location: location,
             fileOperations: fileOperations
