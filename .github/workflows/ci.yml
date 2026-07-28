@@ -19,7 +19,7 @@ jobs:
           xcodebuild -version
           swift --version
       - name: Test
-        run: swift test
+        run: make test
       - name: Install pinned XcodeGen
         env:
           XCODEGEN_VERSION: 2.42.0
