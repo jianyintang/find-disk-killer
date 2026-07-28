@@ -40,25 +40,94 @@ struct RootView: View {
     let store: MonitorStore
     let processDetailWindows: ProcessDetailWindowCoordinator
     let history: HistoryModel
-    @State private var requestedSection: AppSection = .overview
-    @State private var loadedSection: AppSection = .overview
+    let navigation: AppNavigationCoordinator
+    let updates: UpdateCoordinator
+    @State private var requestedSection: AppSection
+    @State private var loadedSection: AppSection
     @State private var sectionSnapshots: [AppSection: SectionPreviewSnapshot] = [:]
     @State private var processSearchText = ""
 
+    init(
+        store: MonitorStore,
+        processDetailWindows: ProcessDetailWindowCoordinator,
+        history: HistoryModel,
+        navigation: AppNavigationCoordinator,
+        updates: UpdateCoordinator
+    ) {
+        self.store = store
+        self.processDetailWindows = processDetailWindows
+        self.history = history
+        self.navigation = navigation
+        self.updates = updates
+        _requestedSection = State(initialValue: navigation.lastMonitoringDestination)
+        _loadedSection = State(initialValue: navigation.lastMonitoringDestination)
+    }
+
     var body: some View {
         NavigationSplitView {
-            List(AppSection.allCases, selection: sidebarSelection) { section in
-                Label(section.title, systemImage: section.symbol)
-                    .tag(section)
+            List(selection: sidebarSelection) {
+                Section {
+                    ForEach(AppSection.allCases) { section in
+                        Label(section.title, systemImage: section.symbol)
+                            .tag(SidebarDestination.monitoring(section))
+                    }
+                }
+
+                Section {
+                    Label(L10n.text("设置"), systemImage: "gearshape")
+                        .tag(SidebarDestination.settings)
+                    Label(L10n.text("关于"), systemImage: "info.circle")
+                        .tag(SidebarDestination.about)
+                }
             }
             .navigationTitle("FindDiskKiller")
             .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 240)
         } detail: {
-            detail
+            ZStack {
+                detail
+                    .opacity(isShowingAuxiliaryPage ? 0 : 1)
+                    .allowsHitTesting(!isShowingAuxiliaryPage)
+                    .accessibilityHidden(isShowingAuxiliaryPage)
+
+                auxiliaryDetail
+            }
+                .navigationTitle(detailTitle)
                 .toolbar { StatusToolbar(store: store) }
                 .task(id: requestedSection) {
                     await loadRequestedSection()
                 }
+        }
+    }
+
+    private var detailTitle: String {
+        switch navigation.destination {
+        case .monitoring(let section): section.title
+        case .settings: L10n.text("设置")
+        case .about: L10n.text("关于")
+        }
+    }
+
+    @ViewBuilder
+    private var auxiliaryDetail: some View {
+        switch navigation.destination {
+        case .settings:
+            SettingsPage(
+                store: store,
+                history: history,
+                navigation: navigation,
+                updates: updates
+            )
+        case .about:
+            AboutPage()
+        case .monitoring:
+            EmptyView()
+        }
+    }
+
+    private var isShowingAuxiliaryPage: Bool {
+        switch navigation.destination {
+        case .settings, .about: true
+        case .monitoring: false
         }
     }
 
@@ -89,16 +158,21 @@ struct RootView: View {
                 processDetailWindows: processDetailWindows
             )
         case .reports:
-            HistoryReportView(history: history)
+            HistoryReportView(history: history) {
+                navigation.showSettings(.dataAndPrivacy)
+            }
         }
     }
 
-    private var sidebarSelection: Binding<AppSection?> {
+    private var sidebarSelection: Binding<SidebarDestination?> {
         Binding(
-            get: { requestedSection },
-            set: { newValue in
-                guard let newValue, newValue != requestedSection else { return }
-                requestedSection = newValue
+            get: { navigation.destination },
+            set: { destination in
+                guard let destination else { return }
+                navigation.select(destination)
+                guard case .monitoring(let section) = destination,
+                      section != requestedSection else { return }
+                requestedSection = section
             }
         )
     }
@@ -305,7 +379,6 @@ private struct SectionNavigationPlaceholder: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .navigationTitle(section.title)
     }
 
     private var statusLabel: some View {

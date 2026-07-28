@@ -61,7 +61,6 @@ struct OverviewView: View {
             .padding(.top, 20)
             .padding(.bottom, 28)
         }
-        .navigationTitle(L10n.text("现在"))
     }
 
     private var overviewHeader: some View {
@@ -1135,18 +1134,22 @@ struct ProcessDetailSheet: View {
     @State private var chartsReady = false
     @State private var isProcessAvailable = true
     @State private var selectedSection: ProcessDetailSection = .overview
-    @State private var fileAccessTrace = FileAccessTraceStore()
+    @State private var fileAccessTrace: FileAccessTraceStore
     @AccessibilityFocusState private var headerIsFocused: Bool
 
     init(
         store: MonitorStore,
-        presentation: ProcessDetailPresentation
+        presentation: ProcessDetailPresentation,
+        traceActivityRegistry: TraceActivityRegistry
     ) {
         self.store = store
         processID = presentation.id
         updatesLive = presentation.updatesLive
         _process = State(initialValue: presentation.process)
         _chartPoints = State(initialValue: Self.optimizedChartPoints(presentation.process.metrics))
+        _fileAccessTrace = State(initialValue: FileAccessTraceStore(
+            activityRegistry: traceActivityRegistry
+        ))
     }
 
     var body: some View {
@@ -2426,11 +2429,13 @@ struct ProcessDetailWindowRoot: View {
     let store: MonitorStore
     let coordinator: ProcessDetailWindowCoordinator
     let presentation: ProcessDetailPresentation
+    let traceActivityRegistry: TraceActivityRegistry
 
     var body: some View {
         ProcessDetailSheet(
             store: store,
-            presentation: presentation
+            presentation: presentation,
+            traceActivityRegistry: traceActivityRegistry
         )
         .frame(minWidth: 780, minHeight: 560)
         .navigationTitle(presentation.process.localizedDisplayName)

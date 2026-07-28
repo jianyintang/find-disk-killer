@@ -33,6 +33,7 @@ legacy_helper_plist="$app_path/Contents/Library/LaunchDaemons/com.jianyintang.Fi
 privacy_manifest="$app_path/Contents/Resources/PrivacyInfo.xcprivacy"
 third_party_notices="$app_path/Contents/Resources/THIRD_PARTY_NOTICES.md"
 provisioning_profile="$app_path/Contents/embedded.provisionprofile"
+sparkle_framework="$app_path/Contents/Frameworks/Sparkle.framework"
 
 for required_path in \
     "$info_plist" \
@@ -41,6 +42,7 @@ for required_path in \
     "$legacy_helper_plist" \
     "$privacy_manifest" \
     "$third_party_notices" \
+    "$sparkle_framework" \
     "$provisioning_profile"; do
     [[ -e "$required_path" ]] || { echo "Required release payload missing: $required_path" >&2; exit 1; }
 done
@@ -50,6 +52,37 @@ plutil -lint "$info_plist" "$helper_plist" "$legacy_helper_plist" "$privacy_mani
 bundle_identifier=$(plutil -extract CFBundleIdentifier raw "$info_plist")
 [[ "$bundle_identifier" == "com.jianyintang.FindDiskKiller" ]] || {
     echo "Unexpected bundle identifier: $bundle_identifier" >&2
+    exit 1
+}
+
+sparkle_feed=$(plutil -extract SUFeedURL raw "$info_plist")
+[[ "$sparkle_feed" == \
+    "https://github.com/jianyintang/find-disk-killer/releases/latest/download/appcast.xml" ]] || {
+    echo "Unexpected Sparkle feed URL: $sparkle_feed" >&2
+    exit 1
+}
+sparkle_public_key=$(plutil -extract SUPublicEDKey raw "$info_plist")
+if ! sparkle_key_length=$(printf '%s' "$sparkle_public_key" \
+    | /usr/bin/base64 -D 2>/dev/null \
+    | wc -c \
+    | tr -d ' '); then
+    sparkle_key_length=0
+fi
+[[ "$sparkle_key_length" == "32" ]] || {
+    echo "Release App is missing a valid Sparkle Ed25519 public key" >&2
+    exit 1
+}
+[[ "$(plutil -extract SURequireSignedFeed raw "$info_plist")" == "true" ]] || {
+    echo "Release App must require a signed Sparkle feed" >&2
+    exit 1
+}
+[[ "$(plutil -extract SUVerifyUpdateBeforeExtraction raw "$info_plist")" == "true" \
+    && "$(plutil -extract SUEnableSystemProfiling raw "$info_plist")" == "false" \
+    && "$(plutil -extract SUEnableAutomaticChecks raw "$info_plist")" == "true" \
+    && "$(plutil -extract SUAutomaticallyUpdate raw "$info_plist")" == "false" \
+    && "$(plutil -extract SUAllowsAutomaticUpdates raw "$info_plist")" == "false" \
+    && "$(plutil -extract SUScheduledCheckInterval raw "$info_plist")" == "86400" ]] || {
+    echo "Release App has unsafe or unexpected Sparkle scheduling/profile settings" >&2
     exit 1
 }
 

@@ -73,6 +73,7 @@ private final class FakeTraceHelperService: TraceHelperServiceManaging {
 private final class FakeTraceHelperTransport: TraceHelperTransporting, @unchecked Sendable {
     enum PingResponse {
         case ready
+        case busy
         case protocolMismatch
         case unavailable
     }
@@ -105,6 +106,8 @@ private final class FakeTraceHelperTransport: TraceHelperTransporting, @unchecke
         switch response {
         case .ready:
             return (TraceHelperProtocolConfiguration.version, "ready")
+        case .busy:
+            return (TraceHelperProtocolConfiguration.version, "busy")
         case .protocolMismatch:
             return (TraceHelperProtocolConfiguration.version - 1, "protocol-mismatch")
         case .unavailable:
@@ -484,6 +487,7 @@ func failedReconnectPreservesThePreviousSessionResults() async throws {
     store.start()
     try await waitUntil { store.state == .running }
     store.stop()
+    try await waitUntil { store.state == .stopped }
     let previousStart = try #require(store.startedAt)
     #expect(store.requestedReadBytes == 0)
 
@@ -513,6 +517,7 @@ func failedStartPreservesResultsUntilANewSessionIDIsReceived() async throws {
     store.start()
     try await waitUntil { store.state == .running }
     store.stop()
+    try await waitUntil { store.state == .stopped }
     let previousStart = try #require(store.startedAt)
 
     transport.append([.ready, .ready])

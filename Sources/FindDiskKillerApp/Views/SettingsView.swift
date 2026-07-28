@@ -2,9 +2,16 @@ import AppKit
 import FindDiskKillerCore
 import SwiftUI
 
-struct SettingsView: View {
+private enum SettingsPickerStyle {
+    case segmented
+    case menu
+}
+
+struct SettingsPage: View {
     let store: MonitorStore
     let history: HistoryModel
+    let navigation: AppNavigationCoordinator
+    let updates: UpdateCoordinator
     @AppStorage("showRateInMenuBar") private var showRateInMenuBar = true
     @AppStorage("sampleInterval") private var sampleInterval = MonitorStore.defaultSamplingInterval
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.system.rawValue
@@ -16,7 +23,27 @@ struct SettingsView: View {
     @State private var showsDisableHistoryOptions = false
 
     var body: some View {
-        TabView {
+        VStack(spacing: 0) {
+            HStack(spacing: 20) {
+                Text(L10n.text("设置"))
+                    .font(.title2.bold())
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                ViewThatFits(in: .horizontal) {
+                    settingsPanePicker(style: .segmented)
+                        .fixedSize(horizontal: true, vertical: false)
+                    settingsPanePicker(style: .menu)
+                        .frame(width: 190)
+                }
+            }
+            .padding(.horizontal, 28)
+            .frame(height: 64)
+
+            Divider()
+
+            Group {
+                switch navigation.settingsPane {
+                case .general:
             Form {
                 Section {
                     LabeledContent(L10n.text("语言")) {
@@ -103,8 +130,8 @@ struct SettingsView: View {
                 }
             }
             .formStyle(.grouped)
-            .tabItem { Label(L10n.text("通用"), systemImage: "gear") }
 
+                case .dataAndPrivacy:
             Form {
                 Section(L10n.text("监测历史")) {
                     Toggle(
@@ -261,36 +288,14 @@ struct SettingsView: View {
                 }
             }
             .formStyle(.grouped)
-            .tabItem { Label(L10n.text("数据与隐私"), systemImage: "hand.raised") }
 
-            Form {
-                Section {
-                    LabeledContent("FindDiskKiller", value: versionDescription)
-                    Text(L10n.text("在本机发现持续写盘、异常负载和磁盘健康信号。"))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Section {
-                    Link(destination: downloadURL) {
-                        Label(L10n.text("检查更新"), systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    Link(destination: privacyPolicyURL) {
-                        Label(L10n.text("隐私政策"), systemImage: "hand.raised")
-                    }
-                    Link(destination: supportURL) {
-                        Label(L10n.text("获取支持"), systemImage: "questionmark.circle")
-                    }
-                    Link(destination: sourceURL) {
-                        Label(L10n.text("项目主页"), systemImage: "safari")
-                    }
+                case .softwareUpdate:
+                    UpdaterSettingsSection(updates: updates)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
             }
-            .formStyle(.grouped)
-            .tabItem { Label(L10n.text("关于"), systemImage: "info.circle") }
         }
-        .scenePadding()
-        .frame(width: 600, height: 570)
+        .background(Color(nsColor: .windowBackgroundColor))
         .alert(item: $confirmation, content: historySettingsAlert)
         .confirmationDialog(
             L10n.text("停止保存监测历史？"),
@@ -327,6 +332,28 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshServiceStates()
         }
+    }
+
+    @ViewBuilder
+    private func settingsPanePicker(style: SettingsPickerStyle) -> some View {
+        let picker = Picker(L10n.text("设置类别"), selection: settingsPaneBinding) {
+            ForEach(SettingsPane.allCases) { pane in
+                Text(pane.title).tag(pane)
+            }
+        }
+        switch style {
+        case .segmented:
+            picker.pickerStyle(.segmented)
+        case .menu:
+            picker.pickerStyle(.menu)
+        }
+    }
+
+    private var settingsPaneBinding: Binding<SettingsPane> {
+        Binding(
+            get: { navigation.settingsPane },
+            set: { navigation.settingsPane = $0 }
+        )
     }
 
     private var traceHelperCanBeRemoved: Bool {
@@ -375,40 +402,6 @@ struct SettingsView: View {
         let controller = TraceHelperController()
         _ = controller.unregister()
         traceHelperState = controller.state
-    }
-
-    private var versionDescription: String {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
-            as? String ?? "-"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion")
-            as? String ?? "-"
-        return L10n.format("版本 %@（%@）", version, build)
-    }
-
-    private let privacyPolicyURL = URL(
-        string: "https://github.com/jianyintang/find-disk-killer/blob/main/PRIVACY.md"
-    )!
-    private let supportURL = URL(
-        string: "https://github.com/jianyintang/find-disk-killer/issues"
-    )!
-    private let sourceURL = URL(
-        string: "https://github.com/jianyintang/find-disk-killer"
-    )!
-    private var downloadURL: URL {
-        let locale = switch L10n.effectiveLanguage {
-        case .simplifiedChinese: "zh-cn"
-        case .traditionalChinese: "zh-tw"
-        case .brazilianPortuguese: "pt-br"
-        case .english: "en"
-        case .japanese: "ja"
-        case .korean: "ko"
-        case .german: "de"
-        case .french: "fr"
-        case .spanish: "es"
-        case .russian: "ru"
-        case .system: "en"
-        }
-        return URL(string: "https://finddiskkiller.com/\(locale)/download/")!
     }
 
     private func requestRetention(_ retention: HistoryRetention) {

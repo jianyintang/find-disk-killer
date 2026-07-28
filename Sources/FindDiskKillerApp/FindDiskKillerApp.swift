@@ -15,7 +15,9 @@ struct FindDiskKillerApp: App {
             RootView(
                 store: runtime.store,
                 processDetailWindows: runtime.processDetailWindows,
-                history: runtime.history
+                history: runtime.history,
+                navigation: runtime.navigation,
+                updates: runtime.updates
             )
                 .frame(minWidth: 920, minHeight: 620)
                 .environment(\.locale, Locale(identifier: selectedLanguage.localeIdentifier))
@@ -24,6 +26,7 @@ struct FindDiskKillerApp: App {
         .defaultSize(width: 1180, height: 760)
         .commands {
             SidebarCommands()
+            FindDiskKillerCommands(runtime: runtime)
             CommandMenu(L10n.text("监控")) {
                 Button(L10n.text(runtime.store.isCollecting ? "停止采集" : "开始采集")) {
                     runtime.store.isCollecting ? runtime.store.stop() : runtime.store.start()
@@ -42,7 +45,8 @@ struct FindDiskKillerApp: App {
                 ProcessDetailWindowRoot(
                     store: runtime.store,
                     coordinator: runtime.processDetailWindows,
-                    presentation: presentation
+                    presentation: presentation,
+                    traceActivityRegistry: runtime.traceActivityRegistry
                 )
                 .environment(\.locale, Locale(identifier: selectedLanguage.localeIdentifier))
                 .id(appLanguage)
@@ -76,11 +80,6 @@ struct FindDiskKillerApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Settings {
-            SettingsView(store: runtime.store, history: runtime.history)
-                .environment(\.locale, Locale(identifier: selectedLanguage.localeIdentifier))
-                .id(appLanguage)
-        }
     }
 
     private var selectedLanguage: AppLanguage {
@@ -93,6 +92,49 @@ struct FindDiskKillerApp: App {
         case .unavailable: "xmark.octagon.fill"
         case .stopped: "pause.circle"
         default: "internaldrive"
+        }
+    }
+}
+
+private struct FindDiskKillerCommands: Commands {
+    let runtime: AppRuntime
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(replacing: .appInfo) {
+            Button(L10n.text("关于 FindDiskKiller")) {
+                runtime.navigation.showAbout()
+                presentMainWindow()
+            }
+        }
+
+        CommandGroup(after: .appInfo) {
+            Button(L10n.text("检查更新…")) {
+                runtime.updates.checkForUpdates()
+            }
+            .disabled(!runtime.updates.canCheckForUpdates)
+            Divider()
+        }
+
+        CommandGroup(replacing: .appSettings) {
+            Button(L10n.text("设置…")) {
+                runtime.navigation.showSettings(preserveCurrentPane: true)
+                presentMainWindow()
+            }
+            .keyboardShortcut(",", modifiers: [.command])
+        }
+    }
+
+    private func presentMainWindow() {
+        NSApp.setActivationPolicy(.regular)
+        openWindow(id: "main")
+        DispatchQueue.main.async {
+            let window = NSApp.windows.first {
+                $0.identifier?.rawValue == "main" || $0.title == "FindDiskKiller"
+            }
+            window?.deminiaturize(nil)
+            window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 }
@@ -214,6 +256,11 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func workspaceDidWake(_ notification: Notification) {
         runtime.resumeAfterWake()
+        runtime.reconcileTraceActivitySoon()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        runtime.reconcileTraceActivitySoon()
     }
 
     private static func restoreMainWindow(in application: NSApplication) -> Bool {

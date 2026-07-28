@@ -39,7 +39,6 @@ struct ProcessesView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .navigationTitle(L10n.text("应用"))
         .searchable(text: $searchText, prompt: L10n.text("搜索应用或进程"))
     }
 

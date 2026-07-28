@@ -13,6 +13,9 @@ configs:
 packages:
   FindDiskKillerPackage:
     path: .
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.9.4
 
 settings:
   base:
@@ -70,6 +73,15 @@ targets:
         NSHighResolutionCapable: true
         NSPrincipalClass: NSApplication
         NSSupportsAutomaticGraphicsSwitching: true
+        SUFeedURL: https://github.com/jianyintang/find-disk-killer/releases/latest/download/appcast.xml
+        SUPublicEDKey: $(SPARKLE_PUBLIC_ED_KEY)
+        SUVerifyUpdateBeforeExtraction: true
+        SURequireSignedFeed: true
+        SUEnableSystemProfiling: false
+        SUEnableAutomaticChecks: true
+        SUScheduledCheckInterval: 86400
+        SUAutomaticallyUpdate: false
+        SUAllowsAutomaticUpdates: false
     entitlements:
       path: AppConfig/FindDiskKiller.entitlements
       properties:
@@ -82,11 +94,14 @@ targets:
         PRODUCT_NAME: FindDiskKiller
         CURRENT_PROJECT_VERSION: "3"
         MARKETING_VERSION: 0.1.0
+        SPARKLE_PUBLIC_ED_KEY: ""
     dependencies:
       - package: FindDiskKillerPackage
         product: FindDiskKillerCore
       - package: FindDiskKillerPackage
         product: FindDiskKillerTraceProtocol
+      - package: Sparkle
+        product: Sparkle
       - target: FindDiskKillerTraceHelper
         link: false
         embed: true

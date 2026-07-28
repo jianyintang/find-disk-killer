@@ -52,7 +52,6 @@ struct DisksView: View {
             }
             await store.diskHealth.refresh(devices: healthDevices)
         }
-        .navigationTitle(L10n.text("磁盘"))
     }
 
     private var activityContent: some View {

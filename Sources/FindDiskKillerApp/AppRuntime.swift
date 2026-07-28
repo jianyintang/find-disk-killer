@@ -10,6 +10,9 @@ final class AppRuntime {
     let store: MonitorStore
     let history: HistoryModel
     let processDetailWindows: ProcessDetailWindowCoordinator
+    let navigation: AppNavigationCoordinator
+    let traceActivityRegistry: TraceActivityRegistry
+    let updates: UpdateCoordinator
     private(set) var isStarted = false
 
     @ObservationIgnored private let flushHistoryAction: @MainActor () async -> Void
@@ -17,17 +20,23 @@ final class AppRuntime {
     @ObservationIgnored private var isSleeping = false
     @ObservationIgnored private var isTerminating = false
     @ObservationIgnored private var shouldResumeAfterWake = false
+    @ObservationIgnored private var reconciliationTask: Task<Void, Never>?
 
     init(
         store: MonitorStore = MonitorStore(),
         history: HistoryModel = HistoryModel(),
         processDetailWindows: ProcessDetailWindowCoordinator = ProcessDetailWindowCoordinator(),
+        navigation: AppNavigationCoordinator = AppNavigationCoordinator(),
+        traceActivityRegistry: TraceActivityRegistry = TraceActivityRegistry(),
         defaults: UserDefaults = .standard,
         flushHistory: (@MainActor () async -> Void)? = nil
     ) {
         self.store = store
         self.history = history
         self.processDetailWindows = processDetailWindows
+        self.navigation = navigation
+        self.traceActivityRegistry = traceActivityRegistry
+        updates = UpdateCoordinator(activityRegistry: traceActivityRegistry)
         flushHistoryAction = flushHistory ?? {
             await store.flushHistory()
             await history.refreshStorage()
@@ -99,6 +108,8 @@ final class AppRuntime {
     }
 
     private func startNow() async {
+        await reconcileTraceActivity()
+        startUpdaterWhenInterlockIsReady()
         await history.start(with: store)
         guard !Task.isCancelled, !isTerminating else {
             startTask = nil
@@ -110,6 +121,78 @@ final class AppRuntime {
             shouldResumeAfterWake = true
         } else {
             store.start()
+        }
+    }
+
+    private func reconcileTraceActivity() async {
+        let helper = TraceHelperController()
+        helper.refreshStatus()
+        switch helper.state {
+        case .notRegistered, .notFound, .installationRequired:
+            traceActivityRegistry.markHelperReadyWithoutLocalLease()
+        case .requiresApproval, .repairing, .repairAvailable,
+                .protocolMismatch, .connectionUnavailable, .operationFailed:
+            traceActivityRegistry.markHelperBusyWithoutLocalLease()
+        case .enabled, .connecting, .ready:
+            do {
+                let status = try await helper.activityStatus()
+                if status == .ready {
+                    traceActivityRegistry.markHelperReadyWithoutLocalLease()
+                } else {
+                    traceActivityRegistry.markHelperBusyWithoutLocalLease()
+                }
+            } catch TraceHelperClientError.protocolMismatch {
+                await repairOutdatedHelperForInterlock(helper)
+            } catch {
+                traceActivityRegistry.markHelperBusyWithoutLocalLease()
+            }
+        }
+    }
+
+    func reconcileTraceActivitySoon() {
+        scheduleInterlockReconciliation(immediate: true)
+    }
+
+    private func startUpdaterWhenInterlockIsReady() {
+        if traceActivityRegistry.needsHelperReconciliation {
+            scheduleInterlockReconciliation(immediate: false)
+        } else {
+            updates.start()
+        }
+    }
+
+    private func scheduleInterlockReconciliation(immediate: Bool) {
+        reconciliationTask?.cancel()
+        reconciliationTask = Task { [weak self] in
+            if !immediate {
+                try? await Task.sleep(for: .seconds(3))
+            }
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.reconcileTraceActivity()
+                if !self.traceActivityRegistry.needsHelperReconciliation {
+                    self.updates.start()
+                    self.reconciliationTask = nil
+                    return
+                }
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    private func repairOutdatedHelperForInterlock(_ helper: TraceHelperController) async {
+        do {
+            // Replacing an already-registered old helper also terminates any legacy
+            // child process, restoring a trustworthy idle/busy signal for updates.
+            try await helper.repairService()
+            let status = try await helper.activityStatus()
+            if status == .ready {
+                traceActivityRegistry.markHelperReadyWithoutLocalLease()
+            } else {
+                traceActivityRegistry.markHelperBusyWithoutLocalLease()
+            }
+        } catch {
+            traceActivityRegistry.markHelperBusyWithoutLocalLease()
         }
     }
 }

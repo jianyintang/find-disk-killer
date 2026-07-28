@@ -3,9 +3,15 @@ import SwiftUI
 
 struct HistoryReportView: View {
     let history: HistoryModel
+    let openDataSettings: () -> Void
     @State private var range: HistoryRetention = .sevenDays
     @State private var trendMetric: HistoryTrendMetric = .disk
     @State private var exportError: String?
+
+    init(history: HistoryModel, openDataSettings: @escaping () -> Void = {}) {
+        self.history = history
+        self.openDataSettings = openDataSettings
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -14,7 +20,6 @@ struct HistoryReportView: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .navigationTitle(L10n.text("历史分析"))
         .task(id: range) {
             await history.loadReport(range: range)
         }
@@ -118,7 +123,7 @@ struct HistoryReportView: View {
                 ? L10n.text("完成第一个分钟汇总后，这里会出现趋势和应用排名。")
                 : L10n.text("在设置中开启后，聚合数据将每分钟保存一次且只留在本机。"))
         } actions: {
-            SettingsLink {
+            Button(action: openDataSettings) {
                 Label(L10n.text("打开数据设置"), systemImage: "gear")
             }
         }

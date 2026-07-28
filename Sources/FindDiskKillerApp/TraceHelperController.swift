@@ -21,12 +21,18 @@ enum TraceHelperServiceState: Equatable {
 
 enum TraceHelperClientError: Error, Equatable {
     case unavailable
+    case busy
     case protocolMismatch
     case approvalRequired
     case installationRequired(isDiskImage: Bool)
     case repairRequired
     case rejected(String)
     case invalidPayload
+}
+
+enum TraceHelperActivityStatus: Equatable, Sendable {
+    case ready
+    case busy
 }
 
 enum TraceHelperRecoveryMode: Equatable {
@@ -477,6 +483,11 @@ final class TraceHelperController {
     }
 
     func repairService() async throws {
+        guard isInstalledInApplications else {
+            let isDiskImage = isRunningFromDiskImage
+            state = .installationRequired(isDiskImage: isDiskImage)
+            throw TraceHelperClientError.installationRequired(isDiskImage: isDiskImage)
+        }
         try await replaceOutdatedService()
     }
 
@@ -536,6 +547,9 @@ final class TraceHelperController {
         do {
             try await pingAndRecordHealth(timeout: .seconds(2))
             return
+        } catch TraceHelperClientError.busy {
+            state = .connectionUnavailable
+            throw TraceHelperClientError.busy
         } catch let error as TraceHelperClientError {
             guard shouldRepair(after: error, recoveryMode: recoveryMode) else {
                 state = .repairAvailable
@@ -630,6 +644,21 @@ final class TraceHelperController {
         try await ping(timeout: .seconds(3))
     }
 
+    func activityStatus(timeout: Duration = .seconds(3)) async throws -> TraceHelperActivityStatus {
+        let result = try await transport.ping(
+            clientProtocolVersion: TraceHelperProtocolConfiguration.version,
+            timeout: timeout
+        )
+        guard result.0 == TraceHelperProtocolConfiguration.version else {
+            throw TraceHelperClientError.protocolMismatch
+        }
+        switch result.1 {
+        case "ready": return .ready
+        case "busy": return .busy
+        default: throw TraceHelperClientError.protocolMismatch
+        }
+    }
+
     private func ping(timeout: Duration) async throws {
         state = .connecting
         do {
@@ -720,15 +749,16 @@ final class TraceHelperController {
     }
 
     private func pingAndRecordHealth(timeout: Duration) async throws {
-        let result = try await transport.ping(
-            clientProtocolVersion: TraceHelperProtocolConfiguration.version,
-            timeout: timeout
-        )
-        guard result.0 == TraceHelperProtocolConfiguration.version,
-              result.1 == "ready"
-        else {
+        let activity: TraceHelperActivityStatus
+        do {
+            activity = try await activityStatus(timeout: timeout)
+        } catch TraceHelperClientError.protocolMismatch {
             state = .protocolMismatch
             throw TraceHelperClientError.protocolMismatch
+        }
+        guard activity == .ready else {
+            state = .connectionUnavailable
+            throw TraceHelperClientError.busy
         }
         registrationStore.lastHealthyFingerprint = fingerprint
         state = .ready

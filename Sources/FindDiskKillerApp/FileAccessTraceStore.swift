@@ -11,6 +11,8 @@ enum FileAccessTraceRunState: Equatable {
     case starting
     case repairing
     case running
+    case stopping
+    case stopUnconfirmed
     case stopped
     case installationRequired(isDiskImage: Bool)
     case repairAvailable
@@ -252,21 +254,31 @@ final class FileAccessTraceStore {
     private(set) var lastEventAt: Date?
 
     let helper: TraceHelperController
+    @ObservationIgnored private let activityRegistry: TraceActivityRegistry
     @ObservationIgnored private var engine: FileAccessTraceEngine?
     @ObservationIgnored private var drainTask: Task<Void, Never>?
+    @ObservationIgnored private var stopTask: Task<Void, Never>?
     @ObservationIgnored private var sessionID: String?
+    @ObservationIgnored private var activityLease: TraceActivityLease?
     @ObservationIgnored private var lastListUpdate = Date.distantPast
     @ObservationIgnored private var lastChartPoint = Date.distantPast
     @ObservationIgnored private var hasPendingStartIntent = false
     @ObservationIgnored private var attemptedRegistrationForIntent = false
     @ObservationIgnored private var monitoredSessions: [ProcessSession] = []
 
-    init(helper: TraceHelperController = TraceHelperController()) {
+    init(
+        helper: TraceHelperController = TraceHelperController(),
+        activityRegistry: TraceActivityRegistry = TraceActivityRegistry()
+    ) {
         self.helper = helper
+        self.activityRegistry = activityRegistry
     }
 
     var isRunning: Bool {
-        state == .running || state == .starting || state == .repairing
+        switch state {
+        case .starting, .repairing, .running, .stopping, .stopUnconfirmed: true
+        default: false
+        }
     }
 
     func setProcessSessions(_ sessions: [ProcessSession]) {
@@ -301,6 +313,7 @@ final class FileAccessTraceStore {
 
     func requestPermission() {
         guard selection != nil, !isRunning else { return }
+        guard reserveTraceIntent() else { return }
         hasPendingStartIntent = true
         attemptedRegistrationForIntent = false
         advancePendingStart(allowRegistration: true)
@@ -312,6 +325,7 @@ final class FileAccessTraceStore {
 
     func start() {
         guard selection != nil, !isRunning else { return }
+        guard reserveTraceIntent() else { return }
         hasPendingStartIntent = true
         attemptedRegistrationForIntent = false
         advancePendingStart(allowRegistration: true, recoveryMode: .automatic)
@@ -319,6 +333,7 @@ final class FileAccessTraceStore {
 
     func repairAndRetry() {
         guard selection != nil, !isRunning else { return }
+        guard reserveTraceIntent() else { return }
         hasPendingStartIntent = true
         attemptedRegistrationForIntent = true
         launchTrace(recoveryMode: .userInitiated)
@@ -387,6 +402,7 @@ final class FileAccessTraceStore {
         drainTask?.cancel()
         drainTask = Task { [weak self] in
             guard let self else { return }
+            var startedSessionID: String?
             do {
                 try await helper.prepareForTracing(
                     recoveryMode: recoveryMode
@@ -400,8 +416,9 @@ final class FileAccessTraceStore {
                     maximumDurationSeconds: 900,
                     processIdentifiers: processIdentifiers
                 )
+                startedSessionID = sessionID
                 guard !Task.isCancelled else {
-                    try? await helper.stopTrace(sessionID: sessionID)
+                    await self.confirmStop(sessionID: sessionID, finalState: .stopped)
                     return
                 }
                 let now = Date()
@@ -409,7 +426,7 @@ final class FileAccessTraceStore {
                 self.sessionID = sessionID
                 let baseline = await OpenFileSampler.shared.sample(sessions: sessions)
                 guard !Task.isCancelled else {
-                    try? await helper.stopTrace(sessionID: sessionID)
+                    await self.confirmStop(sessionID: sessionID, finalState: .stopped)
                     return
                 }
                 self.engine = FileAccessTraceEngine(
@@ -421,6 +438,11 @@ final class FileAccessTraceStore {
                 self.state = .running
                 await self.drain(sessionID: sessionID)
             } catch is CancellationError {
+                if let startedSessionID {
+                    await self.confirmStop(sessionID: startedSessionID, finalState: .stopped)
+                } else {
+                    self.finishTrace(.stopped)
+                }
                 return
             } catch TraceHelperClientError.approvalRequired {
                 self.hasPendingStartIntent = true
@@ -428,27 +450,43 @@ final class FileAccessTraceStore {
                 self.helper.openLoginItemsSettings()
             } catch TraceHelperClientError.installationRequired(let isDiskImage) {
                 self.state = .installationRequired(isDiskImage: isDiskImage)
+                self.releaseTraceLease()
             } catch TraceHelperClientError.repairRequired {
                 self.state = .repairAvailable
+                self.releaseTraceLease()
+            } catch TraceHelperClientError.busy {
+                self.state = .stopUnconfirmed
+                self.markStopUnconfirmed()
+                await self.reconcileStoppedSession(
+                    sessionID: nil,
+                    finalState: .failed(self.message(for: TraceHelperClientError.busy))
+                )
             } catch {
                 self.state = helper.state == .repairAvailable
                     ? .repairAvailable
                     : .failed(self.message(for: error))
+                self.releaseTraceLease()
             }
         }
     }
 
     func stop() {
         guard isRunning else { return }
-        cancelPendingStart()
-        let sessionID = sessionID
+        cancelPendingStart(releaseLease: false)
+        state = .stopping
+        let activeSessionID = sessionID
+        let activeDrainTask = drainTask
         drainTask?.cancel()
-        drainTask = nil
-        self.sessionID = nil
-        state = .stopped
-        Task {
-            if let sessionID {
-                try? await helper.stopTrace(sessionID: sessionID)
+        stopTask?.cancel()
+        stopTask = Task { [weak self] in
+            guard let self else { return }
+            if let activeSessionID {
+                await self.confirmStop(sessionID: activeSessionID, finalState: .stopped)
+            } else {
+                await activeDrainTask?.value
+                if self.activityLease != nil, self.state == .stopping {
+                    self.finishTrace(.stopped)
+                }
             }
         }
     }
@@ -462,19 +500,17 @@ final class FileAccessTraceStore {
     }
 
     func endEphemeralSession() {
-        cancelPendingStart()
-        let activeSessionID = sessionID
-        drainTask?.cancel()
-        drainTask = nil
-        sessionID = nil
-        engine = nil
-        resetMeasurements()
-        state = selection == nil ? .noTarget : stateForHelper()
-        if let activeSessionID {
-            Task {
-                try? await helper.stopTrace(sessionID: activeSessionID)
-            }
+        if isRunning {
+            stop()
+        } else {
+            cancelPendingStart()
         }
+        selection = nil
+        engine = nil
+        clearPublishedMeasurements()
+        startedAt = nil
+        elapsed = 0
+        if activityLease == nil { state = .noTarget }
     }
 
     func removeTarget() {
@@ -515,11 +551,13 @@ final class FileAccessTraceStore {
                 if update.terminalFailure {
                     self.sessionID = nil
                     state = .failed(L10n.text("系统追踪提前结束，已有结果可能不完整"))
+                    releaseTraceLease()
                     return
                 }
                 if payload.isFinished {
                     self.sessionID = nil
                     state = .stopped
+                    releaseTraceLease()
                     return
                 }
                 if payload.hasMoreRecords {
@@ -530,8 +568,10 @@ final class FileAccessTraceStore {
             } catch is CancellationError {
                 return
             } catch {
-                self.sessionID = nil
-                state = .failed(message(for: error))
+                await confirmStop(
+                    sessionID: sessionID,
+                    finalState: .failed(message(for: error))
+                )
                 return
             }
         }
@@ -569,11 +609,17 @@ final class FileAccessTraceStore {
         if snapshot.coverage == .unsupportedFormat {
             let activeSessionID = sessionID
             drainTask?.cancel()
-            drainTask = nil
-            sessionID = nil
             state = .unsupportedFormat
             if let activeSessionID {
-                Task { try? await helper.stopTrace(sessionID: activeSessionID) }
+                stopTask?.cancel()
+                stopTask = Task { [weak self] in
+                    await self?.confirmStop(
+                        sessionID: activeSessionID,
+                        finalState: .unsupportedFormat
+                    )
+                }
+            } else {
+                releaseTraceLease()
             }
         }
     }
@@ -596,6 +642,8 @@ final class FileAccessTraceStore {
 
     private func message(for error: Error) -> String {
         switch error as? TraceHelperClientError {
+        case .busy:
+            L10n.text("已有追踪正在运行或结束中，请稍后重试")
         case .protocolMismatch:
             L10n.text("追踪组件版本不匹配，请重新安装应用")
         case .approvalRequired:
@@ -659,12 +707,89 @@ final class FileAccessTraceStore {
 
     private func stopDetachedSessionIfNeeded() {
         guard let sessionID else { return }
-        self.sessionID = nil
-        Task { try? await helper.stopTrace(sessionID: sessionID) }
+        stopTask?.cancel()
+        stopTask = Task { [weak self] in
+            await self?.confirmStop(sessionID: sessionID, finalState: .stopped)
+        }
     }
 
-    private func cancelPendingStart() {
+    private func cancelPendingStart(releaseLease: Bool = true) {
         hasPendingStartIntent = false
         attemptedRegistrationForIntent = false
+        if releaseLease, sessionID == nil, !isRunning {
+            releaseTraceLease()
+        }
+    }
+
+    private func reserveTraceIntent() -> Bool {
+        if activityLease != nil { return true }
+        guard let lease = activityRegistry.acquireTrace() else {
+            state = .failed(L10n.text("正在检查或安装更新，请稍后再开始追踪"))
+            return false
+        }
+        activityLease = lease
+        return true
+    }
+
+    private func markStopUnconfirmed() {
+        guard let activityLease else { return }
+        activityRegistry.markTraceStopUnconfirmed(activityLease)
+    }
+
+    private func releaseTraceLease() {
+        guard let activityLease else { return }
+        activityRegistry.releaseTrace(activityLease)
+        self.activityLease = nil
+    }
+
+    private func finishTrace(_ finalState: FileAccessTraceRunState) {
+        sessionID = nil
+        drainTask = nil
+        stopTask = nil
+        releaseTraceLease()
+        state = selection == nil ? .noTarget : finalState
+    }
+
+    private func confirmStop(
+        sessionID: String,
+        finalState: FileAccessTraceRunState
+    ) async {
+        if let activityLease {
+            activityRegistry.markTraceStopping(activityLease)
+        }
+        do {
+            try await helper.stopTrace(sessionID: sessionID)
+            finishTrace(finalState)
+        } catch {
+            state = .stopUnconfirmed
+            markStopUnconfirmed()
+            await reconcileStoppedSession(sessionID: sessionID, finalState: finalState)
+        }
+    }
+
+    private func reconcileStoppedSession(
+        sessionID: String?,
+        finalState: FileAccessTraceRunState
+    ) async {
+        while !Task.isCancelled {
+            do {
+                if try await helper.activityStatus(timeout: .seconds(1)) == .ready {
+                    finishTrace(finalState)
+                    return
+                }
+            } catch {
+                // A disconnected helper is not proof that its child process exited.
+            }
+            if let sessionID {
+                do {
+                    try await helper.stopTrace(sessionID: sessionID)
+                    finishTrace(finalState)
+                    return
+                } catch {
+                    // Retry after the helper reconnects or finishes the child process.
+                }
+            }
+            try? await Task.sleep(for: .seconds(1))
+        }
     }
 }

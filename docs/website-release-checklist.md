@@ -18,6 +18,26 @@ item is backed by an artifact or a test record.
 
 - Enable GitHub private vulnerability reporting.
 - Publish `PRIVACY.md`, `SUPPORT.md`, and the SHA-256 checksum over HTTPS.
+- Generate the Sparkle key once on the release Mac. The private key remains in
+  the login Keychain; the command prints the public key for the build setting:
+
+  ```bash
+  .build/artifacts/sparkle/Sparkle/bin/generate_keys \
+    --account com.jianyintang.FindDiskKiller
+  ```
+
+- Export exactly one plaintext key file, immediately place it in encrypted
+  offline storage, then securely remove the plaintext export:
+
+  ```bash
+  .build/artifacts/sparkle/Sparkle/bin/generate_keys \
+    --account com.jianyintang.FindDiskKiller \
+    -x /secure/temporary/FindDiskKiller-Sparkle-private-key
+  ```
+
+  The Sparkle tool does **not** encrypt this export. Store it in an encrypted
+  password manager or encrypted offline volume. Never put it in Git, GitHub
+  Actions, release assets, or shell output.
 
 ## Build and Sign
 
@@ -27,12 +47,18 @@ item is backed by an artifact or a test record.
 
   ```bash
   make lint test
-  make release VERSION=1.0.0 BUILD_NUMBER=100
+  make release \
+    VERSION=1.2.0 \
+    BUILD_NUMBER=112 \
+    SPARKLE_PUBLIC_ED_KEY='PUBLIC_KEY_PRINTED_BY_GENERATE_KEYS' \
+    RELEASE_NOTES_FILE='docs/releases/1.2.0.md'
   ```
 
 - Do not publish artifacts created with `SKIP_NOTARIZATION=1` or
   `ALLOW_DIRTY=1`.
-- Retain the `.xcarchive`, DMG, `SHA256SUMS`, source commit, and App/DMG
+- Confirm the release build number is greater than `111` (the last public build
+  before Sparkle was added).
+- Retain the `.xcarchive`, DMG, signed `appcast.xml`, `SHA256SUMS`, source commit, and App/DMG
   notarization submission identifiers for the release record.
 
 ## Clean-Mac Acceptance
@@ -59,11 +85,21 @@ item is backed by an artifact or a test record.
 - Serve the DMG over HTTPS with the correct content type and no HTML rewriting.
 - Download the public file once and verify its checksum, stapled ticket, and
   Gatekeeper assessment again.
+- Upload the DMG, `appcast.xml`, and `SHA256SUMS` to the same GitHub Release.
+  Confirm the permanent enclosure URL and
+  `releases/latest/download/appcast.xml` both return the exact published files.
+- Install the previous public build and verify **Check for Updates** discovers,
+  downloads, verifies, and installs the new build without opening a browser.
+- Verify automatic checking makes no more than one request per 24 hours while
+  enabled, and that disabling it in Settings persists after relaunch.
+- Start a deep trace, confirm update checks are disabled with a useful reason,
+  stop the trace, and confirm updates become available only after helper ACK.
 - Keep the previous known-good release available for recovery, but never offer
   an automatic downgrade over a newer installed helper.
 - Monitor support reports during the initial rollout. Pause distribution for
   signature, notarization, launch, helper lifecycle, or data-integrity failures.
 
-Automatic updates are intentionally not part of the first website release.
-Adding Sparkle requires a separately reviewed EdDSA key lifecycle, signed appcast,
-rollback policy, update-host availability plan, and privacy-policy update.
+Do not publish if the appcast signature verification fails, the embedded public
+key differs from the Keychain key, or the release script was run with rehearsal
+flags. Rollback means publishing a newer signed build that restores the prior
+known-good code; never replace an already published enclosure in place.

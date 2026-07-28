@@ -1,7 +1,7 @@
 import Foundation
 
 public enum TraceHelperProtocolConfiguration {
-    public static let version = 4
+    public static let version = 5
     public static let machServiceName = "com.jianyintang.FindDiskKiller.TraceHelper.v2"
     public static let helperExecutableName = "com.jianyintang.FindDiskKiller.TraceHelper"
     public static let launchDaemonPlistName =

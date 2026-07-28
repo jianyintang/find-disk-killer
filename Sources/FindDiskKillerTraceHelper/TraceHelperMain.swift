@@ -91,7 +91,16 @@ private final class TraceProcessResolver: @unchecked Sendable {
     }
 }
 
-private final class TraceSession: @unchecked Sendable {
+protocol TraceSessionManaging: AnyObject, Sendable {
+    var id: String { get }
+    var isRunning: Bool { get }
+    func stop()
+    func forceStopIfNeeded()
+    func stopAndWait()
+    func drain(maximumRecordCount: Int) -> TraceHelperDrainPayload
+}
+
+final class TraceSession: TraceSessionManaging, @unchecked Sendable {
     private static let maximumBufferedBytes = 4 * 1_024 * 1_024
     private static let maximumLineBytes = 32 * 1_024
 
@@ -107,11 +116,17 @@ private final class TraceSession: @unchecked Sendable {
     private var droppedRecordCount: UInt64 = 0
     private var finished = false
     private var exitCode: Int32?
+    private let onTermination: @Sendable (String) -> Void
 
-    init(maximumDurationSeconds: Int, processIdentifiers: [Int32]) throws {
+    init(
+        maximumDurationSeconds: Int,
+        processIdentifiers: [Int32],
+        onTermination: @escaping @Sendable (String) -> Void
+    ) throws {
         process = Process()
         output = Pipe()
         resolver = TraceProcessResolver(processIdentifiers: processIdentifiers)
+        self.onTermination = onTermination
         process.executableURL = URL(fileURLWithPath: "/usr/bin/fs_usage")
         process.arguments = [
             "-w", "-f", "filesys", "-t", String(maximumDurationSeconds)
@@ -140,14 +155,36 @@ private final class TraceSession: @unchecked Sendable {
             self.finished = true
             self.exitCode = process.terminationStatus
             self.lock.unlock()
+            self.onTermination(self.id)
         }
         try process.run()
     }
+
+    var isRunning: Bool { process.isRunning }
 
     func stop() {
         if process.isRunning {
             process.terminate()
         }
+    }
+
+    func forceStopIfNeeded() {
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+        }
+    }
+
+    func stopAndWait() {
+        stop()
+        let forceStop = DispatchWorkItem { [weak self] in
+            self?.forceStopIfNeeded()
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(
+            deadline: .now() + .seconds(2),
+            execute: forceStop
+        )
+        process.waitUntilExit()
+        forceStop.cancel()
     }
 
     func drain(maximumRecordCount: Int) -> TraceHelperDrainPayload {
@@ -260,35 +297,67 @@ private final class TraceSession: @unchecked Sendable {
     }
 }
 
-private final class TraceHelperService: NSObject, TraceHelperXPCProtocol, @unchecked Sendable {
-    private let queue = DispatchQueue(label: "com.jianyintang.FindDiskKiller.TraceHelper.session")
-    private var session: TraceSession?
+final class TraceHelperService: @unchecked Sendable {
+    typealias SessionFactory = @Sendable (
+        Int,
+        [Int32],
+        @escaping @Sendable (String) -> Void
+    ) throws -> any TraceSessionManaging
 
-    func clientDisconnected() {
+    private let queue = DispatchQueue(label: "com.jianyintang.FindDiskKiller.TraceHelper.session")
+    private let sessionFactory: SessionFactory
+    private var session: (any TraceSessionManaging)?
+    private var sessionOwnerID: UUID?
+    private var stoppingSessionID: String?
+    private var pendingStopReplies: [XPCReply<NSString>] = []
+    private var forceStopWorkItem: DispatchWorkItem?
+
+    init(sessionFactory: @escaping SessionFactory = { duration, identifiers, onTermination in
+        try TraceSession(
+            maximumDurationSeconds: duration,
+            processIdentifiers: identifiers,
+            onTermination: onTermination
+        )
+    }) {
+        self.sessionFactory = sessionFactory
+    }
+
+    func clientDisconnected(_ clientID: UUID) {
         queue.async {
-            self.session?.stop()
-            self.session = nil
+            guard self.sessionOwnerID == clientID,
+                  let session = self.session else { return }
+            self.beginStopping(session)
         }
     }
 
     func shutdown() {
-        queue.sync {
-            session?.stop()
-            session = nil
-        }
+        let activeSession = queue.sync { session }
+        activeSession?.stopAndWait()
     }
 
     func ping(
         clientProtocolVersion: NSNumber,
         withReply reply: @escaping (NSNumber, NSString) -> Void
     ) {
-        let status = clientProtocolVersion.intValue == TraceHelperProtocolConfiguration.version
-            ? TraceHelperStatus.ready
-            : "protocol-mismatch"
-        reply(NSNumber(value: TraceHelperProtocolConfiguration.version), status as NSString)
+        let replyBox = XPCReply<(NSNumber, NSString)> { reply($0.0, $0.1) }
+        queue.async {
+            let status: String
+            if clientProtocolVersion.intValue != TraceHelperProtocolConfiguration.version {
+                status = "protocol-mismatch"
+            } else if self.session != nil || self.stoppingSessionID != nil {
+                status = TraceHelperStatus.busy
+            } else {
+                status = TraceHelperStatus.ready
+            }
+            replyBox((
+                NSNumber(value: TraceHelperProtocolConfiguration.version),
+                status as NSString
+            ))
+        }
     }
 
     func startTrace(
+        clientID: UUID,
         maximumDurationSeconds: NSNumber,
         processIdentifiers: NSArray,
         withReply reply: @escaping (NSString, NSString) -> Void
@@ -306,17 +375,26 @@ private final class TraceHelperService: NSObject, TraceHelperXPCProtocol, @unche
                 replyBox(("" as NSString, TraceHelperStatus.invalidRequest as NSString))
                 return
             }
-            if let session = self.session, session.process.isRunning {
+            if let session = self.session {
                 replyBox((session.id as NSString, TraceHelperStatus.busy as NSString))
                 return
             }
-            self.session?.stop()
+            guard self.stoppingSessionID == nil else {
+                replyBox(("" as NSString, TraceHelperStatus.busy as NSString))
+                return
+            }
             do {
-                let session = try TraceSession(
-                    maximumDurationSeconds: duration,
-                    processIdentifiers: identifiers
+                let session = try self.sessionFactory(
+                    duration,
+                    identifiers,
+                    { [weak self] sessionID in
+                        self?.queue.async { [weak self] in
+                            self?.sessionDidTerminate(sessionID)
+                        }
+                    }
                 )
                 self.session = session
+                self.sessionOwnerID = clientID
                 replyBox((session.id as NSString, TraceHelperStatus.started as NSString))
             } catch {
                 self.session = nil
@@ -326,6 +404,7 @@ private final class TraceHelperService: NSObject, TraceHelperXPCProtocol, @unche
     }
 
     func drainTrace(
+        clientID: UUID,
         sessionID: NSString,
         maximumRecordCount: NSNumber,
         withReply reply: @escaping (NSData, NSString) -> Void
@@ -334,7 +413,9 @@ private final class TraceHelperService: NSObject, TraceHelperXPCProtocol, @unche
         let requestedRecordCount = maximumRecordCount.intValue
         let replyBox = XPCReply<(NSData, NSString)> { reply($0.0, $0.1) }
         queue.async {
-            guard let session = self.session, session.id == requestedSessionID else {
+            guard self.sessionOwnerID == clientID,
+                  let session = self.session,
+                  session.id == requestedSessionID else {
                 replyBox((NSData(), TraceHelperStatus.invalidSession as NSString))
                 return
             }
@@ -347,24 +428,121 @@ private final class TraceHelperService: NSObject, TraceHelperXPCProtocol, @unche
                 return
             }
             replyBox((data as NSData, TraceHelperStatus.ready as NSString))
+            if payload.isFinished, self.stoppingSessionID == nil {
+                self.session = nil
+                self.sessionOwnerID = nil
+            }
         }
     }
 
     func stopTrace(
+        clientID: UUID,
         sessionID: NSString,
         withReply reply: @escaping (NSString) -> Void
     ) {
         let requestedSessionID = sessionID as String
         let replyBox = XPCReply<NSString>(reply)
         queue.async {
-            guard let session = self.session, session.id == requestedSessionID else {
+            guard self.sessionOwnerID == clientID,
+                  let session = self.session,
+                  session.id == requestedSessionID else {
                 replyBox(TraceHelperStatus.invalidSession as NSString)
                 return
             }
-            session.stop()
-            self.session = nil
-            replyBox(TraceHelperStatus.stopped as NSString)
+            self.pendingStopReplies.append(replyBox)
+            self.beginStopping(session)
         }
+    }
+
+    private func beginStopping(_ session: any TraceSessionManaging) {
+        guard stoppingSessionID == nil else { return }
+        stoppingSessionID = session.id
+        if session.isRunning {
+            session.stop()
+            let sessionID = session.id
+            let forceStop = DispatchWorkItem { [weak self, weak session] in
+                guard let self, let session,
+                      self.stoppingSessionID == sessionID else { return }
+                session.forceStopIfNeeded()
+            }
+            forceStopWorkItem = forceStop
+            queue.asyncAfter(deadline: .now() + .seconds(2), execute: forceStop)
+        } else {
+            completeStop(session.id)
+        }
+    }
+
+    private func sessionDidTerminate(_ sessionID: String) {
+        guard session?.id == sessionID else { return }
+        guard stoppingSessionID == sessionID else { return }
+        completeStop(sessionID)
+    }
+
+    private func completeStop(_ sessionID: String) {
+        guard session?.id == sessionID, stoppingSessionID == sessionID else { return }
+        forceStopWorkItem?.cancel()
+        forceStopWorkItem = nil
+        session = nil
+        sessionOwnerID = nil
+        stoppingSessionID = nil
+        let replies = pendingStopReplies
+        pendingStopReplies.removeAll()
+        for reply in replies {
+            reply(TraceHelperStatus.stopped as NSString)
+        }
+    }
+}
+
+final class TraceHelperConnection: NSObject, TraceHelperXPCProtocol, @unchecked Sendable {
+    let clientID = UUID()
+    private let service: TraceHelperService
+
+    init(service: TraceHelperService) {
+        self.service = service
+    }
+
+    func clientDisconnected() {
+        service.clientDisconnected(clientID)
+    }
+
+    func ping(
+        clientProtocolVersion: NSNumber,
+        withReply reply: @escaping (NSNumber, NSString) -> Void
+    ) {
+        service.ping(clientProtocolVersion: clientProtocolVersion, withReply: reply)
+    }
+
+    func startTrace(
+        maximumDurationSeconds: NSNumber,
+        processIdentifiers: NSArray,
+        withReply reply: @escaping (NSString, NSString) -> Void
+    ) {
+        service.startTrace(
+            clientID: clientID,
+            maximumDurationSeconds: maximumDurationSeconds,
+            processIdentifiers: processIdentifiers,
+            withReply: reply
+        )
+    }
+
+    func drainTrace(
+        sessionID: NSString,
+        maximumRecordCount: NSNumber,
+        withReply reply: @escaping (NSData, NSString) -> Void
+    ) {
+        service.drainTrace(
+            clientID: clientID,
+            sessionID: sessionID,
+            maximumRecordCount: maximumRecordCount,
+            withReply: reply
+        )
+    }
+
+    func stopTrace(
+        sessionID: NSString,
+        withReply reply: @escaping (NSString) -> Void
+    ) {
+        service.stopTrace(clientID: clientID, sessionID: sessionID, withReply: reply)
     }
 }
 
@@ -377,10 +555,11 @@ private final class TraceHelperListenerDelegate: NSObject, NSXPCListenerDelegate
     ) -> Bool {
         guard connection.effectiveUserIdentifier != 0 else { return false }
 
+        let client = TraceHelperConnection(service: service)
         connection.exportedInterface = NSXPCInterface(with: TraceHelperXPCProtocol.self)
-        connection.exportedObject = service
-        connection.invalidationHandler = { [weak service] in
-            service?.clientDisconnected()
+        connection.exportedObject = client
+        connection.invalidationHandler = { [client] in
+            client.clientDisconnected()
         }
         connection.activate()
         return true

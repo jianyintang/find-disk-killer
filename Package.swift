@@ -14,6 +14,9 @@ let package = Package(
         .library(name: "CFindDiskKillerTrace", targets: ["CFindDiskKillerTrace"]),
         .executable(name: "FindDiskKiller", targets: ["FindDiskKillerApp"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.4")
+    ],
     targets: [
         .target(
             name: "CFindDiskKiller",
@@ -38,9 +41,20 @@ let package = Package(
         ),
         .executableTarget(
             name: "FindDiskKillerApp",
-            dependencies: ["FindDiskKillerCore", "FindDiskKillerTraceProtocol"],
+            dependencies: [
+                "FindDiskKillerCore",
+                "FindDiskKillerTraceProtocol",
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
             resources: [
                 .process("Resources")
+            ]
+        ),
+        .executableTarget(
+            name: "FindDiskKillerTraceHelper",
+            dependencies: [
+                "CFindDiskKillerTrace",
+                "FindDiskKillerTraceProtocol"
             ]
         ),
         .testTarget(
@@ -58,6 +72,14 @@ let package = Package(
                 "FindDiskKillerCore",
                 "FindDiskKillerTraceProtocol"
             ]
+        ),
+        .testTarget(
+            name: "TraceHelperTests",
+            dependencies: [
+                "FindDiskKillerTraceHelper",
+                "FindDiskKillerTraceProtocol"
+            ],
+            path: "Tests/FindDiskKillerTraceHelperTests"
         )
     ]
 )

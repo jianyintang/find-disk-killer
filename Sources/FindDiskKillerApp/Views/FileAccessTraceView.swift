@@ -133,7 +133,11 @@ struct FileAccessTraceView: View {
                 .disabled(store.isRunning)
             }
 
-            if store.isRunning {
+            if store.state == .stopping || store.state == .stopUnconfirmed {
+                ProgressView()
+                    .controlSize(.small)
+                    .help(L10n.text("正在确认追踪已结束"))
+            } else if store.isRunning {
                 Button(role: .destructive, action: store.stop) {
                     Label(L10n.text("停止追踪"), systemImage: "stop.fill")
                 }
@@ -217,6 +221,9 @@ struct FileAccessTraceView: View {
             }
             .buttonStyle(.borderedProminent)
         case .repairing:
+            ProgressView()
+                .controlSize(.small)
+        case .stopping, .stopUnconfirmed:
             ProgressView()
                 .controlSize(.small)
         case .failed:
@@ -321,7 +328,8 @@ struct FileAccessTraceView: View {
     private var needsStatusBand: Bool {
         switch store.state {
         case .permissionRequired, .waitingForApproval, .repairing,
-                .repairAvailable, .installationRequired, .failed, .unsupportedFormat:
+                .repairAvailable, .installationRequired, .failed, .unsupportedFormat,
+                .stopping, .stopUnconfirmed:
             true
         default: false
         }
@@ -333,6 +341,8 @@ struct FileAccessTraceView: View {
         case .waitingForApproval: L10n.text("等待你在系统设置中批准")
         case .repairing: L10n.text("正在更新追踪组件")
         case .repairAvailable: L10n.text("追踪组件未能启动")
+        case .stopping: L10n.text("正在停止追踪")
+        case .stopUnconfirmed: L10n.text("正在确认追踪已结束")
         case .installationRequired: L10n.text("需要先安装到应用程序文件夹")
         case .unsupportedFormat: L10n.text("当前 macOS 输出格式暂不受支持")
         case .failed(let message): message
@@ -350,6 +360,10 @@ struct FileAccessTraceView: View {
             L10n.text("正在替换旧版追踪组件，完成后会自动继续。")
         case .repairAvailable:
             L10n.text("组件已启用但未能启动。请直接修复，无需重复切换系统设置；已有结果会保留。")
+        case .stopping:
+            L10n.text("停止完成后即可检查或安装更新。")
+        case .stopUnconfirmed:
+            L10n.text("追踪组件暂未响应；确认后台追踪结束前不会开始更新。")
         case .installationRequired(let isDiskImage):
             isDiskImage
                 ? L10n.text("请在安装窗口中将 FindDiskKiller 拖入“应用程序”，然后重新打开。")
@@ -365,7 +379,7 @@ struct FileAccessTraceView: View {
     private var statusSymbol: String {
         switch store.state {
         case .permissionRequired, .waitingForApproval: "lock.shield"
-        case .repairing: "arrow.triangle.2.circlepath"
+        case .repairing, .stopping, .stopUnconfirmed: "arrow.triangle.2.circlepath"
         case .repairAvailable: "wrench.and.screwdriver"
         case .installationRequired: "folder.badge.plus"
         case .unsupportedFormat: "doc.badge.ellipsis"
@@ -375,7 +389,7 @@ struct FileAccessTraceView: View {
 
     private var statusColor: Color {
         switch store.state {
-        case .permissionRequired, .waitingForApproval, .repairing: .blue
+        case .permissionRequired, .waitingForApproval, .repairing, .stopping: .blue
         default: .orange
         }
     }

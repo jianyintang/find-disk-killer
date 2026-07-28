@@ -20,4 +20,11 @@ lint:
 release:
 	@test -n "$(VERSION)" || (echo "VERSION is required" >&2; exit 64)
 	@test -n "$(BUILD_NUMBER)" || (echo "BUILD_NUMBER is required" >&2; exit 64)
-	VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" /bin/bash scripts/release.sh
+	@test -n "$(SPARKLE_PUBLIC_ED_KEY)" || (echo "SPARKLE_PUBLIC_ED_KEY is required" >&2; exit 64)
+	@test -n "$(RELEASE_NOTES_FILE)" || (echo "RELEASE_NOTES_FILE is required" >&2; exit 64)
+	VERSION="$(VERSION)" \
+	BUILD_NUMBER="$(BUILD_NUMBER)" \
+	SPARKLE_PUBLIC_ED_KEY="$(SPARKLE_PUBLIC_ED_KEY)" \
+	SPARKLE_KEY_ACCOUNT="$(SPARKLE_KEY_ACCOUNT)" \
+	RELEASE_NOTES_FILE="$(RELEASE_NOTES_FILE)" \
+	/bin/bash scripts/release.sh

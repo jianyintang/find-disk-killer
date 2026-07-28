@@ -1,6 +1,6 @@
 # FindDiskKiller Privacy Policy
 
-Effective date: July 27, 2026
+Effective date: July 28, 2026
 
 FindDiskKiller is designed to inspect activity on your Mac without sending that
 activity anywhere. Monitoring and analysis happen locally on the device.
@@ -51,11 +51,24 @@ the trace component in **FindDiskKiller > Settings > Data & Privacy**. macOS may
 separately require approval in Login Items or Full Disk Access for protected
 locations. FindDiskKiller cannot grant those permissions on your behalf.
 
-## Network Access
+## Network Access and Software Updates
 
-FindDiskKiller does not make automatic network requests in the current release.
-Choosing a Privacy Policy, Support, Project Home, or download link opens that
-website in your browser, where the website operator's privacy terms apply.
+When automatic update checks are enabled, the running app requests the signed
+Sparkle appcast hosted by GitHub at most once every 24 hours. A manual check can
+also be started from Settings or the app menu. The app does not silently
+download or install an update; Sparkle shows the version and release notes and
+waits for your choice.
+
+Update requests do not contain process names, file paths, disk or device data,
+monitoring history, an installation identifier, or a system profile. GitHub and
+its content delivery providers will ordinarily receive the requesting IP
+address, request time, and standard network headers needed to serve the file.
+Their privacy terms apply to that request.
+
+The official website and GitHub repository are opened only after you click a
+link. FindDiskKiller does not prefetch these pages and does not add click
+tracking or UTM parameters. Your default browser and the destination site's
+privacy terms apply after the page opens.
 
 ## Data Security
 

@@ -41,3 +41,22 @@ SQLite sidecar files and rotates the history identity key.
 
 Release artifacts must be signed with the documented Developer ID identity,
 notarized by Apple, stapled, and published with a SHA-256 checksum.
+
+## Software Update Integrity
+
+FindDiskKiller uses Sparkle 2 with a fixed HTTPS appcast hosted in GitHub
+Releases. Every enclosure and the final appcast are signed with Ed25519, and
+the public key is embedded in the signed app bundle. Sparkle verifies the feed,
+download, Apple code signature, and expected application identity before
+installation.
+
+The Sparkle private key must remain in the developer's login Keychain. Keep one
+encrypted offline export and never add the key to this repository, GitHub
+Actions, a release draft, logs, or shell history. A release is blocked unless
+the configured public key matches the Keychain private key. If the private key
+is lost, existing installations cannot trust a replacement key without a
+separately shipped transition release.
+
+An update cannot begin while the privileged trace helper reports an active or
+not-yet-confirmed `fs_usage` session. A stop acknowledgement is sent only after
+the child process exits.
