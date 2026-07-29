@@ -626,14 +626,17 @@ public final class MonitorStore {
                 || receivedDelta > 0 || sentDelta > 0
             guard hasActivity || groupHistory[classification.groupID] != nil else { continue }
 
-            let existing = groupedDeltas[classification.groupID] ?? (0, 0, 0, 0, 0, true)
+            let existing = groupedDeltas[classification.groupID] ?? (0, 0, 0, 0, 0, false)
             groupedDeltas[classification.groupID] = (
                 existing.read + readDelta,
                 existing.written + writeDelta,
                 existing.cpu + cpuDelta,
                 existing.networkReceived + receivedDelta,
                 existing.networkSent + sentDelta,
-                existing.networkAvailable && networkAvailable
+                // nettop omits helpers with no network observations. An app-level sample is
+                // usable when any grouped member has a valid counter delta; a source-wide
+                // failure is still rejected later through processNetworkAvailable.
+                existing.networkAvailable || networkAvailable
             )
             if hasActivity {
                 metadata.lastActivity = date

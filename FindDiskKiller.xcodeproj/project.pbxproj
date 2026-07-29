@@ -17,6 +17,7 @@
 		4F55C539B0DCFB72B948CB3D /* UpdaterSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE55FF164FA95751B15D33DF /* UpdaterSettingsSection.swift */; };
 		53876D451A4594C01FB8550C /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 56A2D4A3EC905FA5D0BA2A45 /* Sparkle */; };
 		3AB42A16B49F82400C7FF300 /* AgentStorageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B6407D04086DD337BBFE898 /* AgentStorageView.swift */; };
+		0A6E8F3D4C2B1A0098765432 /* AgentStorageCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A6E8F3D4C2B1A0098765433 /* AgentStorageCleanup.swift */; };
 		58317958E5A70F2938AF8B08 /* ProcessesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 457028605863AA4C13E784A4 /* ProcessesView.swift */; };
 		5DF5AAA84094D4331DDAF9BC /* TraceHelperMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7F04CF503EF4C19FA578DA5 /* TraceHelperMain.swift */; };
 		5E24EACD1AFFADC97204287F /* DisksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F13AE24E17E72270635D523 /* DisksView.swift */; };
@@ -96,6 +97,7 @@
 
 /* Begin PBXFileReference section */
 		03A020A758E12C4DAB2BFC75 /* ProcessKnowledge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessKnowledge.swift; sourceTree = "<group>"; };
+		0A6E8F3D4C2B1A0098765433 /* AgentStorageCleanup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStorageCleanup.swift; sourceTree = "<group>"; };
 		0498F8A849C9CC809CFD1580 /* zh-Hant */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hant"; path = "zh-Hant.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		095D33516AF500CF80F1DB90 /* MonitorChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorChart.swift; sourceTree = "<group>"; };
 		0E83694E55B5F6D6BE2BB1FC /* find-disk-killer-update-sidebar */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "find-disk-killer-update-sidebar"; path = .; sourceTree = SOURCE_ROOT; };
@@ -280,6 +282,7 @@
 			isa = PBXGroup;
 			children = (
 				2CD437307D2C3FFC14DBC510 /* AppNavigation.swift */,
+				0A6E8F3D4C2B1A0098765433 /* AgentStorageCleanup.swift */,
 				4553CEB12FD65DB0D81627E2 /* AgentStorageModel.swift */,
 				F233B95DF10CF40F0DE7228B /* AppRuntime.swift */,
 				AE77A398DCA93D9D1D69BAF1 /* BrandLinks.swift */,
@@ -425,6 +428,7 @@
 			files = (
 				F5E8B4AA33295C07BCE0F750 /* AboutPage.swift in Sources */,
 				38188339774F720B848980D0 /* AppNavigation.swift in Sources */,
+				0A6E8F3D4C2B1A0098765432 /* AgentStorageCleanup.swift in Sources */,
 				F7658E946A5B496036ED45DA /* AgentStorageModel.swift in Sources */,
 				3AB42A16B49F82400C7FF300 /* AgentStorageView.swift in Sources */,
 				F9330F09999DF74A07CFD4C2 /* AppRuntime.swift in Sources */,

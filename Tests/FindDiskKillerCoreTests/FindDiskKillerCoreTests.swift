@@ -57,6 +57,40 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(result[42]?.sent == 3_400)
 }
 
+@Test func processNetworkParserUsesTheLatestDeltaSample() {
+    let csv = """
+    ,bytes_in,bytes_out,
+    codex.6389,836826,60340714,
+    ,bytes_in,bytes_out,
+    codex.6389,161416,982762,
+    """
+    let result = ProcessNetworkParser.parse(csv)
+    #expect(result[6389]?.received == 161_416)
+    #expect(result[6389]?.sent == 982_762)
+}
+
+@Test func processNetworkParserDropsProcessesMissingFromTheLatestSample() {
+    let csv = """
+    ,bytes_in,bytes_out,
+    exited.41,9000000,12000000,
+    codex.6389,836826,60340714,
+    ,bytes_in,bytes_out,
+    codex.6389,161416,982762,
+    """
+    let result = ProcessNetworkParser.parse(csv)
+    #expect(result[41] == nil)
+    #expect(result[6389]?.received == 161_416)
+    #expect(result[6389]?.sent == 982_762)
+}
+
+@Test func processNetworkParserRejectsAnIncompleteDeltaWindow() {
+    let csv = """
+    ,bytes_in,bytes_out,
+    codex.6389,836826,60340714,
+    """
+    #expect(ProcessNetworkParser.parse(csv, minimumSampleCount: 2) == nil)
+}
+
 @Test func networkCounterGapDoesNotCreateRecoverySpike() {
     #expect(optionalCounterDelta(nil, 1_000) == nil)
     #expect(optionalCounterDelta(8_000, nil) == nil)
@@ -701,6 +735,61 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
 }
 
 @MainActor
+@Test func groupedApplicationPublishesNetworkFromObservedMemberProcesses() async throws {
+    let store = MonitorStore()
+    let baseDate = Date(timeIntervalSinceReferenceDate: 1_750)
+
+    for index in 0..<2 {
+        let observedBytes = UInt64(100 + index * 120)
+        store.ingest(SystemSnapshot(
+            date: baseDate.addingTimeInterval(Double(index)),
+            uptime: Double(index + 1),
+            processes: [
+                RawProcessCounter(
+                    pid: 51,
+                    startAbstime: 10,
+                    name: "grouped-fixture",
+                    path: "/usr/bin/grouped-fixture",
+                    cpuTimeNanoseconds: UInt64(index) * 10_000_000,
+                    bytesRead: 0,
+                    bytesWritten: 0,
+                    networkBytesReceived: observedBytes,
+                    networkBytesSent: observedBytes * 2
+                ),
+                RawProcessCounter(
+                    pid: 52,
+                    startAbstime: 11,
+                    name: "grouped-fixture",
+                    path: "/usr/bin/grouped-fixture",
+                    cpuTimeNanoseconds: UInt64(index) * 10_000_000,
+                    bytesRead: 0,
+                    bytesWritten: 0,
+                    networkBytesReceived: nil,
+                    networkBytesSent: nil
+                )
+            ],
+            disks: [],
+            volumes: [],
+            cpuUserTicks: 0,
+            cpuSystemTicks: 0,
+            cpuNiceTicks: 0,
+            cpuIdleTicks: 0,
+            networkInterfaces: [],
+            cpuStatsAvailable: false,
+            networkInterfacesAvailable: false,
+            processNetworkAvailable: true
+        ))
+        await store.waitForPendingProcessSummary()
+    }
+
+    let process = try #require(store.processes.first)
+    #expect(process.memberCount == 2)
+    #expect(process.isNetworkAvailable == true)
+    #expect(process.currentNetworkReceiveBytesPerSecond == 120)
+    #expect(process.currentNetworkSendBytesPerSecond == 240)
+}
+
+@MainActor
 @Test func virtualDisksDoNotContributeToPhysicalThroughput() {
     let store = MonitorStore()
     let baseDate = Date(timeIntervalSinceReferenceDate: 2_000)
@@ -936,6 +1025,42 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(completedRate?.totalNetworkSentBytes == 2_000)
 }
 
+@Test func samplerPublishesExactIntervalDeltasWithoutSubtractingWindows() async {
+    let clock = LockedSamplerClock(now: 7_000)
+    let source = StubProcessNetworkSource(results: [
+        .interval([getpid(): .init(received: 1_000, sent: 2_000)], duration: 10),
+        .interval([getpid(): .init(received: 500, sent: 700)], duration: 10)
+    ])
+    let sampler = SystemSampler(
+        processNetworkRefreshInterval: 10,
+        uptimeProvider: clock.read,
+        processNetworkSampleProvider: source.sample
+    )
+
+    _ = await sampler.collect()
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+    let intervalBaseline = await sampler.collect()
+    #expect(intervalBaseline.processes.first { $0.pid == getpid() }?.networkBytesReceived == 0)
+    #expect(intervalBaseline.processes.first { $0.pid == getpid() }?.networkBytesSent == 0)
+
+    clock.set(7_005)
+    let firstHalf = await sampler.collect()
+    #expect(firstHalf.processes.first { $0.pid == getpid() }?.networkBytesReceived == 500)
+    #expect(firstHalf.processes.first { $0.pid == getpid() }?.networkBytesSent == 1_000)
+
+    clock.set(7_010)
+    _ = await sampler.collect()
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+    let secondBaseline = await sampler.collect()
+    #expect(secondBaseline.processes.first { $0.pid == getpid() }?.networkBytesReceived == 1_000)
+    #expect(secondBaseline.processes.first { $0.pid == getpid() }?.networkBytesSent == 2_000)
+
+    clock.set(7_015)
+    let secondHalf = await sampler.collect()
+    #expect(secondHalf.processes.first { $0.pid == getpid() }?.networkBytesReceived == 1_250)
+    #expect(secondHalf.processes.first { $0.pid == getpid() }?.networkBytesSent == 2_350)
+}
+
 @Test func samplerDoesNotBlockMainCollectionOnProcessNetworkRefresh() async {
     let clock = LockedSamplerClock(now: 1_500)
     let source = BlockingProcessNetworkSource(
@@ -961,6 +1086,58 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(!completedSynchronously)
     await sampler.waitForPendingProcessNetworkRefreshForTesting()
     #expect((await sampler.collect()).processNetworkAvailable)
+}
+
+@Test func samplerAttributesIntervalTrafficToAProcessStartedDuringTheWindow() async {
+    let pid: Int32 = 42_430
+    let clock = LockedSamplerClock(now: 8_000)
+    let processes = StubProcessCounterSource(current: [])
+    let network = BlockingProcessNetworkSource(
+        result: .interval([pid: .init(received: 1_000, sent: 2_000)], duration: 10)
+    )
+    let sampler = SystemSampler(
+        processNetworkRefreshInterval: 10,
+        uptimeProvider: clock.read,
+        processNetworkSampleProvider: network.sample,
+        processCounterProvider: processes.sample
+    )
+
+    _ = await sampler.collect()
+    processes.set([networkProcessFixture(pid: pid)])
+    network.release()
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+    _ = await sampler.collect()
+
+    clock.set(8_005)
+    let partial = await sampler.collect()
+    #expect(partial.processes.first { $0.pid == pid }?.networkBytesReceived == 500)
+    #expect(partial.processes.first { $0.pid == pid }?.networkBytesSent == 1_000)
+}
+
+@Test func samplerRejectsTrafficWhenAPIDChangesOwnersDuringTheWindow() async {
+    let pid: Int32 = 42_431
+    let clock = LockedSamplerClock(now: 9_000)
+    let processes = StubProcessCounterSource(current: [networkProcessFixture(pid: pid)])
+    let network = BlockingProcessNetworkSource(
+        result: .interval([pid: .init(received: 1_000, sent: 2_000)], duration: 10)
+    )
+    let sampler = SystemSampler(
+        processNetworkRefreshInterval: 10,
+        uptimeProvider: clock.read,
+        processNetworkSampleProvider: network.sample,
+        processCounterProvider: processes.sample
+    )
+
+    _ = await sampler.collect()
+    processes.set([networkProcessFixture(pid: pid, startAbstime: 100)])
+    network.release()
+    await sampler.waitForPendingProcessNetworkRefreshForTesting()
+    _ = await sampler.collect()
+
+    clock.set(9_005)
+    let partial = await sampler.collect()
+    #expect(partial.processes.first { $0.pid == pid }?.networkBytesReceived == nil)
+    #expect(partial.processes.first { $0.pid == pid }?.networkBytesSent == nil)
 }
 
 @MainActor
@@ -1187,10 +1364,10 @@ private final class StubProcessCounterSource: @unchecked Sendable {
     }
 }
 
-private func networkProcessFixture(pid: Int32) -> RawProcessCounter {
+private func networkProcessFixture(pid: Int32, startAbstime: UInt64 = 99) -> RawProcessCounter {
     RawProcessCounter(
         pid: pid,
-        startAbstime: 99,
+        startAbstime: startAbstime,
         name: "network-fixture",
         path: "/usr/bin/network-fixture",
         cpuTimeNanoseconds: 0,

@@ -156,6 +156,8 @@ struct RootView: View {
                 section: requestedSection,
                 snapshot: sectionSnapshots[requestedSection],
                 agentStorageProgress: agentStorage.progress,
+                agentStorageProgressByProvider: agentStorage.progressByProvider,
+                agentStorageStartedAt: agentStorage.scanStartedAt,
                 processSearchText: $processSearchText
             )
         }
@@ -382,6 +384,8 @@ private struct SectionNavigationPlaceholder: View {
     let section: AppSection
     let snapshot: SectionPreviewSnapshot?
     let agentStorageProgress: AgentStorageScanProgress
+    let agentStorageProgressByProvider: [AgentStorageProvider: AgentStorageScanProgress]
+    let agentStorageStartedAt: Date?
     @Binding var processSearchText: String
     @State private var processTableWidth: CGFloat = 0
 
@@ -725,8 +729,11 @@ private struct SectionNavigationPlaceholder: View {
     }
 
     private var agentStoragePlaceholder: some View {
-        AgentStorageOverviewSkeleton(progress: agentStorageProgress)
-        .allowsHitTesting(false)
+        AgentStorageOverviewSkeleton(
+            progress: agentStorageProgress,
+            progressByProvider: agentStorageProgressByProvider,
+            startedAt: agentStorageStartedAt
+        )
     }
 
     private var previewProcesses: [ProcessPreviewRow] {

@@ -1,9 +1,10 @@
 import Foundation
+import Darwin
 import Testing
 @testable import FindDiskKillerApp
 @testable import FindDiskKillerCore
 
-@Test func agentStorageNaturalDayRangesIncludeExactlyTheirNamedDayCount() throws {
+@Test func agentStorageInactiveRangesUseStrictClampedCutoffs() throws {
     let calendar = Calendar.current
     let reference = try #require(calendar.date(from: DateComponents(
         year: 2026,
@@ -14,16 +15,98 @@ import Testing
     )))
 
     for (range, dayCount) in [
+        (AgentStorageTimeRange.oneDay, 1),
         (AgentStorageTimeRange.sevenDays, 7),
         (.thirtyDays, 30),
         (.ninetyDays, 90)
     ] {
-        let interval = try #require(range.dateInterval(relativeTo: reference))
-        #expect(calendar.dateComponents([.day], from: interval.lowerBound, to: interval.upperBound).day == dayCount)
-        #expect(interval.contains(reference))
-        #expect(!interval.contains(interval.upperBound))
+        let cutoff = try #require(range.cutoffDate(relativeTo: reference))
+        #expect(calendar.dateComponents([.day], from: cutoff, to: reference).day == dayCount)
+        #expect(range.includes(updatedAt: cutoff.addingTimeInterval(-1), relativeTo: reference))
+        #expect(!range.includes(updatedAt: cutoff, relativeTo: reference))
+        #expect(!range.includes(updatedAt: cutoff.addingTimeInterval(1), relativeTo: reference))
     }
-    #expect(AgentStorageTimeRange.all.dateInterval(relativeTo: reference) == nil)
+    #expect(AgentStorageTimeRange.all.cutoffDate(relativeTo: reference) == nil)
+    #expect(AgentStorageTimeRange.all.includes(updatedAt: reference, relativeTo: reference))
+    #expect(AgentStorageTimeRange.olderThan(days: 0).inactiveDays == 1)
+    #expect(AgentStorageTimeRange.olderThan(days: 45).inactiveDays == 45)
+    #expect(AgentStorageTimeRange.olderThan(days: 500).inactiveDays == 365)
+}
+
+@Test func agentStorageBatchRangeProtectsRecentAndActiveThreads() throws {
+    let reference = Date(timeIntervalSince1970: 10_000_000)
+    let recent = makeFamily(
+        id: "recent",
+        updatedAt: reference.addingTimeInterval(-60 * 60),
+        bytes: 10
+    )
+    let exactCutoff = makeFamily(
+        id: "exact-cutoff",
+        updatedAt: reference.addingTimeInterval(-30 * 24 * 60 * 60),
+        bytes: 20
+    )
+    let old = makeFamily(
+        id: "old",
+        updatedAt: reference.addingTimeInterval(-31 * 24 * 60 * 60),
+        bytes: 30
+    )
+    let muchOlder = makeFamily(
+        id: "much-older",
+        updatedAt: reference.addingTimeInterval(-120 * 24 * 60 * 60),
+        bytes: 40
+    )
+    let families = [recent, exactCutoff, old, muchOlder]
+
+    #expect(AgentStorageBatchSelectionEngine.eligibleFamilyIDs(
+        in: families,
+        timeRange: .thirtyDays,
+        relativeTo: reference
+    ) == ["old", "much-older"])
+    #expect(AgentStorageBatchSelectionEngine.eligibleFamilyIDs(
+        in: families,
+        timeRange: .olderThan(days: 90),
+        relativeTo: reference
+    ) == ["much-older"])
+    #expect(AgentStorageBatchSelectionEngine.eligibleFamilyIDs(
+        in: families,
+        timeRange: .all,
+        relativeTo: reference
+    ).isEmpty)
+
+    let dataset = AgentStorageProviderDataset(
+        provider: .codex,
+        families: families,
+        globalItems: [],
+        unattributedItems: []
+    )
+    let result = try AgentStorageProjectionEngine.project(AgentStorageProjectionRequest(
+        scope: .chats,
+        dataset: dataset,
+        scannedAt: reference,
+        archiveFilter: .all,
+        timeRange: .thirtyDays,
+        selectedProject: nil,
+        selectedGlobalCategory: nil,
+        selectedUnattributedReason: nil,
+        query: "",
+        hidesPrivateDetails: false,
+        expandedFamilies: [],
+        chatPageIndex: 0,
+        chatPageSize: 50,
+        chatSortRules: [
+            AgentStorageChatSortRule(field: .updatedAt, isReverse: true),
+            AgentStorageChatSortRule(field: .id, isReverse: false)
+        ],
+        globalSortRules: [],
+        unattributedSortRules: []
+    ))
+    guard case .chats(let rows, let summary, _, _) = result.content else {
+        Issue.record("Expected a chat projection")
+        return
+    }
+    #expect(rows.map(\.familyID) == ["old", "much-older"])
+    #expect(summary.mainThreadCount == 2)
+    #expect(summary.chatBytes == 70)
 }
 
 @Test func agentStorageLargestSubagentsAreRankedByAllocatedSpace() {
@@ -51,6 +134,79 @@ import Testing
     )
 
     #expect(family.largestSubagents(limit: 2).map(\.id) == ["old-large", "middle"])
+}
+
+@Test func agentStorageCleanupValidatorRejectsChangedOrReplacedFiles() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let url = root.appending(path: "artifact.jsonl")
+    try Data(repeating: 0x41, count: 4_096).write(to: url)
+
+    let original = try cleanupArtifact(at: url)
+    #expect(AgentStorageCleanupValidator.isStillEligible(original))
+
+    try Data(repeating: 0x42, count: 8_192).write(to: url)
+    #expect(!AgentStorageCleanupValidator.isStillEligible(original))
+
+    try FileManager.default.removeItem(at: url)
+    try Data(repeating: 0x41, count: 4_096).write(to: url)
+    #expect(!AgentStorageCleanupValidator.isStillEligible(original))
+}
+
+@Test func agentStorageCleanupReviewDeduplicatesPhysicalArtifacts() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let url = root.appending(path: "artifact.jsonl")
+    try Data(repeating: 0x41, count: 4_096).write(to: url)
+    let artifact = try cleanupArtifact(at: url)
+    let family = AgentStorageThreadFamily(
+        id: "family",
+        provider: .codex,
+        sourceID: "source",
+        nativeThreadID: "thread",
+        title: "Thread",
+        project: "Project",
+        updatedAt: .now,
+        isArchived: false,
+        mainAllocatedBytes: artifact.allocatedBytes,
+        subagentAllocatedBytes: 0,
+        familyOtherAllocatedBytes: 0,
+        artifactCount: 1,
+        path: url.path,
+        subagents: [],
+        composition: [.conversation: artifact.allocatedBytes],
+        cleanupArtifacts: [artifact, artifact]
+    )
+
+    let review = AgentStorageCleanupReview(families: [family])
+    #expect(review.artifacts == [artifact])
+    #expect(review.reclaimableBytes == artifact.allocatedBytes)
+    #expect(review.retainedBytes == 0)
+}
+
+@Test func agentStorageCurrentPageSelectionPreservesOtherPages() {
+    let firstPage: Set<String> = ["family-1", "family-2"]
+    let previousPageSelection: Set<String> = ["family-0"]
+
+    let selected = AgentStorageBatchSelectionEngine.togglingCurrentPage(
+        selectedIDs: previousPageSelection,
+        pageFamilyIDs: firstPage
+    )
+    #expect(selected == ["family-0", "family-1", "family-2"])
+
+    let deselected = AgentStorageBatchSelectionEngine.togglingCurrentPage(
+        selectedIDs: selected,
+        pageFamilyIDs: firstPage
+    )
+    #expect(deselected == previousPageSelection)
+    #expect(AgentStorageBatchSelectionEngine.togglingCurrentPage(
+        selectedIDs: previousPageSelection,
+        pageFamilyIDs: []
+    ) == previousPageSelection)
 }
 
 @Test func agentStorageProjectionKeepsSearchedSubagentsUniqueWhenExpanded() throws {
@@ -216,6 +372,93 @@ private func makeSubagent(id: String, bytes: UInt64, updatedAt: Date) -> AgentSt
     )
 }
 
+private func makeFamily(
+    id: String,
+    updatedAt: Date,
+    bytes: UInt64
+) -> AgentStorageThreadFamily {
+    AgentStorageThreadFamily(
+        id: id,
+        provider: .codex,
+        sourceID: "source",
+        nativeThreadID: id,
+        title: id,
+        project: "Project",
+        updatedAt: updatedAt,
+        isArchived: false,
+        mainAllocatedBytes: bytes,
+        subagentAllocatedBytes: 0,
+        familyOtherAllocatedBytes: 0,
+        artifactCount: 1,
+        path: nil,
+        subagents: [],
+        composition: [.conversation: bytes]
+    )
+}
+
+private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact {
+    var value = stat()
+    guard lstat(url.path, &value) == 0 else { throw CocoaError(.fileReadUnknown) }
+    return AgentStorageCleanupArtifact(
+        path: url.path,
+        allocatedBytes: UInt64(max(0, value.st_blocks)) * 512,
+        device: UInt64(value.st_dev),
+        inode: UInt64(value.st_ino),
+        logicalBytes: Int64(value.st_size),
+        blocks: Int64(value.st_blocks),
+        modifiedSeconds: Int64(value.st_mtimespec.tv_sec),
+        modifiedNanoseconds: Int64(value.st_mtimespec.tv_nsec)
+    )
+}
+
+@MainActor
+@Test func agentStorageFirstEntryWaitsForExplicitAnalysisConsent() async throws {
+    let suiteName = "AgentStorageConsentTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let probe = ImmediateAgentStorageScanProbe()
+    let model = AgentStorageModel(defaults: defaults) { configuration in
+        await probe.scan(configuration)
+    }
+
+    model.enterFeature()
+    try await Task.sleep(for: .milliseconds(80))
+
+    #expect(model.state == .idle)
+    #expect(model.requiresInitialAnalysisConsent)
+    #expect(await probe.callCount == 0)
+
+    model.refresh()
+    try await waitUntil { model.state == .ready }
+
+    #expect(!model.requiresInitialAnalysisConsent)
+    #expect(defaults.bool(forKey: AgentStoragePreferences.analysisConsentKey))
+    #expect(await probe.callCount == 1)
+}
+
+@MainActor
+@Test func agentStorageAuthorizedEntryHonorsTheAutomaticScanPreference() async throws {
+    let suiteName = "AgentStorageAuthorizedEntryTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    defaults.set(true, forKey: AgentStoragePreferences.analysisConsentKey)
+    defaults.set(false, forKey: AgentStoragePreferences.autoScanKey)
+    let probe = ImmediateAgentStorageScanProbe()
+    let model = AgentStorageModel(defaults: defaults) { configuration in
+        await probe.scan(configuration)
+    }
+
+    model.enterFeature()
+    try await Task.sleep(for: .milliseconds(80))
+    #expect(await probe.callCount == 0)
+
+    model.automaticallyScans = true
+    model.enterFeature()
+    try await waitUntil { model.state == .ready }
+
+    #expect(await probe.callCount == 1)
+}
+
 @MainActor
 @Test func agentStorageRefreshWaitsForCancelledScanBeforeStartingAnother() async throws {
     let suiteName = "AgentStorageModelTests.\(UUID().uuidString)"
@@ -331,6 +574,51 @@ private func makeSubagent(id: String, bytes: UInt64, updatedAt: Date) -> AgentSt
 }
 
 @MainActor
+@Test func agentStorageModelKeepsIndependentProviderProgress() async throws {
+    let suiteName = "AgentStorageProviderProgressTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let model = AgentStorageModel(defaults: defaults) { _, progress in
+        progress(AgentStorageScanProgress(
+            phase: .attributingDatabase,
+            completedCount: 128,
+            provider: .codex,
+            processedBytes: 4_096,
+            databaseStage: .readingRecords
+        ))
+        progress(AgentStorageScanProgress(
+            phase: .organizingResults,
+            completedCount: 24,
+            totalCount: 24,
+            provider: .claude
+        ))
+        progress(AgentStorageScanProgress(
+            phase: .organizingResults,
+            completedCount: 0,
+            totalCount: 48
+        ))
+        progress(AgentStorageScanProgress(
+            phase: .organizingResults,
+            completedCount: 48,
+            totalCount: 48
+        ))
+        return emptySnapshot()
+    }
+
+    model.refresh()
+    try await waitUntil {
+        model.progressByProvider[.codex]?.phase == .attributingDatabase
+            && model.progressByProvider[.claude]?.phase == .organizingResults
+            && model.progress.provider == nil
+            && model.progress.completedCount == 48
+    }
+
+    #expect(model.progressByProvider[.codex]?.completedCount == 128)
+    #expect(model.progressByProvider[.claude]?.completedCount == 24)
+    #expect(model.progress.phase == .organizingResults)
+}
+
+@MainActor
 private func waitUntil(
     timeout: Duration = .seconds(2),
     condition: @escaping () async -> Bool
@@ -367,6 +655,15 @@ private actor AgentStorageScanProbe {
                 return emptySnapshot()
             }
         }
+        return emptySnapshot()
+    }
+}
+
+private actor ImmediateAgentStorageScanProbe {
+    private(set) var callCount = 0
+
+    func scan(_ configuration: AgentStorageScanner.Configuration) -> AgentStorageSnapshot {
+        callCount += 1
         return emptySnapshot()
     }
 }

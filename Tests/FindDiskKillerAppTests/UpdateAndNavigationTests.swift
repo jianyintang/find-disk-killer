@@ -40,6 +40,22 @@ func brandLinksUseLocalizedWebsiteAndFixedRepository() {
         == "https://github.com/jianyintang/find-disk-killer")
 }
 
+@Test
+func agentStorageCompatibilityLinkDoesNotIncludePrivateDiagnosticInput() throws {
+    let privateInput = "/Users/alice/.codex/logs_2.sqlite thread-title task-id"
+    let url = BrandLinks.agentStorageCompatibilityIssueURL(
+        provider: .codex,
+        component: privateInput
+    )
+    let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+    let values = components.queryItems?.compactMap(\.value).joined(separator: "\n") ?? ""
+
+    #expect(!values.contains(privateInput))
+    #expect(!values.contains("alice"))
+    #expect(values.contains("unknown component"))
+    #expect(url.host == "github.com")
+}
+
 @Test @MainActor
 func traceAndUpdateReservationsAreMutuallyExclusive() throws {
     let registry = TraceActivityRegistry()

@@ -7,7 +7,14 @@ public enum AgentStorageScanPhase: Int, Sendable, Equatable, CaseIterable {
     case readingMetadata
     case measuringEntries
     case validatingEntries
+    case attributingDatabase
     case organizingResults
+}
+
+public enum AgentStorageDatabaseScanStage: Sendable, Equatable {
+    case preparing
+    case readingRecords
+    case mappingRecords
 }
 
 public struct AgentStorageScanProgress: Sendable, Equatable {
@@ -15,17 +22,32 @@ public struct AgentStorageScanProgress: Sendable, Equatable {
     public let completedCount: Int
     public let totalCount: Int?
     public let provider: AgentStorageProvider?
+    public let activityCount: Int?
+    public let processedBytes: UInt64?
+    public let databaseStage: AgentStorageDatabaseScanStage?
+    public let databaseIndex: Int?
+    public let databaseCount: Int?
 
     public init(
         phase: AgentStorageScanPhase,
         completedCount: Int = 0,
         totalCount: Int? = nil,
-        provider: AgentStorageProvider? = nil
+        provider: AgentStorageProvider? = nil,
+        activityCount: Int? = nil,
+        processedBytes: UInt64? = nil,
+        databaseStage: AgentStorageDatabaseScanStage? = nil,
+        databaseIndex: Int? = nil,
+        databaseCount: Int? = nil
     ) {
         self.phase = phase
         self.completedCount = completedCount
         self.totalCount = totalCount
         self.provider = provider
+        self.activityCount = activityCount
+        self.processedBytes = processedBytes
+        self.databaseStage = databaseStage
+        self.databaseIndex = databaseIndex
+        self.databaseCount = databaseCount
     }
 }
 
@@ -35,6 +57,8 @@ public actor AgentStorageScanner {
         public let additionalRoots: [URL]
         public let includesDesktopData: Bool
         let beforePhysicalValidation: (@Sendable () -> Void)?
+        let databaseReadConcurrency: Int
+        let databaseShardDidStart: (@Sendable (String) -> Void)?
 
         public init(
             homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
@@ -45,6 +69,8 @@ public actor AgentStorageScanner {
             self.additionalRoots = additionalRoots
             self.includesDesktopData = includesDesktopData
             beforePhysicalValidation = nil
+            databaseReadConcurrency = Self.defaultDatabaseReadConcurrency
+            databaseShardDidStart = nil
         }
 
         init(
@@ -57,7 +83,29 @@ public actor AgentStorageScanner {
             self.additionalRoots = additionalRoots
             self.includesDesktopData = includesDesktopData
             self.beforePhysicalValidation = beforePhysicalValidation
+            databaseReadConcurrency = Self.defaultDatabaseReadConcurrency
+            databaseShardDidStart = nil
         }
+
+        init(
+            homeDirectory: URL,
+            additionalRoots: [URL] = [],
+            includesDesktopData: Bool,
+            databaseReadConcurrency: Int,
+            databaseShardDidStart: @escaping @Sendable (String) -> Void
+        ) {
+            self.homeDirectory = homeDirectory
+            self.additionalRoots = additionalRoots
+            self.includesDesktopData = includesDesktopData
+            beforePhysicalValidation = nil
+            self.databaseReadConcurrency = max(1, databaseReadConcurrency)
+            self.databaseShardDidStart = databaseShardDidStart
+        }
+
+        private static let defaultDatabaseReadConcurrency = min(
+            4,
+            max(1, ProcessInfo.processInfo.activeProcessorCount / 2)
+        )
     }
 
     private let configuration: Configuration
@@ -70,24 +118,121 @@ public actor AgentStorageScanner {
         progress: (@Sendable (AgentStorageScanProgress) -> Void)? = nil
     ) async throws -> AgentStorageSnapshot {
         let configuration = configuration
+        let interruptRegistry = AgentSQLiteInterruptRegistry()
         let task = Task.detached(priority: .utility) {
             var engine = AgentStorageScanEngine(
                 configuration: configuration,
-                progressHandler: progress
+                progressHandler: progress,
+                interruptRegistry: interruptRegistry
             )
-            return try engine.scan()
+            return try await engine.scan()
         }
         return try await withTaskCancellationHandler {
             try await task.value
         } onCancel: {
+            interruptRegistry.cancelAndInterrupt()
             task.cancel()
         }
     }
 }
 
+private final class AgentStorageProgressEmitter: @unchecked Sendable {
+    private let handler: (@Sendable (AgentStorageScanProgress) -> Void)?
+    private let clock = ContinuousClock()
+    private let lock = NSLock()
+    private var lastEmissionByProvider: [AgentStorageProvider?: ContinuousClock.Instant] = [:]
+
+    init(handler: (@Sendable (AgentStorageScanProgress) -> Void)?) {
+        self.handler = handler
+    }
+
+    func emit(_ progress: AgentStorageScanProgress, force: Bool = false) {
+        let now = clock.now
+        lock.lock()
+        if !force, let lastEmission = lastEmissionByProvider[progress.provider],
+           lastEmission.duration(to: now) < .milliseconds(100) {
+            lock.unlock()
+            return
+        }
+        lastEmissionByProvider[progress.provider] = now
+        lock.unlock()
+        handler?(progress)
+    }
+}
+
+private final class AgentStorageValidationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let action: (@Sendable () -> Void)?
+    private var didRun = false
+
+    init(action: (@Sendable () -> Void)?) {
+        self.action = action
+    }
+
+    func runOnce() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !didRun else { return }
+        didRun = true
+        action?()
+    }
+}
+
+private final class AgentStorageMetadataProgressReporter {
+    private let emitter: AgentStorageProgressEmitter
+    private let completedScopes: Int
+    private let totalScopes: Int
+    private let provider: AgentStorageProvider
+    private(set) var activityCount = 0
+    private(set) var processedBytes: UInt64 = 0
+
+    init(
+        emitter: AgentStorageProgressEmitter,
+        completedScopes: Int,
+        totalScopes: Int,
+        provider: AgentStorageProvider
+    ) {
+        self.emitter = emitter
+        self.completedScopes = completedScopes
+        self.totalScopes = totalScopes
+        self.provider = provider
+    }
+
+    func setActivityCount(_ count: Int) {
+        activityCount = max(activityCount, count)
+        publish()
+    }
+
+    func didProcessItem() {
+        activityCount += 1
+        publish()
+    }
+
+    func didRead(bytes: Int) {
+        processedBytes = processedBytes.addingClamped(UInt64(max(0, bytes)))
+        publish()
+    }
+
+    private func publish() {
+        emitter.emit(AgentStorageScanProgress(
+            phase: .readingMetadata,
+            completedCount: completedScopes,
+            totalCount: totalScopes,
+            provider: provider,
+            activityCount: activityCount,
+            processedBytes: processedBytes
+        ))
+    }
+}
+
+private struct AgentStorageProviderScanResult: @unchecked Sendable {
+    var engine: AgentStorageScanEngine
+}
+
 private struct AgentStorageScanEngine {
     private let configuration: AgentStorageScanner.Configuration
-    private let progressHandler: (@Sendable (AgentStorageScanProgress) -> Void)?
+    private var progressEmitter: AgentStorageProgressEmitter
+    private let interruptRegistry: AgentSQLiteInterruptRegistry
     private let fileManager = FileManager.default
     private var scopes: [ScanScope] = []
     private var sources: [AgentStorageSource] = []
@@ -97,6 +242,7 @@ private struct AgentStorageScanEngine {
     private var claudeTargets: [String: [String: String]] = [:]
     private var claudeSubagentTargets: [String: [String: [String: String]]] = [:]
     private var claudeToolResultTargets: [String: [String: ClaimOwnership]] = [:]
+    private var claudeDesktopPathTargets: [String: ThreadTarget] = [:]
     private var physicalLedger: [FileIdentity: PhysicalEntry] = [:]
     private var globalAggregates: [String: MutableGlobalAggregate] = [:]
     private var unattributedAggregates: [String: MutableUnattributedAggregate] = [:]
@@ -105,71 +251,55 @@ private struct AgentStorageScanEngine {
     private var overflowed = false
     private var providerIssueCounts: [AgentStorageProvider: Int] = [:]
     private var providerMetadataOutcomes: [AgentStorageProvider: ProviderMetadataOutcome] = [:]
+    private var databaseAttributions: [AgentStorageDatabaseAttributionSummary] = []
+    private var pendingDatabaseProjections: [PendingDatabaseAttribution] = []
+    private var projectResolver = AgentStorageProjectResolver()
     private var measuredEntryCount = 0
-    private let progressClock = ContinuousClock()
-    private var lastProgressEmission: ContinuousClock.Instant?
+    private var measuredAllocatedBytes: UInt64 = 0
 
     init(
         configuration: AgentStorageScanner.Configuration,
-        progressHandler: (@Sendable (AgentStorageScanProgress) -> Void)?
+        progressHandler: (@Sendable (AgentStorageScanProgress) -> Void)?,
+        interruptRegistry: AgentSQLiteInterruptRegistry
     ) {
         self.configuration = configuration
-        self.progressHandler = progressHandler
+        progressEmitter = AgentStorageProgressEmitter(handler: progressHandler)
+        self.interruptRegistry = interruptRegistry
     }
 
-    mutating func scan() throws -> AgentStorageSnapshot {
+    mutating func scan() async throws -> AgentStorageSnapshot {
         reportProgress(.discoveringSources, force: true)
-        scopes = discoverScopes()
-        reportProgress(
-            .discoveringSources,
-            completedCount: scopes.count,
-            totalCount: scopes.count,
-            force: true
+        let progressEmitter = progressEmitter
+        let configuration = configuration
+        let interruptRegistry = interruptRegistry
+        let validationGate = AgentStorageValidationGate(
+            action: configuration.beforePhysicalValidation
         )
-        try Task.checkCancellation()
 
-        let metadataScopes = scopes.filter {
-            $0.kind == .codexHome || $0.kind == .claudeCode
-        }
-        reportProgress(.readingMetadata, totalCount: metadataScopes.count, force: true)
-        for (index, scope) in metadataScopes.enumerated() {
-            switch scope.kind {
-            case .codexHome:
-                try loadCodexMetadata(from: scope)
-            case .claudeCode:
-                try loadClaudeMetadata(from: scope)
-            case .codexDesktop, .claudeDesktop:
-                break
+        try await withThrowingTaskGroup(of: AgentStorageProviderScanResult.self) { group in
+            for provider in AgentStorageProvider.allCases {
+                group.addTask {
+                    var providerEngine = AgentStorageScanEngine(
+                        configuration: configuration,
+                        progressHandler: nil,
+                        interruptRegistry: interruptRegistry
+                    )
+                    providerEngine.progressEmitter = progressEmitter
+                    try await providerEngine.scanProvider(
+                        provider,
+                        validationGate: validationGate
+                    )
+                    return AgentStorageProviderScanResult(engine: providerEngine)
+                }
             }
-            reportProgress(
-                .readingMetadata,
-                completedCount: index + 1,
-                totalCount: metadataScopes.count,
-                provider: scope.provider,
-                force: true
-            )
+            for try await result in group {
+                try Task.checkCancellation()
+                merge(result.engine)
+            }
         }
 
-        let exclusions = exclusionsByScope()
-        reportProgress(.measuringEntries, totalCount: nil, force: true)
-        for scope in scopes {
-            try Task.checkCancellation()
-            scanPhysicalScope(scope, excluding: exclusions[scope.id] ?? [])
-            reportProgress(
-                .measuringEntries,
-                completedCount: measuredEntryCount,
-                provider: scope.provider,
-                force: true
-            )
-        }
-        try Task.checkCancellation()
-        configuration.beforePhysicalValidation?()
-        reportProgress(
-            .validatingEntries,
-            totalCount: physicalLedger.count,
-            force: true
-        )
-        try validatePhysicalEntries()
+        scopes.sort { $0.id < $1.id }
+        sources.sort { $0.id < $1.id }
 
         reportProgress(
             .organizingResults,
@@ -177,6 +307,7 @@ private struct AgentStorageScanEngine {
             force: true
         )
         try resolvePhysicalLedger()
+        applyDatabaseAttributionProjections()
         reportProgress(
             .organizingResults,
             completedCount: physicalLedger.count,
@@ -186,28 +317,182 @@ private struct AgentStorageScanEngine {
         return try makeSnapshot()
     }
 
-    private mutating func reportProgress(
+    private mutating func scanProvider(
+        _ provider: AgentStorageProvider,
+        validationGate: AgentStorageValidationGate
+    ) async throws {
+        reportProgress(.discoveringSources, provider: provider, force: true)
+        scopes = discoverScopes(for: provider)
+        reportProgress(
+            .discoveringSources,
+            completedCount: scopes.count,
+            totalCount: scopes.count,
+            provider: provider,
+            force: true
+        )
+        try Task.checkCancellation()
+
+        let metadataScopes = scopes.filter {
+            $0.kind == .codexHome || $0.kind == .claudeCode
+        }
+        reportProgress(
+            .readingMetadata,
+            totalCount: metadataScopes.count,
+            provider: provider,
+            force: true
+        )
+        for (index, scope) in metadataScopes.enumerated() {
+            reportProgress(
+                .readingMetadata,
+                completedCount: index,
+                totalCount: metadataScopes.count,
+                provider: provider,
+                force: true
+            )
+            switch scope.kind {
+            case .codexHome:
+                try loadCodexMetadata(
+                    from: scope,
+                    completedScopes: index,
+                    totalScopes: metadataScopes.count
+                )
+            case .claudeCode:
+                try loadClaudeMetadata(
+                    from: scope,
+                    completedScopes: index,
+                    totalScopes: metadataScopes.count
+                )
+            case .codexDesktop, .claudeDesktop:
+                break
+            }
+            reportProgress(
+                .readingMetadata,
+                completedCount: index + 1,
+                totalCount: metadataScopes.count,
+                provider: provider,
+                force: true
+            )
+        }
+        if provider == .claude {
+            try loadClaudeDesktopSessionMappings()
+        }
+
+        let exclusions = exclusionsByScope()
+        reportProgress(.measuringEntries, provider: provider, force: true)
+        for scope in scopes {
+            try Task.checkCancellation()
+            scanPhysicalScope(scope, excluding: exclusions[scope.id] ?? [])
+            reportProgress(
+                .measuringEntries,
+                completedCount: measuredEntryCount,
+                provider: provider,
+                activityCount: measuredEntryCount,
+                processedBytes: measuredAllocatedBytes,
+                force: true
+            )
+        }
+        try Task.checkCancellation()
+        if !physicalLedger.isEmpty {
+            validationGate.runOnce()
+        }
+        reportProgress(
+            .validatingEntries,
+            totalCount: physicalLedger.count,
+            provider: provider,
+            force: true
+        )
+        try validatePhysicalEntries(provider: provider)
+
+        if provider == .codex {
+            reportProgress(
+                .attributingDatabase,
+                provider: provider,
+                force: true
+            )
+            try await attributeCodexLogDatabases()
+        }
+        reportProgress(
+            .organizingResults,
+            completedCount: physicalLedger.count,
+            totalCount: physicalLedger.count,
+            provider: provider,
+            force: true
+        )
+    }
+
+    private mutating func merge(_ other: AgentStorageScanEngine) {
+        scopes.append(contentsOf: other.scopes)
+        sources.append(contentsOf: other.sources)
+        families.merge(other.families) { current, _ in current }
+        codexTargets.merge(other.codexTargets) { current, _ in current }
+        codexRelationshipConflictIDs.merge(other.codexRelationshipConflictIDs) {
+            $0.union($1)
+        }
+        claudeTargets.merge(other.claudeTargets) { current, _ in current }
+        claudeSubagentTargets.merge(other.claudeSubagentTargets) { current, _ in current }
+        claudeToolResultTargets.merge(other.claudeToolResultTargets) { current, _ in current }
+        claudeDesktopPathTargets.merge(other.claudeDesktopPathTargets) { current, _ in current }
+
+        for (identity, incoming) in other.physicalLedger {
+            guard var existing = physicalLedger[identity] else {
+                physicalLedger[identity] = incoming
+                continue
+            }
+            existing.allocatedBytes = max(existing.allocatedBytes, incoming.allocatedBytes)
+            existing.logicalBytes = max(existing.logicalBytes, incoming.logicalBytes)
+            existing.updatedAt = max(existing.updatedAt, incoming.updatedAt)
+            existing.claims.append(contentsOf: incoming.claims)
+            existing.observations.append(contentsOf: incoming.observations)
+            existing.isStable = existing.isStable && incoming.isStable
+            existing.linkCount = max(existing.linkCount, incoming.linkCount)
+            physicalLedger[identity] = existing
+        }
+
+        skippedEntryCount += other.skippedEntryCount
+        unstableEntries.merge(other.unstableEntries)
+        overflowed = overflowed || other.overflowed
+        for (provider, count) in other.providerIssueCounts {
+            providerIssueCounts[provider, default: 0] += count
+        }
+        for (provider, outcome) in other.providerMetadataOutcomes {
+            var current = providerMetadataOutcomes[provider, default: ProviderMetadataOutcome()]
+            current.merge(outcome)
+            providerMetadataOutcomes[provider] = current
+        }
+        databaseAttributions.append(contentsOf: other.databaseAttributions)
+        pendingDatabaseProjections.append(contentsOf: other.pendingDatabaseProjections)
+        measuredEntryCount = physicalLedger.count
+        measuredAllocatedBytes = physicalLedger.values.reduce(0) {
+            $0.addingClamped($1.allocatedBytes)
+        }
+    }
+
+    private func reportProgress(
         _ phase: AgentStorageScanPhase,
         completedCount: Int = 0,
         totalCount: Int? = nil,
         provider: AgentStorageProvider? = nil,
+        activityCount: Int? = nil,
+        processedBytes: UInt64? = nil,
+        databaseStage: AgentStorageDatabaseScanStage? = nil,
+        databaseIndex: Int? = nil,
+        databaseCount: Int? = nil,
         force: Bool = false
     ) {
-        let now = progressClock.now
-        if !force, let lastProgressEmission,
-           lastProgressEmission.duration(to: now) < .milliseconds(100) {
-            return
-        }
-        lastProgressEmission = now
-        progressHandler?(AgentStorageScanProgress(
+        progressEmitter.emit(AgentStorageScanProgress(
             phase: phase,
             completedCount: completedCount,
             totalCount: totalCount,
-            provider: provider
-        ))
+            provider: provider,
+            activityCount: activityCount,
+            processedBytes: processedBytes,
+            databaseStage: databaseStage,
+            databaseIndex: databaseIndex,
+            databaseCount: databaseCount
+        ), force: force)
     }
 
-    private mutating func discoverScopes() -> [ScanScope] {
+    private mutating func discoverScopes(for requestedProvider: AgentStorageProvider) -> [ScanScope] {
         let home = configuration.homeDirectory.standardizedFileURL
         var candidates: [(URL, AgentStorageProvider, ScanScopeKind, String)] = [
             (home.appending(path: ".codex"), .codex, .codexHome, "Codex Home"),
@@ -228,14 +513,16 @@ private struct AgentStorageScanEngine {
                 (applicationSupport.appending(path: "Claude"), .claude, .claudeDesktop, "Claude Desktop")
             ])
 
-            for desktopRoot in [
-                applicationSupport.appending(path: "Claude-3p"),
-                applicationSupport.appending(path: "Claude")
-            ] where fileManager.fileExists(atPath: desktopRoot.path) {
-                let nestedHomes = discoverNestedClaudeHomes(in: desktopRoot)
-                candidates.append(contentsOf: nestedHomes.map {
-                    ($0, .claude, .claudeCode, "Claude Desktop Agent")
-                })
+            if requestedProvider == .claude {
+                for desktopRoot in [
+                    applicationSupport.appending(path: "Claude-3p"),
+                    applicationSupport.appending(path: "Claude")
+                ] where fileManager.fileExists(atPath: desktopRoot.path) {
+                    let nestedHomes = discoverNestedClaudeHomes(in: desktopRoot)
+                    candidates.append(contentsOf: nestedHomes.map {
+                        ($0, .claude, .claudeCode, "Claude Desktop Agent")
+                    })
+                }
             }
         }
 
@@ -251,7 +538,8 @@ private struct AgentStorageScanEngine {
 
         var seenPaths: Set<String> = []
         var result: [ScanScope] = []
-        for (candidate, provider, kind, displayName) in candidates {
+        for (candidate, provider, kind, displayName) in candidates
+        where provider == requestedProvider {
             guard fileManager.fileExists(atPath: candidate.path) else { continue }
             let resolved = canonicalURL(candidate)
             guard seenPaths.insert(resolved.path).inserted else { continue }
@@ -333,7 +621,11 @@ private struct AgentStorageScanEngine {
         return result
     }
 
-    private mutating func loadCodexMetadata(from scope: ScanScope) throws {
+    private mutating func loadCodexMetadata(
+        from scope: ScanScope,
+        completedScopes: Int,
+        totalScopes: Int
+    ) throws {
         let databaseURL = scope.root.appending(path: "state_5.sqlite")
         guard fileManager.fileExists(atPath: databaseURL.path) else {
             if fileManager.fileExists(atPath: scope.root.appending(path: "sessions").path) {
@@ -345,13 +637,33 @@ private struct AgentStorageScanEngine {
         }
 
         do {
-            let database = try ReadOnlyAgentSQLite(path: databaseURL.path)
-            let snapshot = try database.codexSnapshot()
+            let metadataProgress = AgentStorageMetadataProgressReporter(
+                emitter: progressEmitter,
+                completedScopes: completedScopes,
+                totalScopes: totalScopes,
+                provider: .codex
+            )
+            let database = try ReadOnlyAgentSQLite(
+                path: databaseURL.path,
+                interruptRegistry: interruptRegistry
+            )
+            let snapshot = try database.codexSnapshot { count in
+                metadataProgress.setActivityCount(count)
+            }
             recordMetadataOutcome(.supported, provider: .codex)
             let records = snapshot.threads
             let edges = snapshot.edges
             if snapshot.issueCount > 0 {
                 providerIssueCounts[.codex, default: 0] += snapshot.issueCount
+            }
+
+            // Older rows can be missing repository metadata even when another thread from the
+            // same checkout has it. Learn those exact-path identities before resolving projects.
+            for record in records {
+                projectResolver.register(
+                    cwd: record.cwd,
+                    gitOriginURL: record.gitOriginURL
+                )
             }
 
             var recordsByID: [String: CodexThreadRecord] = [:]
@@ -423,12 +735,23 @@ private struct AgentStorageScanEngine {
             for rootID in Set(rootByThread.values) {
                 guard let root = recordsByID[rootID] else { continue }
                 let familyID = stableFamilyID(provider: .codex, sourceID: scope.id, nativeID: rootID)
+                let project = projectResolver.projectName(
+                    cwd: root.cwd,
+                    gitOriginURL: root.gitOriginURL
+                )
+                let titleContext = projectResolver.titleContext(
+                    cwd: root.cwd,
+                    project: project
+                )
                 let rootNode = MutableNode(
                     id: stableNodeID(familyID: familyID, nativeID: rootID),
                     nativeID: rootID,
                     parentNativeID: nil,
                     depth: 0,
-                    title: codexDisplayTitle(root, isSubagent: false),
+                    title: codexDisplayTitle(root, isSubagent: false, project: titleContext) {
+                        bytesRead in
+                        metadataProgress.didRead(bytes: bytesRead)
+                    },
                     updatedAt: root.updatedAt,
                     path: existingPath(root.rolloutPath)
                 )
@@ -438,7 +761,7 @@ private struct AgentStorageScanEngine {
                     sourceID: scope.id,
                     nativeThreadID: rootID,
                     title: rootNode.title,
-                    project: projectName(from: root.cwd),
+                    project: project,
                     updatedAt: root.updatedAt,
                     isArchived: root.isArchived,
                     mainNodeID: rootNode.id,
@@ -458,7 +781,13 @@ private struct AgentStorageScanEngine {
                         nativeID: record.id,
                         parentNativeID: parentByChild[record.id],
                         depth: depthByThread[record.id] ?? 1,
-                        title: codexDisplayTitle(record, isSubagent: true),
+                        title: codexDisplayTitle(
+                            record,
+                            isSubagent: true,
+                            project: family.project
+                        ) { bytesRead in
+                            metadataProgress.didRead(bytes: bytesRead)
+                        },
                         updatedAt: record.updatedAt,
                         path: existingPath(record.rolloutPath)
                     )
@@ -477,7 +806,11 @@ private struct AgentStorageScanEngine {
         }
     }
 
-    private mutating func loadClaudeMetadata(from scope: ScanScope) throws {
+    private mutating func loadClaudeMetadata(
+        from scope: ScanScope,
+        completedScopes: Int,
+        totalScopes: Int
+    ) throws {
         let projectsURL = scope.root.appending(path: "projects", directoryHint: .isDirectory)
         guard fileManager.fileExists(atPath: projectsURL.path) else { return }
         guard let projects = try? fileManager.contentsOfDirectory(
@@ -500,6 +833,12 @@ private struct AgentStorageScanEngine {
         var foundSessionCandidate = false
         var foundUnsupportedFormat = false
         var foundUnreadableData = false
+        let metadataProgress = AgentStorageMetadataProgressReporter(
+            emitter: progressEmitter,
+            completedScopes: completedScopes,
+            totalScopes: totalScopes,
+            provider: .claude
+        )
 
         for project in projects {
             try Task.checkCancellation()
@@ -530,7 +869,10 @@ private struct AgentStorageScanEngine {
                 foundSessionCandidate = true
                 let metadata: ClaudeSessionMetadata
                 do {
-                    metadata = try ClaudeMetadataReader.read(file)
+                    metadata = try ClaudeMetadataReader.read(file) { bytesRead in
+                        metadataProgress.didRead(bytes: bytesRead)
+                    }
+                    metadataProgress.didProcessItem()
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
@@ -575,7 +917,9 @@ private struct AgentStorageScanEngine {
             }
             let cwd = preferred.metadata.cwd
             let fallbackProject = decodedClaudeProjectName(preferred.projectDirectory.lastPathComponent)
-            let project = cwd.map(projectName(from:)) ?? fallbackProject
+            let project = cwd.map {
+                projectResolver.projectName(cwd: $0, gitOriginURL: nil)
+            } ?? fallbackProject
             let titleCandidate = recordsByRecency.lazy.compactMap(\.metadata.customTitle).first
                 ?? recordsByRecency.lazy.compactMap(\.metadata.aiTitle).first
                 ?? recordsByRecency.lazy.compactMap(\.metadata.lastPrompt).first
@@ -627,7 +971,10 @@ private struct AgentStorageScanEngine {
                 var validJSONLs: [URL] = []
                 for file in candidate.jsonlFiles {
                     do {
-                        let metadata = try ClaudeMetadataReader.read(file)
+                        let metadata = try ClaudeMetadataReader.read(file) { bytesRead in
+                            metadataProgress.didRead(bytes: bytesRead)
+                        }
+                        metadataProgress.didProcessItem()
                         if metadata.sessionIDs == [sessionID], metadata.agentIDs == [agentID] {
                             validJSONLs.append(file)
                             validAgentUpdatedAt[agentID] = max(
@@ -678,7 +1025,10 @@ private struct AgentStorageScanEngine {
             for record in records {
                 for path in ClaudeToolReferenceReader.references(
                     in: record.file,
-                    candidates: uniqueToolFiles
+                    candidates: uniqueToolFiles,
+                    onRead: { bytesRead in
+                        metadataProgress.didRead(bytes: bytesRead)
+                    }
                 ) {
                     ownersByToolPath[path, default: []].insert(rootNodeID)
                 }
@@ -688,7 +1038,10 @@ private struct AgentStorageScanEngine {
                 for transcript in transcripts {
                     for path in ClaudeToolReferenceReader.references(
                         in: transcript,
-                        candidates: uniqueToolFiles
+                        candidates: uniqueToolFiles,
+                        onRead: { bytesRead in
+                            metadataProgress.didRead(bytes: bytesRead)
+                        }
                     ) {
                         ownersByToolPath[path, default: []].insert(nodeID)
                     }
@@ -736,17 +1089,75 @@ private struct AgentStorageScanEngine {
         }
     }
 
-    private func codexDisplayTitle(_ record: CodexThreadRecord, isSubagent: Bool) -> String {
+    private mutating func loadClaudeDesktopSessionMappings() throws {
+        var targetsByNativeID: [String: Set<ThreadTarget>] = [:]
+        for targets in claudeTargets.values {
+            for (nativeID, familyID) in targets {
+                targetsByNativeID[nativeID, default: []].insert(ThreadTarget(
+                    familyID: familyID,
+                    nodeID: stableNodeID(familyID: familyID, nativeID: nativeID)
+                ))
+            }
+        }
+
+        for scope in scopes where scope.kind == .claudeDesktop {
+            for relativeRoot in ["local-agent-mode-sessions", "claude-code-sessions"] {
+                let root = scope.root.appending(path: relativeRoot, directoryHint: .isDirectory)
+                guard fileManager.fileExists(atPath: root.path),
+                      let enumerator = fileManager.enumerator(
+                        at: root,
+                        includingPropertiesForKeys: nil,
+                        options: [.skipsHiddenFiles]
+                      ) else { continue }
+                var count = 0
+                for case let url as URL in enumerator {
+                    count += 1
+                    if count.isMultiple(of: 64) { try Task.checkCancellation() }
+                    guard url.pathExtension == "json",
+                          url.lastPathComponent.hasPrefix("local_") else { continue }
+                    var fileStat = stat()
+                    guard lstat(url.path, &fileStat) == 0,
+                          (fileStat.st_mode & S_IFMT) == S_IFREG,
+                          fileStat.st_size <= 1_048_576,
+                          let data = try? Data(contentsOf: url, options: [.mappedIfSafe]),
+                          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                    else { continue }
+                    let nativeIDs = [object["cliSessionId"], object["sessionId"]]
+                        .compactMap { $0 as? String }
+                        .compactMap(normalizedUUID)
+                    let matches = Set(nativeIDs.flatMap { targetsByNativeID[$0] ?? [] })
+                    guard matches.count == 1, let target = matches.first else { continue }
+                    claudeDesktopPathTargets[url.standardizedFileURL.path] = target
+                    let sibling = url.deletingPathExtension()
+                    var siblingStat = stat()
+                    if lstat(sibling.path, &siblingStat) == 0,
+                       (siblingStat.st_mode & S_IFMT) == S_IFDIR {
+                        claudeDesktopPathTargets[sibling.standardizedFileURL.path] = target
+                    }
+                }
+            }
+        }
+    }
+
+    private func codexDisplayTitle(
+        _ record: CodexThreadRecord,
+        isSubagent: Bool,
+        project: String,
+        onRead: ((Int) -> Void)? = nil
+    ) -> String {
         if let title = normalizedTitleCandidate(record.displayTitle, excluding: record.id) {
             return title
         }
         if let rollout = existingPath(record.rolloutPath),
-           let title = CodexRolloutTitleReader.title(at: URL(fileURLWithPath: rollout)) {
+           let title = CodexRolloutTitleReader.title(
+               at: URL(fileURLWithPath: rollout),
+               onRead: onRead
+           ) {
             return title
         }
         let date = storageTitleDate(record.updatedAt)
         if isSubagent { return "Subagent · \(date)" }
-        return "\(projectName(from: record.cwd)) · \(date)"
+        return "\(project) · \(date)"
     }
 
     private mutating func collectClaudeAgentCandidates(
@@ -887,7 +1298,9 @@ private struct AgentStorageScanEngine {
                 reportProgress(
                     .measuringEntries,
                     completedCount: measuredEntryCount,
-                    provider: scope.provider
+                    provider: scope.provider,
+                    activityCount: measuredEntryCount,
+                    processedBytes: measuredAllocatedBytes
                 )
             }
         }
@@ -937,25 +1350,31 @@ private struct AgentStorageScanEngine {
             physicalLedger[identity] = existing
         } else {
             physicalLedger[identity] = PhysicalEntry(
+                identity: identity,
                 allocatedBytes: allocated,
                 logicalBytes: logical,
                 updatedAt: updatedAt,
                 claims: [claim],
-                observations: [observation]
+                observations: [observation],
+                isStable: true,
+                linkCount: UInt64(max(0, fileStat.st_nlink))
             )
+            measuredAllocatedBytes = measuredAllocatedBytes.addingClamped(allocated)
         }
     }
 
-    private mutating func validatePhysicalEntries() throws {
+    private mutating func validatePhysicalEntries(provider: AgentStorageProvider) throws {
         var count = 0
-        for (identity, entry) in physicalLedger {
+        for (identity, originalEntry) in physicalLedger {
+            var entry = originalEntry
             count += 1
             if count.isMultiple(of: 128) {
                 try Task.checkCancellation()
                 reportProgress(
                     .validatingEntries,
                     completedCount: count,
-                    totalCount: physicalLedger.count
+                    totalCount: physicalLedger.count,
+                    provider: provider
                 )
             }
             var checkedObservations: Set<String> = []
@@ -971,6 +1390,7 @@ private struct AgentStorageScanEngine {
                     ) == identity
                     && FileStatSignature(current) == observation.signature
                 guard isStable else {
+                    entry.isStable = false
                     unstableEntries.mark(
                         device: identity.device,
                         inode: identity.inode,
@@ -979,11 +1399,13 @@ private struct AgentStorageScanEngine {
                     continue
                 }
             }
+            physicalLedger[identity] = entry
         }
         reportProgress(
             .validatingEntries,
             completedCount: physicalLedger.count,
             totalCount: physicalLedger.count,
+            provider: provider,
             force: true
         )
     }
@@ -1167,6 +1589,9 @@ private struct AgentStorageScanEngine {
         isClaude: Bool
     ) -> PhysicalClaim {
         let first = components.first ?? ""
+        if isClaude, let target = claudeDesktopTarget(for: path) {
+            return claim(scope, path, .node(target.familyID, target.nodeID), .conversation)
+        }
         if isClaude, ["vm_bundles", "claude-code", "claude-code-vm", "local-agent-mode-sessions"].contains(first) {
             return claim(scope, path, .global(.runtime), .other)
         }
@@ -1180,6 +1605,17 @@ private struct AgentStorageScanEngine {
             return claim(scope, path, .global(.sharedAgentData), .other)
         }
         return claim(scope, path, .global(relativePath.isEmpty ? .directoryOverhead : .other), .other)
+    }
+
+    private func claudeDesktopTarget(for path: String) -> ThreadTarget? {
+        var candidate = URL(fileURLWithPath: path).standardizedFileURL.path
+        while !candidate.isEmpty {
+            if let target = claudeDesktopPathTargets[candidate] { return target }
+            let parent = URL(fileURLWithPath: candidate).deletingLastPathComponent().path
+            if parent == candidate { break }
+            candidate = parent
+        }
+        return nil
     }
 
     private func claim(
@@ -1283,6 +1719,478 @@ private struct AgentStorageScanEngine {
         }
     }
 
+    private mutating func attributeCodexLogDatabases() async throws {
+        let bundles = codexLogDatabaseBundles()
+        let progressCoordinator = CodexLogDatabaseProgressCoordinator(
+            emitter: progressEmitter,
+            databaseCount: bundles.count
+        )
+        var preparationFailures: [Int: CodexLogDatabaseReadFailure] = [:]
+        var snapshotsByBundle: [Int: [CodexLogEstimateSnapshot]] = [:]
+        var shards: [CodexLogScanShard] = []
+
+        for (bundleOffset, bundle) in bundles.enumerated() {
+            try Task.checkCancellation()
+            reportProgress(
+                .attributingDatabase,
+                completedCount: progressCoordinator.totals.completedCount,
+                provider: .codex,
+                activityCount: progressCoordinator.totals.completedCount,
+                processedBytes: progressCoordinator.totals.processedBytes,
+                databaseStage: .preparing,
+                databaseIndex: bundleOffset + 1,
+                databaseCount: bundles.count,
+                force: true
+            )
+            if bundle.capability == .ambiguous {
+                preparationFailures[bundleOffset] = CodexLogDatabaseReadFailure(
+                    status: .ambiguousOwnership,
+                    diagnosticComponent: nil
+                )
+                progressCoordinator.markBundleCompleted(bundleOffset)
+                continue
+            }
+            if bundle.capability == .sidecarsUnavailable {
+                preparationFailures[bundleOffset] = CodexLogDatabaseReadFailure(
+                    status: .unavailable,
+                    diagnosticComponent: nil
+                )
+                progressCoordinator.markBundleCompleted(bundleOffset)
+                continue
+            }
+
+            do {
+                let database = try ReadOnlyAgentSQLite(
+                    path: bundle.mainPath,
+                    expectedIdentity: bundle.mainIdentity,
+                    interruptRegistry: interruptRegistry
+                )
+                guard let bounds = try database.codexLogScanBounds() else {
+                    snapshotsByBundle[bundleOffset] = [.empty]
+                    progressCoordinator.markBundleCompleted(bundleOffset)
+                    continue
+                }
+                shards.append(contentsOf: CodexLogScanShard.makeShards(
+                    bundleIndex: bundleOffset,
+                    bundleID: bundle.id,
+                    path: bundle.mainPath,
+                    expectedIdentity: bundle.mainIdentity,
+                    bounds: bounds,
+                    maximumShardCount: configuration.databaseReadConcurrency
+                ))
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as AgentSQLiteError {
+                if case .interrupted = error, interruptRegistry.cancellationRequested() {
+                    throw CancellationError()
+                }
+                preparationFailures[bundleOffset] = CodexLogDatabaseReadFailure(
+                    status: error.attributionStatus,
+                    diagnosticComponent: error.diagnosticComponent
+                )
+                progressCoordinator.markBundleCompleted(bundleOffset)
+            } catch {
+                preparationFailures[bundleOffset] = CodexLogDatabaseReadFailure(
+                    status: error is DatabaseAttributionMathError ? .unreadable : .unavailable,
+                    diagnosticComponent: error is DatabaseAttributionMathError
+                        ? "attribution arithmetic" : nil
+                )
+                progressCoordinator.markBundleCompleted(bundleOffset)
+            }
+        }
+
+        var shardFailures: [Int: CodexLogDatabaseReadFailure] = [:]
+        var remainingShardCounts = Dictionary(grouping: shards, by: \.bundleIndex)
+            .mapValues(\.count)
+        let interruptRegistry = interruptRegistry
+        let shardDidStart = configuration.databaseShardDidStart
+        let maximumConcurrentReads = min(configuration.databaseReadConcurrency, shards.count)
+        var shardIterator = shards.makeIterator()
+        try await withThrowingTaskGroup(of: CodexLogShardReadOutcome.self) { group in
+            func scheduleNextShard() {
+                guard let shard = shardIterator.next() else { return }
+                group.addTask {
+                    try Self.readCodexLogShard(
+                        shard,
+                        interruptRegistry: interruptRegistry,
+                        progressCoordinator: progressCoordinator,
+                        shardDidStart: shardDidStart
+                    )
+                }
+            }
+
+            for _ in 0..<maximumConcurrentReads { scheduleNextShard() }
+            while let outcome = try await group.next() {
+                switch outcome.result {
+                case .success(let snapshot):
+                    snapshotsByBundle[outcome.bundleIndex, default: []].append(snapshot)
+                case .failure(let failure):
+                    if shardFailures[outcome.bundleIndex] == nil {
+                        shardFailures[outcome.bundleIndex] = failure
+                    }
+                }
+                if let remaining = remainingShardCounts[outcome.bundleIndex] {
+                    let nextRemaining = remaining - 1
+                    remainingShardCounts[outcome.bundleIndex] = nextRemaining
+                    if nextRemaining == 0 {
+                        progressCoordinator.markBundleCompleted(outcome.bundleIndex)
+                    }
+                }
+                scheduleNextShard()
+            }
+        }
+
+        for (bundleOffset, bundle) in bundles.enumerated() {
+            if let failure = preparationFailures[bundleOffset] ?? shardFailures[bundleOffset] {
+                databaseAttributions.append(bundle.summary(
+                    status: failure.status,
+                    diagnosticComponent: failure.diagnosticComponent
+                ))
+                continue
+            }
+            do {
+                let raw = try Self.mergeCodexLogSnapshots(
+                    snapshotsByBundle[bundleOffset] ?? [.empty]
+                )
+                let totals = progressCoordinator.totals
+                reportProgress(
+                    .attributingDatabase,
+                    completedCount: totals.completedCount,
+                    provider: .codex,
+                    activityCount: totals.completedCount,
+                    processedBytes: totals.processedBytes,
+                    databaseStage: .mappingRecords,
+                    databaseIndex: bundleOffset + 1,
+                    databaseCount: bundles.count,
+                    force: true
+                )
+                let projection = try projectDatabaseEstimates(raw, bundle: bundle)
+                let summary = AgentStorageDatabaseAttributionSummary(
+                    id: bundle.id,
+                    provider: .codex,
+                    sourceID: bundle.sourceID,
+                    path: bundle.mainPath,
+                    physicalBundleBytes: bundle.physicalAllocatedBytes,
+                    attributedBytes: projection.attributedBytes,
+                    residualBytes: bundle.physicalAllocatedBytes - projection.attributedBytes,
+                    mappedEstimatedBytes: projection.mappedEstimatedBytes,
+                    unmappedEstimatedBytes: projection.unmappedEstimatedBytes,
+                    processedRowCount: raw.processedRowCount,
+                    totalRowCount: raw.totalRowCount,
+                    status: .completed
+                )
+                pendingDatabaseProjections.append(PendingDatabaseAttribution(
+                    bundle: bundle,
+                    projection: projection,
+                    summary: summary
+                ))
+            } catch {
+                databaseAttributions.append(bundle.summary(
+                    status: .unreadable,
+                    diagnosticComponent: "attribution arithmetic"
+                ))
+            }
+        }
+
+        let finalTotals = progressCoordinator.totals
+        reportProgress(
+            .attributingDatabase,
+            completedCount: finalTotals.completedCount,
+            totalCount: finalTotals.completedCount,
+            provider: .codex,
+            activityCount: finalTotals.completedCount,
+            processedBytes: finalTotals.processedBytes,
+            databaseStage: .mappingRecords,
+            databaseIndex: bundles.isEmpty ? nil : bundles.count,
+            databaseCount: bundles.isEmpty ? nil : bundles.count,
+            force: true
+        )
+    }
+
+    private static func readCodexLogShard(
+        _ shard: CodexLogScanShard,
+        interruptRegistry: AgentSQLiteInterruptRegistry,
+        progressCoordinator: CodexLogDatabaseProgressCoordinator,
+        shardDidStart: (@Sendable (String) -> Void)?
+    ) throws -> CodexLogShardReadOutcome {
+        try Task.checkCancellation()
+        var processedHighWater = 0
+        var estimatedBytesHighWater: UInt64 = 0
+        do {
+            let database = try ReadOnlyAgentSQLite(
+                path: shard.path,
+                expectedIdentity: shard.expectedIdentity,
+                interruptRegistry: interruptRegistry
+            )
+            shardDidStart?(shard.id)
+            try Task.checkCancellation()
+            let snapshot = try database.codexLogEstimates(in: shard.range) {
+                processed,
+                estimatedBytes,
+                force in
+                processedHighWater = max(processedHighWater, processed)
+                estimatedBytesHighWater = max(estimatedBytesHighWater, estimatedBytes)
+                progressCoordinator.update(
+                    shard: shard,
+                    processedCount: processed,
+                    processedBytes: estimatedBytes,
+                    force: force
+                )
+            }
+            return CodexLogShardReadOutcome(
+                bundleIndex: shard.bundleIndex,
+                result: .success(snapshot)
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as AgentSQLiteError {
+            if case .interrupted = error,
+               Task.isCancelled || interruptRegistry.cancellationRequested() {
+                throw CancellationError()
+            }
+            progressCoordinator.update(
+                shard: shard,
+                processedCount: processedHighWater,
+                processedBytes: estimatedBytesHighWater,
+                force: true
+            )
+            return CodexLogShardReadOutcome(
+                bundleIndex: shard.bundleIndex,
+                result: .failure(CodexLogDatabaseReadFailure(
+                    status: error.attributionStatus,
+                    diagnosticComponent: error.diagnosticComponent
+                ))
+            )
+        } catch {
+            progressCoordinator.update(
+                shard: shard,
+                processedCount: processedHighWater,
+                processedBytes: estimatedBytesHighWater,
+                force: true
+            )
+            return CodexLogShardReadOutcome(
+                bundleIndex: shard.bundleIndex,
+                result: .failure(CodexLogDatabaseReadFailure(
+                    status: error is DatabaseAttributionMathError ? .unreadable : .unavailable,
+                    diagnosticComponent: error is DatabaseAttributionMathError
+                        ? "attribution arithmetic" : nil
+                ))
+            )
+        }
+    }
+
+    private static func mergeCodexLogSnapshots(
+        _ snapshots: [CodexLogEstimateSnapshot]
+    ) throws -> CodexLogEstimateSnapshot {
+        var byThreadID: [String: UInt64] = [:]
+        var threadlessEstimatedBytes: UInt64 = 0
+        var estimatedBytes: UInt64 = 0
+        var processedRowCount = 0
+        for snapshot in snapshots {
+            for (threadID, bytes) in snapshot.byThreadID {
+                byThreadID[threadID] = try addingExact(byThreadID[threadID, default: 0], bytes)
+            }
+            threadlessEstimatedBytes = try addingExact(
+                threadlessEstimatedBytes,
+                snapshot.threadlessEstimatedBytes
+            )
+            estimatedBytes = try addingExact(estimatedBytes, snapshot.estimatedBytes)
+            let (nextRowCount, overflow) = processedRowCount.addingReportingOverflow(
+                snapshot.processedRowCount
+            )
+            guard !overflow else { throw DatabaseAttributionMathError.overflow }
+            processedRowCount = nextRowCount
+        }
+        return CodexLogEstimateSnapshot(
+            byThreadID: byThreadID,
+            threadlessEstimatedBytes: threadlessEstimatedBytes,
+            estimatedBytes: estimatedBytes,
+            processedRowCount: processedRowCount,
+            totalRowCount: processedRowCount
+        )
+    }
+
+    private func codexLogDatabaseBundles() -> [CodexLogDatabaseBundle] {
+        var candidatesByMain: [FileIdentity: [CodexLogDatabaseBundle]] = [:]
+        for scope in scopes where scope.kind == .codexHome {
+            let mainPath = scope.root.appending(path: "logs_2.sqlite").path
+            let statePath = scope.root.appending(path: "state_5.sqlite").path
+            guard let mainIdentity = identity(at: mainPath),
+                  let stateIdentity = identity(at: statePath),
+                  let mainEntry = physicalLedger[mainIdentity],
+                  mainEntry.claims.contains(where: {
+                      $0.provider == .codex && $0.sourceID == scope.id && $0.path == mainPath
+                  }) else { continue }
+
+            let walIdentity = identity(at: mainPath + "-wal")
+            let sharedMemoryIdentity = identity(at: mainPath + "-shm")
+            let sidecarIdentities = Set([walIdentity, sharedMemoryIdentity].compactMap { $0 })
+            let memberIdentities = sidecarIdentities.union([mainIdentity])
+            let membersAreExclusive = memberIdentities.allSatisfy { identity in
+                guard let entry = physicalLedger[identity] else { return false }
+                return Set(entry.claims.map(\.provider)) == [.codex]
+                    && Set(entry.claims.map(\.sourceID)) == [scope.id]
+                    && entry.claims.allSatisfy { $0.globalCategory == .sharedDatabase }
+            }
+            var didOverflow = false
+            let physicalBytes = sumClamped(
+                memberIdentities.compactMap { physicalLedger[$0]?.allocatedBytes },
+                overflowed: &didOverflow
+            )
+            let capability: DatabaseBundleCapability
+            if !membersAreExclusive || didOverflow {
+                capability = .ambiguous
+            } else if walIdentity == nil || sharedMemoryIdentity == nil {
+                capability = .sidecarsUnavailable
+            } else {
+                capability = .supported
+            }
+            let bundle = CodexLogDatabaseBundle(
+                id: "codex|\(scope.id)|logs_2",
+                sourceID: scope.id,
+                mainPath: mainPath,
+                mainIdentity: mainIdentity,
+                stateIdentity: stateIdentity,
+                stateSignature: physicalLedger[stateIdentity]?.observations.first?.signature
+                    ?? FileStatSignature.zero,
+                sidecarIdentities: sidecarIdentities,
+                memberIdentities: memberIdentities,
+                physicalAllocatedBytes: physicalBytes,
+                capability: capability
+            )
+            candidatesByMain[mainIdentity, default: []].append(bundle)
+        }
+
+        return candidatesByMain.values.flatMap { candidates -> [CodexLogDatabaseBundle] in
+            guard let first = candidates.sorted(by: { $0.id < $1.id }).first else { return [] }
+            let equivalent = candidates.allSatisfy {
+                $0.stateIdentity == first.stateIdentity
+                    && $0.stateSignature == first.stateSignature
+                    && $0.sidecarIdentities == first.sidecarIdentities
+                    && $0.memberIdentities == first.memberIdentities
+                    && $0.capability == first.capability
+            }
+            if equivalent { return [first] }
+            return candidates.map { $0.withCapability(.ambiguous) }
+        }.sorted { $0.id < $1.id }
+    }
+
+    private func projectDatabaseEstimates(
+        _ raw: CodexLogEstimateSnapshot,
+        bundle: CodexLogDatabaseBundle
+    ) throws -> DatabaseAttributionProjection {
+        var rawByTarget: [ThreadTarget: UInt64] = [:]
+        var mapped: UInt64 = 0
+        var unmapped = raw.threadlessEstimatedBytes
+        let targets = codexTargets[bundle.sourceID] ?? [:]
+        let conflicts = codexRelationshipConflictIDs[bundle.sourceID] ?? []
+
+        for (threadID, bytes) in raw.byThreadID {
+            if let target = targets[threadID], !conflicts.contains(threadID) {
+                rawByTarget[target] = try addingExact(rawByTarget[target, default: 0], bytes)
+                mapped = try addingExact(mapped, bytes)
+            } else {
+                unmapped = try addingExact(unmapped, bytes)
+            }
+        }
+        let total = try addingExact(mapped, unmapped)
+        var byTarget: [ThreadTarget: UInt64] = [:]
+        var attributed: UInt64 = 0
+        for (target, bytes) in rawByTarget {
+            let scaled = try scaledDatabaseBytes(
+                logicalBytes: bytes,
+                physicalBytes: bundle.physicalAllocatedBytes,
+                totalEstimatedBytes: total
+            )
+            byTarget[target] = scaled
+            attributed = try addingExact(attributed, scaled)
+        }
+        guard attributed <= bundle.physicalAllocatedBytes else { throw DatabaseAttributionMathError.overflow }
+        return DatabaseAttributionProjection(
+            byTarget: byTarget,
+            attributedBytes: attributed,
+            mappedEstimatedBytes: mapped,
+            unmappedEstimatedBytes: unmapped
+        )
+    }
+
+    private mutating func applyDatabaseAttributionProjections() {
+        let key = "codex:global:\(AgentStorageGlobalCategory.sharedDatabase.rawValue)"
+        for pending in pendingDatabaseProjections {
+            do {
+                guard databaseBundleIsExclusive(pending.bundle) else {
+                    databaseAttributions.append(
+                        pending.bundle.summary(status: .ambiguousOwnership)
+                    )
+                    continue
+                }
+                guard databaseContextIsStable(pending.bundle) else {
+                    databaseAttributions.append(pending.bundle.summary(status: .unavailable))
+                    continue
+                }
+                guard var aggregate = globalAggregates[key],
+                      aggregate.allocatedBytes >= pending.summary.attributedBytes else {
+                    throw DatabaseAttributionMathError.overflow
+                }
+                var candidateFamilies = families
+                for (target, bytes) in pending.projection.byTarget {
+                    guard var family = candidateFamilies[target.familyID],
+                          var node = family.nodes[target.nodeID] else {
+                        throw DatabaseAttributionMathError.missingTarget
+                    }
+                    node.databaseAttributedBytes = try addingExact(
+                        node.databaseAttributedBytes,
+                        bytes
+                    )
+                    family.nodes[target.nodeID] = node
+                    candidateFamilies[target.familyID] = family
+                }
+                aggregate.databaseAttributedBytes = try addingExact(
+                    aggregate.databaseAttributedBytes,
+                    pending.summary.attributedBytes
+                )
+                aggregate.allocatedBytes -= pending.summary.attributedBytes
+                families = candidateFamilies
+                globalAggregates[key] = aggregate
+                databaseAttributions.append(pending.summary)
+            } catch {
+                databaseAttributions.append(pending.bundle.summary(
+                    status: .unreadable,
+                    diagnosticComponent: "attribution arithmetic"
+                ))
+            }
+        }
+        pendingDatabaseProjections.removeAll(keepingCapacity: false)
+    }
+
+    private func databaseBundleIsExclusive(_ bundle: CodexLogDatabaseBundle) -> Bool {
+        bundle.memberIdentities.allSatisfy { identity in
+            guard let entry = physicalLedger[identity] else { return false }
+            return Set(entry.claims.map(\.provider)) == [.codex]
+                && Set(entry.claims.map(\.sourceID)) == [bundle.sourceID]
+                && entry.claims.allSatisfy { $0.globalCategory == .sharedDatabase }
+        }
+    }
+
+    private func databaseContextIsStable(_ bundle: CodexLogDatabaseBundle) -> Bool {
+        let statePath = URL(fileURLWithPath: bundle.mainPath)
+            .deletingLastPathComponent()
+            .appending(path: "state_5.sqlite")
+            .path
+        var value = stat()
+        guard lstat(statePath, &value) == 0, (value.st_mode & S_IFMT) == S_IFREG else {
+            return false
+        }
+        return FileIdentity(device: UInt64(value.st_dev), inode: UInt64(value.st_ino))
+            == bundle.stateIdentity
+    }
+
+    private func identity(at path: String) -> FileIdentity? {
+        var value = stat()
+        guard lstat(path, &value) == 0, (value.st_mode & S_IFMT) == S_IFREG else { return nil }
+        return FileIdentity(device: UInt64(value.st_dev), inode: UInt64(value.st_ino))
+    }
+
     private mutating func addToFamily(
         familyID: String,
         nodeID: String,
@@ -1303,6 +2211,9 @@ private struct AgentStorageScanEngine {
         node.allocatedBytes = node.allocatedBytes.addingClamped(entry.allocatedBytes)
         node.artifactCount += 1
         node.path = node.path ?? path
+        if let artifact = cleanupArtifact(for: entry, path: path) {
+            node.cleanupArtifacts.append(artifact)
+        }
         family.nodes[nodeID] = node
         family.artifactCount += 1
         family.composition[category, default: 0] = family.composition[category, default: 0]
@@ -1330,9 +2241,32 @@ private struct AgentStorageScanEngine {
             .addingClamped(entry.allocatedBytes)
         family.artifactCount += 1
         family.path = family.path ?? path
+        if let artifact = cleanupArtifact(for: entry, path: path) {
+            family.cleanupArtifacts.append(artifact)
+        }
         family.composition[category, default: 0] = family.composition[category, default: 0]
             .addingClamped(entry.allocatedBytes)
         families[familyID] = family
+    }
+
+    private func cleanupArtifact(
+        for entry: PhysicalEntry,
+        path: String
+    ) -> AgentStorageCleanupArtifact? {
+        guard entry.isStable, entry.linkCount == 1,
+              let observation = entry.observations.first(where: { $0.path == path }),
+              observation.fileType == S_IFREG else { return nil }
+        let signature = observation.signature
+        return AgentStorageCleanupArtifact(
+            path: path,
+            allocatedBytes: entry.allocatedBytes,
+            device: entry.identity.device,
+            inode: entry.identity.inode,
+            logicalBytes: signature.logicalBytes,
+            blocks: signature.blocks,
+            modifiedSeconds: signature.modifiedSeconds,
+            modifiedNanoseconds: signature.modifiedNanoseconds
+        )
     }
 
     private mutating func addGlobal(
@@ -1386,6 +2320,11 @@ private struct AgentStorageScanEngine {
                     return $0.updatedAt > $1.updatedAt
                 }
                 .map(AgentStorageThreadNode.init)
+            let nodeCleanupArtifacts = (main?.cleanupArtifacts ?? [])
+                + subagents.flatMap(\.cleanupArtifacts)
+            let cleanupArtifacts = uniqueCleanupArtifacts(
+                nodeCleanupArtifacts + family.cleanupArtifacts
+            )
             return AgentStorageThreadFamily(
                 id: family.id,
                 provider: family.provider,
@@ -1400,12 +2339,17 @@ private struct AgentStorageScanEngine {
                     $0.addingClamped($1.allocatedBytes)
                 },
                 familyOtherAllocatedBytes: family.familyOtherAllocatedBytes,
+                mainDatabaseAttributedBytes: main?.databaseAttributedBytes ?? 0,
+                subagentDatabaseAttributedBytes: subagents.reduce(0) {
+                    $0.addingClamped($1.databaseAttributedBytes)
+                },
                 artifactCount: family.artifactCount,
                 path: family.path,
                 subagents: subagents,
-                composition: family.composition
+                composition: family.composition,
+                cleanupArtifacts: cleanupArtifacts
             )
-        }.filter { $0.allocatedBytes > 0 }.sorted {
+        }.filter { $0.attributedBytes > 0 }.sorted {
             if $0.updatedAt == $1.updatedAt { return $0.id < $1.id }
             return $0.updatedAt > $1.updatedAt
         }
@@ -1428,7 +2372,7 @@ private struct AgentStorageScanEngine {
             }
         var didOverflow = overflowed
         let measured = sumClamped(physicalLedger.values.map(\.allocatedBytes), overflowed: &didOverflow)
-        let chatBytes = sumClamped(finalFamilies.map(\.allocatedBytes), overflowed: &didOverflow)
+        let chatBytes = sumClamped(finalFamilies.map(\.attributedBytes), overflowed: &didOverflow)
         let globalBytes = sumClamped(finalGlobals.map(\.allocatedBytes), overflowed: &didOverflow)
         let unattributedBytes = sumClamped(finalUnattributed.map(\.allocatedBytes), overflowed: &didOverflow)
         let classified = sumClamped(
@@ -1476,7 +2420,7 @@ private struct AgentStorageScanEngine {
             let providerGlobals = dataset.globalItems
             let providerUnattributed = dataset.unattributedItems
             let chat = providerFamilies.reduce(UInt64(0)) {
-                $0.addingClamped($1.allocatedBytes)
+                $0.addingClamped($1.attributedBytes)
             }
             let global = providerGlobals.reduce(UInt64(0)) {
                 $0.addingClamped($1.allocatedBytes)
@@ -1491,10 +2435,16 @@ private struct AgentStorageScanEngine {
             let issueCount = providerIssueCounts[provider, default: 0]
                 + metadataOutcome.unsupportedCount
                 + metadataOutcome.unreadableCount
+            let databaseIssueCount = databaseAttributions.filter {
+                $0.provider == provider && $0.status != .completed
+            }.count
             let supportStatus: AgentStorageProviderSupportStatus
-            if metadataOutcome.supportedCount == 0, metadataOutcome.unsupportedCount > 0 {
+            if sourceCount == 0 {
+                supportStatus = .notInstalled
+            } else if metadataOutcome.supportedCount == 0, metadataOutcome.unsupportedCount > 0 {
                 supportStatus = .unsupportedFormat
-            } else if issueCount > 0 || unstableEntries.count(for: provider) > 0 {
+            } else if issueCount > 0 || databaseIssueCount > 0
+                || unstableEntries.count(for: provider) > 0 {
                 supportStatus = .partial
             } else if sessionSourceCount == 0 || metadataOutcome.emptyCount == sessionSourceCount {
                 supportStatus = .noConversationSource
@@ -1509,23 +2459,28 @@ private struct AgentStorageScanEngine {
                 unattributedBytes: unattributed,
                 mainThreadBytes: providerFamilies.reduce(UInt64(0)) {
                     $0.addingClamped($1.mainAllocatedBytes)
+                        .addingClamped($1.mainDatabaseAttributedBytes)
                 },
                 subagentBytes: providerFamilies.reduce(UInt64(0)) {
                     $0.addingClamped($1.subagentAllocatedBytes)
+                        .addingClamped($1.subagentDatabaseAttributedBytes)
                 },
                 familyOtherBytes: providerFamilies.reduce(UInt64(0)) {
                     $0.addingClamped($1.familyOtherAllocatedBytes)
                 },
+                databaseAttributedBytes: providerFamilies.reduce(UInt64(0)) {
+                    $0.addingClamped($1.databaseAttributedBytes)
+                },
                 threadCount: providerFamilies.count,
                 subagentCount: providerFamilies.reduce(0) { $0 + $1.subagentCount },
                 sourceCount: sourceCount,
-                issueCount: issueCount,
+                issueCount: issueCount + databaseIssueCount,
                 unstableEntryCount: unstableEntries.count(for: provider),
                 supportStatus: supportStatus,
                 unsupportedSourceCount: metadataOutcome.unsupportedCount,
                 unreadableSourceCount: metadataOutcome.unreadableCount
             )
-        }.filter { $0.sourceCount > 0 || $0.exclusiveBytes > 0 }
+        }
 
         return AgentStorageSnapshot(
             scannedAt: Date(),
@@ -1538,8 +2493,21 @@ private struct AgentStorageScanEngine {
             crossAgentSharedBytes: finalGlobals
                 .filter { $0.category == .crossAgentShared }
                 .reduce(0) { $0.addingClamped($1.allocatedBytes) },
-            providerDatasets: providerDatasets
+            providerDatasets: providerDatasets,
+            databaseAttributions: databaseAttributions.sorted { $0.id < $1.id }
         )
+    }
+
+    private func uniqueCleanupArtifacts(
+        _ artifacts: [AgentStorageCleanupArtifact]
+    ) -> [AgentStorageCleanupArtifact] {
+        var identities = Set<FileIdentity>()
+        return artifacts.filter { artifact in
+            identities.insert(FileIdentity(
+                device: artifact.device,
+                inode: artifact.inode
+            )).inserted
+        }.sorted { $0.path < $1.path }
     }
 
     private mutating func recordSkipped(provider: AgentStorageProvider, count: Int = 1) {
@@ -1586,6 +2554,13 @@ private struct ProviderMetadataOutcome: Sendable {
         case .empty: emptyCount += 1
         }
     }
+
+    mutating func merge(_ other: Self) {
+        supportedCount += other.supportedCount
+        unsupportedCount += other.unsupportedCount
+        unreadableCount += other.unreadableCount
+        emptyCount += other.emptyCount
+    }
 }
 
 private struct ScanScope: Sendable {
@@ -1601,12 +2576,253 @@ private struct FileIdentity: Hashable, Sendable {
     let inode: UInt64
 }
 
+private enum DatabaseBundleCapability: Sendable, Equatable {
+    case supported
+    case sidecarsUnavailable
+    case ambiguous
+}
+
+private struct CodexLogDatabaseBundle: Sendable {
+    let id: String
+    let sourceID: String
+    let mainPath: String
+    let mainIdentity: FileIdentity
+    let stateIdentity: FileIdentity
+    let stateSignature: FileStatSignature
+    let sidecarIdentities: Set<FileIdentity>
+    let memberIdentities: Set<FileIdentity>
+    let physicalAllocatedBytes: UInt64
+    let capability: DatabaseBundleCapability
+
+    func withCapability(_ capability: DatabaseBundleCapability) -> Self {
+        Self(
+            id: id,
+            sourceID: sourceID,
+            mainPath: mainPath,
+            mainIdentity: mainIdentity,
+            stateIdentity: stateIdentity,
+            stateSignature: stateSignature,
+            sidecarIdentities: sidecarIdentities,
+            memberIdentities: memberIdentities,
+            physicalAllocatedBytes: physicalAllocatedBytes,
+            capability: capability
+        )
+    }
+
+    func summary(
+        status: AgentStorageDatabaseAttributionStatus,
+        diagnosticComponent: String? = nil
+    ) -> AgentStorageDatabaseAttributionSummary {
+        AgentStorageDatabaseAttributionSummary(
+            id: id,
+            provider: .codex,
+            sourceID: sourceID,
+            path: mainPath,
+            physicalBundleBytes: physicalAllocatedBytes,
+            attributedBytes: 0,
+            residualBytes: physicalAllocatedBytes,
+            mappedEstimatedBytes: 0,
+            unmappedEstimatedBytes: 0,
+            processedRowCount: 0,
+            totalRowCount: 0,
+            status: status,
+            diagnosticComponent: diagnosticComponent
+        )
+    }
+}
+
+private struct CodexLogScanBounds: Sendable {
+    let minimumID: Int64
+    let maximumID: Int64
+}
+
+private struct CodexLogScanShard: Sendable {
+    let id: String
+    let bundleIndex: Int
+    let path: String
+    let expectedIdentity: FileIdentity
+    let range: ClosedRange<Int64>
+
+    static func makeShards(
+        bundleIndex: Int,
+        bundleID: String,
+        path: String,
+        expectedIdentity: FileIdentity,
+        bounds: CodexLogScanBounds,
+        maximumShardCount: Int
+    ) -> [Self] {
+        let fallback = [Self(
+            id: "\(bundleID)|shard-1",
+            bundleIndex: bundleIndex,
+            path: path,
+            expectedIdentity: expectedIdentity,
+            range: bounds.minimumID...bounds.maximumID
+        )]
+        guard maximumShardCount > 1,
+              bounds.minimumID >= 0,
+              bounds.maximumID >= bounds.minimumID
+        else { return fallback }
+        let (distance, didOverflow) = bounds.maximumID.subtractingReportingOverflow(
+            bounds.minimumID
+        )
+        guard !didOverflow else { return fallback }
+
+        let span = UInt64(distance) + 1
+        let minimumIDsPerShard: UInt64 = 4_096
+        let usefulShardCount = Int(min(
+            UInt64(maximumShardCount),
+            ((span - 1) / minimumIDsPerShard) + 1
+        ))
+        guard usefulShardCount > 1 else { return fallback }
+
+        let width = ((span - 1) / UInt64(usefulShardCount)) + 1
+        return (0..<usefulShardCount).compactMap { shardIndex in
+            let lowerOffset = UInt64(shardIndex) * width
+            guard lowerOffset < span else { return nil }
+            let upperOffset = min(span - 1, lowerOffset + width - 1)
+            let lowerID = bounds.minimumID + Int64(lowerOffset)
+            let upperID = bounds.minimumID + Int64(upperOffset)
+            return Self(
+                id: "\(bundleID)|shard-\(shardIndex + 1)",
+                bundleIndex: bundleIndex,
+                path: path,
+                expectedIdentity: expectedIdentity,
+                range: lowerID...upperID
+            )
+        }
+    }
+}
+
+private struct CodexLogEstimateSnapshot: Sendable {
+    let byThreadID: [String: UInt64]
+    let threadlessEstimatedBytes: UInt64
+    let estimatedBytes: UInt64
+    let processedRowCount: Int
+    let totalRowCount: Int
+
+    static let empty = Self(
+        byThreadID: [:],
+        threadlessEstimatedBytes: 0,
+        estimatedBytes: 0,
+        processedRowCount: 0,
+        totalRowCount: 0
+    )
+}
+
+private struct CodexLogDatabaseReadFailure: Error, Sendable {
+    let status: AgentStorageDatabaseAttributionStatus
+    let diagnosticComponent: String?
+}
+
+private struct CodexLogShardReadOutcome: Sendable {
+    let bundleIndex: Int
+    let result: Result<CodexLogEstimateSnapshot, CodexLogDatabaseReadFailure>
+}
+
+private final class CodexLogDatabaseProgressCoordinator: @unchecked Sendable {
+    struct Totals: Sendable {
+        let completedCount: Int
+        let processedBytes: UInt64
+    }
+
+    private struct ShardProgress {
+        var completedCount = 0
+        var processedBytes: UInt64 = 0
+    }
+
+    private let lock = NSLock()
+    private let emitter: AgentStorageProgressEmitter
+    private let databaseCount: Int
+    private var progressByShard: [String: ShardProgress] = [:]
+    private var completedBundles: Set<Int> = []
+
+    init(emitter: AgentStorageProgressEmitter, databaseCount: Int) {
+        self.emitter = emitter
+        self.databaseCount = databaseCount
+    }
+
+    var totals: Totals {
+        lock.lock()
+        defer { lock.unlock() }
+        return calculateTotals()
+    }
+
+    func update(
+        shard: CodexLogScanShard,
+        processedCount: Int,
+        processedBytes: UInt64,
+        force: Bool
+    ) {
+        lock.lock()
+        var current = progressByShard[shard.id, default: ShardProgress()]
+        current.completedCount = max(current.completedCount, processedCount)
+        current.processedBytes = max(current.processedBytes, processedBytes)
+        progressByShard[shard.id] = current
+        let totals = calculateTotals()
+        let databaseIndex = databaseCount == 0
+            ? nil : min(databaseCount, completedBundles.count + 1)
+        emitter.emit(AgentStorageScanProgress(
+            phase: .attributingDatabase,
+            completedCount: totals.completedCount,
+            provider: .codex,
+            activityCount: totals.completedCount,
+            processedBytes: totals.processedBytes,
+            databaseStage: .readingRecords,
+            databaseIndex: databaseIndex,
+            databaseCount: databaseCount
+        ), force: force)
+        lock.unlock()
+    }
+
+    func markBundleCompleted(_ bundleIndex: Int) {
+        lock.lock()
+        completedBundles.insert(bundleIndex)
+        lock.unlock()
+    }
+
+    private func calculateTotals() -> Totals {
+        let completedCount = progressByShard.values.reduce(0) { partialResult, progress in
+            let (result, overflow) = partialResult.addingReportingOverflow(
+                progress.completedCount
+            )
+            return overflow ? Int.max : result
+        }
+        return Totals(
+            completedCount: completedCount,
+            processedBytes: progressByShard.values.reduce(0) {
+                $0.addingClamped($1.processedBytes)
+            }
+        )
+    }
+}
+
+private struct DatabaseAttributionProjection: Sendable {
+    let byTarget: [ThreadTarget: UInt64]
+    let attributedBytes: UInt64
+    let mappedEstimatedBytes: UInt64
+    let unmappedEstimatedBytes: UInt64
+}
+
+private struct PendingDatabaseAttribution: Sendable {
+    let bundle: CodexLogDatabaseBundle
+    let projection: DatabaseAttributionProjection
+    let summary: AgentStorageDatabaseAttributionSummary
+}
+
+private enum DatabaseAttributionMathError: Error {
+    case overflow
+    case missingTarget
+}
+
 private struct PhysicalEntry: Sendable {
+    let identity: FileIdentity
     var allocatedBytes: UInt64
     var logicalBytes: UInt64
     var updatedAt: Date
     var claims: [PhysicalClaim]
     var observations: [FileObservation]
+    var isStable: Bool
+    var linkCount: UInt64
 }
 
 private struct FileObservation: Sendable {
@@ -1640,6 +2856,13 @@ struct AgentStorageUnstableEntryTracker: Sendable {
     func count(for provider: AgentStorageProvider) -> Int {
         byProvider[provider]?.count ?? 0
     }
+
+    mutating func merge(_ other: Self) {
+        all.formUnion(other.all)
+        for (provider, identities) in other.byProvider {
+            byProvider[provider, default: []].formUnion(identities)
+        }
+    }
 }
 
 private struct FileStatSignature: Equatable, Sendable {
@@ -1654,6 +2877,64 @@ private struct FileStatSignature: Equatable, Sendable {
         modifiedSeconds = Int64(value.st_mtimespec.tv_sec)
         modifiedNanoseconds = Int64(value.st_mtimespec.tv_nsec)
     }
+
+    static let zero = FileStatSignature(
+        logicalBytes: 0,
+        blocks: 0,
+        modifiedSeconds: 0,
+        modifiedNanoseconds: 0
+    )
+
+    private init(
+        logicalBytes: Int64,
+        blocks: Int64,
+        modifiedSeconds: Int64,
+        modifiedNanoseconds: Int64
+    ) {
+        self.logicalBytes = logicalBytes
+        self.blocks = blocks
+        self.modifiedSeconds = modifiedSeconds
+        self.modifiedNanoseconds = modifiedNanoseconds
+    }
+}
+
+private final class AgentSQLiteInterruptRegistry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handles: Set<OpaquePointer> = []
+    private var isCancelled = false
+
+    func register(_ handle: OpaquePointer) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isCancelled else { throw CancellationError() }
+        handles.insert(handle)
+    }
+
+    func unregister(_ handle: OpaquePointer) {
+        lock.lock()
+        handles.remove(handle)
+        lock.unlock()
+    }
+
+    func cancelAndInterrupt() {
+        lock.lock()
+        isCancelled = true
+        for handle in handles { sqlite3_interrupt(handle) }
+        lock.unlock()
+    }
+
+    func cancellationRequested() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return isCancelled
+    }
+}
+
+private let agentSQLiteProgressCallback: @convention(c) (UnsafeMutableRawPointer?) -> Int32 = {
+    context in
+    guard let context else { return 0 }
+    let registry = Unmanaged<AgentSQLiteInterruptRegistry>.fromOpaque(context).takeUnretainedValue()
+    return registry.cancellationRequested() ? 1 : 0
 }
 
 private enum ClaimOwnership: Hashable, Sendable {
@@ -1703,8 +2984,10 @@ private struct MutableNode: Sendable {
     let title: String
     let updatedAt: Date
     var allocatedBytes: UInt64 = 0
+    var databaseAttributedBytes: UInt64 = 0
     var artifactCount: Int = 0
     var path: String?
+    var cleanupArtifacts: [AgentStorageCleanupArtifact] = []
 }
 
 private extension AgentStorageThreadNode {
@@ -1717,8 +3000,10 @@ private extension AgentStorageThreadNode {
             title: node.title,
             updatedAt: node.updatedAt,
             allocatedBytes: node.allocatedBytes,
+            databaseAttributedBytes: node.databaseAttributedBytes,
             artifactCount: node.artifactCount,
-            path: node.path
+            path: node.path,
+            cleanupArtifacts: node.cleanupArtifacts
         )
     }
 }
@@ -1738,6 +3023,7 @@ private struct MutableFamily: Sendable {
     var familyOtherAllocatedBytes: UInt64 = 0
     var artifactCount: Int = 0
     var composition: [AgentStorageArtifactCategory: UInt64] = [:]
+    var cleanupArtifacts: [AgentStorageCleanupArtifact] = []
 }
 
 private struct MutableGlobalAggregate: Sendable {
@@ -1745,6 +3031,7 @@ private struct MutableGlobalAggregate: Sendable {
     let provider: AgentStorageProvider?
     let category: AgentStorageGlobalCategory
     var allocatedBytes: UInt64 = 0
+    var databaseAttributedBytes: UInt64 = 0
     var logicalBytes: UInt64 = 0
     var artifactCount: Int = 0
     let path: String?
@@ -1759,6 +3046,10 @@ private extension AgentStorageGlobalItem {
             category: aggregate.category,
             title: aggregate.category.rawValue,
             allocatedBytes: aggregate.allocatedBytes,
+            physicalAllocatedBytes: aggregate.allocatedBytes.addingClamped(
+                aggregate.databaseAttributedBytes
+            ),
+            databaseAttributedBytes: aggregate.databaseAttributedBytes,
             logicalBytes: aggregate.logicalBytes,
             artifactCount: aggregate.artifactCount,
             path: aggregate.path,
@@ -1795,7 +3086,7 @@ private extension AgentStorageUnattributedItem {
     }
 }
 
-private struct ThreadTarget: Sendable {
+private struct ThreadTarget: Hashable, Sendable {
     let familyID: String
     let nodeID: String
 }
@@ -1817,6 +3108,7 @@ private struct CodexThreadRecord: Sendable {
     let displayTitle: String?
     let isArchived: Bool
     let isSubagent: Bool
+    let gitOriginURL: String?
 }
 
 private struct CodexEdge: Sendable {
@@ -1832,16 +3124,25 @@ private struct CodexDatabaseSnapshot: Sendable {
 
 private final class ReadOnlyAgentSQLite {
     private var handle: OpaquePointer?
+    private let interruptRegistry: AgentSQLiteInterruptRegistry
 
-    init(path: String) throws {
+    init(
+        path: String,
+        expectedIdentity: FileIdentity? = nil,
+        interruptRegistry: AgentSQLiteInterruptRegistry = AgentSQLiteInterruptRegistry()
+    ) throws {
+        self.interruptRegistry = interruptRegistry
         var fileStat = stat()
         guard lstat(path, &fileStat) == 0, (fileStat.st_mode & S_IFMT) == S_IFREG else {
             throw AgentSQLiteError.openFailed("\(path): not a regular file")
         }
-        let expectedIdentity = FileIdentity(
+        let observedIdentity = FileIdentity(
             device: UInt64(fileStat.st_dev),
             inode: UInt64(fileStat.st_ino)
         )
+        guard expectedIdentity == nil || expectedIdentity == observedIdentity else {
+            throw AgentSQLiteError.openFailed("\(path): file identity changed before opening")
+        }
         var pointer: OpaquePointer?
         let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_NOFOLLOW
         let result = sqlite3_open_v2(path, &pointer, flags, nil)
@@ -1856,31 +3157,52 @@ private final class ReadOnlyAgentSQLite {
             && FileIdentity(
                 device: UInt64(openedPathStat.st_dev),
                 inode: UInt64(openedPathStat.st_ino)
-            ) == expectedIdentity
+            ) == observedIdentity
         guard openedPathIsStable else {
             sqlite3_close_v2(pointer)
             throw AgentSQLiteError.openFailed("\(path): file identity changed while opening")
         }
+        do {
+            try interruptRegistry.register(pointer)
+        } catch {
+            sqlite3_close_v2(pointer)
+            throw error
+        }
         handle = pointer
         sqlite3_extended_result_codes(pointer, 1)
+        sqlite3_progress_handler(
+            pointer,
+            2_000,
+            agentSQLiteProgressCallback,
+            Unmanaged.passUnretained(interruptRegistry).toOpaque()
+        )
         guard sqlite3_exec(pointer, "PRAGMA query_only = ON", nil, nil, nil) == SQLITE_OK else {
-            throw AgentSQLiteError.queryFailed
+            let error = sqliteError()
+            sqlite3_progress_handler(pointer, 0, nil, nil)
+            interruptRegistry.unregister(pointer)
+            sqlite3_close_v2(pointer)
+            handle = nil
+            throw error
         }
         sqlite3_busy_timeout(pointer, 150)
     }
 
     deinit {
-        if let handle { sqlite3_close_v2(handle) }
+        if let handle {
+            sqlite3_progress_handler(handle, 0, nil, nil)
+            interruptRegistry.unregister(handle)
+            sqlite3_close_v2(handle)
+        }
     }
 
-    func codexSnapshot() throws -> CodexDatabaseSnapshot {
+    func codexSnapshot(progress: (Int) -> Void = { _ in }) throws -> CodexDatabaseSnapshot {
         try execute("BEGIN DEFERRED TRANSACTION")
         var committed = false
         defer {
             if !committed { try? execute("ROLLBACK") }
         }
-        let threadResult = try codexThreads()
-        let edgeResult = try codexEdges()
+        let threadResult = try codexThreads(progress: progress)
+        let edgeResult = try codexEdges { progress(threadResult.processedCount + $0) }
         try execute("COMMIT")
         committed = true
         return CodexDatabaseSnapshot(
@@ -1890,7 +3212,155 @@ private final class ReadOnlyAgentSQLite {
         )
     }
 
-    private func codexThreads() throws -> (values: [CodexThreadRecord], issueCount: Int) {
+    func codexLogScanBounds() throws -> CodexLogScanBounds? {
+        try validateCodexLogDatabase()
+        try execute("BEGIN DEFERRED TRANSACTION")
+        var committed = false
+        defer {
+            if !committed { try? execute("ROLLBACK") }
+        }
+        let minimumID = try codexLogExtremeID("SELECT MIN(id) FROM logs")
+        let maximumID = try codexLogExtremeID("SELECT MAX(id) FROM logs")
+        try execute("COMMIT")
+        committed = true
+        guard let minimumID, let maximumID else {
+            guard minimumID == nil, maximumID == nil else {
+                throw AgentSQLiteError.unsupportedSchema("logs.id")
+            }
+            return nil
+        }
+        guard minimumID <= maximumID else {
+            throw AgentSQLiteError.unsupportedSchema("logs.id")
+        }
+        return CodexLogScanBounds(minimumID: minimumID, maximumID: maximumID)
+    }
+
+    func codexLogEstimates(
+        in range: ClosedRange<Int64>,
+        progress: (Int, UInt64, Bool) -> Void
+    ) throws -> CodexLogEstimateSnapshot {
+        try validateCodexLogDatabase()
+
+        try execute("BEGIN DEFERRED TRANSACTION")
+        var committed = false
+        defer {
+            if !committed { try? execute("ROLLBACK") }
+        }
+        progress(0, 0, true)
+
+        let estimates = try aggregateCodexLogs(
+            in: range,
+            progress: progress
+        )
+        try execute("COMMIT")
+        committed = true
+        return CodexLogEstimateSnapshot(
+            byThreadID: estimates.byThreadID,
+            threadlessEstimatedBytes: estimates.threadless,
+            estimatedBytes: estimates.estimatedBytes,
+            processedRowCount: estimates.processed,
+            totalRowCount: estimates.processed
+        )
+    }
+
+    private func validateCodexLogDatabase() throws {
+        guard try journalMode().lowercased() == "wal" else {
+            throw AgentSQLiteError.unsupportedJournalMode
+        }
+        let columns = try columnNames(table: "logs")
+        guard Set(["id", "thread_id", "estimated_bytes"]).isSubset(of: columns) else {
+            throw AgentSQLiteError.unsupportedSchema("logs")
+        }
+    }
+
+    private func aggregateCodexLogs(
+        in range: ClosedRange<Int64>,
+        progress: (Int, UInt64, Bool) -> Void
+    ) throws -> (
+        byThreadID: [String: UInt64],
+        threadless: UInt64,
+        estimatedBytes: UInt64,
+        processed: Int
+    ) {
+        guard let handle else { throw AgentSQLiteError.queryFailed }
+        var statement: OpaquePointer?
+        let sql = """
+        SELECT id, thread_id, estimated_bytes
+        FROM logs
+        WHERE id >= ? AND id <= ?
+        ORDER BY id
+        """
+        guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { throw sqliteError() }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_bind_int64(statement, 1, range.lowerBound) == SQLITE_OK,
+              sqlite3_bind_int64(statement, 2, range.upperBound) == SQLITE_OK
+        else {
+            throw sqliteError()
+        }
+
+        var byThreadID: [String: UInt64] = [:]
+        var threadless: UInt64 = 0
+        var accumulatedEstimatedBytes: UInt64 = 0
+        var processed = 0
+        var lastID = Int64.min
+        while true {
+            let step = sqlite3_step(statement)
+            if step == SQLITE_DONE { break }
+            guard step == SQLITE_ROW else { throw sqliteError(code: step) }
+            guard sqlite3_column_type(statement, 0) == SQLITE_INTEGER,
+                  sqlite3_column_type(statement, 2) == SQLITE_INTEGER else {
+                throw AgentSQLiteError.unsupportedSchema("logs.id/estimated_bytes")
+            }
+            let rowID = sqlite3_column_int64(statement, 0)
+            let signedBytes = sqlite3_column_int64(statement, 2)
+            guard rowID > lastID, signedBytes >= 0 else {
+                throw AgentSQLiteError.unsupportedSchema("logs.id/estimated_bytes")
+            }
+            lastID = rowID
+            let rawThreadID = sqlite3_column_type(statement, 1) == SQLITE_NULL
+                ? "" : sqliteText(statement, 1).trimmingCharacters(in: .whitespacesAndNewlines)
+            let rowEstimatedBytes = UInt64(signedBytes)
+            accumulatedEstimatedBytes = try addingExact(
+                accumulatedEstimatedBytes,
+                rowEstimatedBytes
+            )
+            if let threadID = normalizedUUID(rawThreadID) {
+                byThreadID[threadID] = try addingExact(
+                    byThreadID[threadID, default: 0],
+                    rowEstimatedBytes
+                )
+            } else {
+                threadless = try addingExact(threadless, rowEstimatedBytes)
+            }
+            processed += 1
+            if processed.isMultiple(of: 256) {
+                try Task.checkCancellation()
+                progress(processed, accumulatedEstimatedBytes, processed == 256)
+            }
+        }
+        progress(processed, accumulatedEstimatedBytes, true)
+        return (byThreadID, threadless, accumulatedEstimatedBytes, processed)
+    }
+
+    private func codexLogExtremeID(_ sql: String) throws -> Int64? {
+        guard let handle else { throw AgentSQLiteError.queryFailed }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { throw sqliteError() }
+        defer { sqlite3_finalize(statement) }
+        let step = sqlite3_step(statement)
+        guard step == SQLITE_ROW else { throw sqliteError(code: step) }
+        if sqlite3_column_type(statement, 0) == SQLITE_NULL { return nil }
+        guard sqlite3_column_type(statement, 0) == SQLITE_INTEGER else {
+            throw AgentSQLiteError.unsupportedSchema("logs.id")
+        }
+        return sqlite3_column_int64(statement, 0)
+    }
+
+    private func codexThreads(
+        progress: (Int) -> Void
+    ) throws -> (values: [CodexThreadRecord], issueCount: Int, processedCount: Int) {
         guard let handle else { throw AgentSQLiteError.queryFailed }
         let columns = try columnNames(table: "threads")
         let requiredColumns: Set<String> = ["id", "rollout_path", "updated_at"]
@@ -1916,7 +3386,8 @@ private final class ReadOnlyAgentSQLite {
                \(columns.contains("updated_at_ms") ? "COALESCE(updated_at_ms / 1000.0, updated_at)" : "updated_at"),
                \(expression("cwd")), \(titleExpression),
                \(columns.contains("archived") ? "COALESCE(archived, 0)" : "0"),
-               \(expression("source")), \(expression("agent_path")), \(expression("agent_role"))
+               \(expression("source")), \(expression("agent_path")), \(expression("agent_role")),
+               \(expression("git_origin_url"))
         FROM threads
         """
         var statement: OpaquePointer?
@@ -1927,11 +3398,14 @@ private final class ReadOnlyAgentSQLite {
         var issueCount = 0
         var rowCount = 0
         while true {
-            rowCount += 1
-            if rowCount.isMultiple(of: 128) { try Task.checkCancellation() }
             let step = sqlite3_step(statement)
             if step == SQLITE_DONE { break }
             guard step == SQLITE_ROW else { throw AgentSQLiteError.queryFailed }
+            rowCount += 1
+            if rowCount.isMultiple(of: 128) {
+                try Task.checkCancellation()
+                progress(rowCount)
+            }
             guard let id = normalizedUUID(sqliteText(statement, 0)) else {
                 issueCount += 1
                 continue
@@ -1948,13 +3422,17 @@ private final class ReadOnlyAgentSQLite {
                 isArchived: sqlite3_column_int(statement, 5) != 0,
                 isSubagent: source.contains("\"subagent\"")
                     || !agentPath.isEmpty
-                    || !agentRole.isEmpty
+                    || !agentRole.isEmpty,
+                gitOriginURL: nonEmptyTrimmed(sqliteText(statement, 9))
             ))
         }
-        return (records, issueCount)
+        progress(rowCount)
+        return (records, issueCount, rowCount)
     }
 
-    private func codexEdges() throws -> (values: [CodexEdge], issueCount: Int) {
+    private func codexEdges(
+        progress: (Int) -> Void
+    ) throws -> (values: [CodexEdge], issueCount: Int) {
         guard let handle else { throw AgentSQLiteError.queryFailed }
         let columns = try columnNames(table: "thread_spawn_edges")
         guard !columns.isEmpty else { return ([], 0) }
@@ -1970,11 +3448,14 @@ private final class ReadOnlyAgentSQLite {
         var issueCount = 0
         var rowCount = 0
         while true {
-            rowCount += 1
-            if rowCount.isMultiple(of: 128) { try Task.checkCancellation() }
             let step = sqlite3_step(statement)
             if step == SQLITE_DONE { break }
             guard step == SQLITE_ROW else { throw AgentSQLiteError.queryFailed }
+            rowCount += 1
+            if rowCount.isMultiple(of: 128) {
+                try Task.checkCancellation()
+                progress(rowCount)
+            }
             guard let parent = normalizedUUID(sqliteText(statement, 0)),
                   let child = normalizedUUID(sqliteText(statement, 1))
             else {
@@ -1986,6 +3467,7 @@ private final class ReadOnlyAgentSQLite {
                 child: child
             ))
         }
+        progress(rowCount)
         return (edges, issueCount)
     }
 
@@ -2009,10 +3491,47 @@ private final class ReadOnlyAgentSQLite {
         }
     }
 
+    private func journalMode() throws -> String {
+        guard let handle else { throw AgentSQLiteError.queryFailed }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, "PRAGMA journal_mode", -1, &statement, nil) == SQLITE_OK,
+              let statement else { throw sqliteError() }
+        defer { sqlite3_finalize(statement) }
+        let step = sqlite3_step(statement)
+        guard step == SQLITE_ROW else { throw sqliteError(code: step) }
+        return sqliteText(statement, 0)
+    }
+
+    private func scalarInt(_ sql: String) throws -> Int {
+        guard let handle else { throw AgentSQLiteError.queryFailed }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { throw sqliteError() }
+        defer { sqlite3_finalize(statement) }
+        let step = sqlite3_step(statement)
+        guard step == SQLITE_ROW else { throw sqliteError(code: step) }
+        let value = sqlite3_column_int64(statement, 0)
+        guard value >= 0, value <= Int64(Int.max) else { throw AgentSQLiteError.queryFailed }
+        return Int(value)
+    }
+
     private func execute(_ sql: String) throws {
-        guard let handle,
-              sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK
-        else { throw AgentSQLiteError.queryFailed }
+        guard let handle else { throw AgentSQLiteError.queryFailed }
+        let result = sqlite3_exec(handle, sql, nil, nil, nil)
+        guard result == SQLITE_OK else { throw sqliteError(code: result) }
+    }
+
+    private func sqliteError(code: Int32? = nil) -> AgentSQLiteError {
+        guard let handle else { return .queryFailed }
+        let result = code ?? sqlite3_extended_errcode(handle)
+        let primary = result & 0xFF
+        if primary == SQLITE_INTERRUPT { return .interrupted }
+        if primary == SQLITE_BUSY || primary == SQLITE_LOCKED { return .temporarilyBusy }
+        if primary == SQLITE_CORRUPT || primary == SQLITE_NOTADB { return .unreadable }
+        if primary == SQLITE_CANTOPEN || primary == SQLITE_IOERR || primary == SQLITE_PERM {
+            return .unavailable
+        }
+        return .queryFailed
     }
 }
 
@@ -2020,6 +3539,27 @@ private enum AgentSQLiteError: Error {
     case openFailed(String)
     case queryFailed
     case unsupportedSchema(String)
+    case unsupportedJournalMode
+    case temporarilyBusy
+    case interrupted
+    case unreadable
+    case unavailable
+
+    var attributionStatus: AgentStorageDatabaseAttributionStatus {
+        switch self {
+        case .unsupportedSchema: .unsupportedFormat
+        case .unsupportedJournalMode: .unsupportedJournalMode
+        case .temporarilyBusy: .temporarilyBusy
+        case .unreadable: .unreadable
+        case .openFailed, .unavailable: .unavailable
+        case .interrupted, .queryFailed: .unavailable
+        }
+    }
+
+    var diagnosticComponent: String? {
+        if case .unsupportedSchema(let component) = self { return component }
+        return nil
+    }
 }
 
 private func sqliteText(_ statement: OpaquePointer, _ index: Int32) -> String {
@@ -2045,7 +3585,10 @@ private enum ClaudeMetadataReader {
     private static let chunkSize = 64 * 1_024
     private static let maximumLineSize = 512 * 1_024
 
-    static func read(_ url: URL) throws -> ClaudeSessionMetadata {
+    static func read(
+        _ url: URL,
+        onRead: ((Int) -> Void)? = nil
+    ) throws -> ClaudeSessionMetadata {
         let handle = try openSafeRegularFile(url)
         defer { try? handle.close() }
         var metadata = ClaudeSessionMetadata()
@@ -2056,6 +3599,7 @@ private enum ClaudeMetadataReader {
             try Task.checkCancellation()
             let chunk = try handle.read(upToCount: chunkSize) ?? Data()
             if chunk.isEmpty { break }
+            onRead?(chunk.count)
             if droppingOversizedLine {
                 if let newline = chunk.firstIndex(of: 0x0A) {
                     droppingOversizedLine = false
@@ -2167,7 +3711,11 @@ private enum ClaudeToolReferenceReader {
     private static let chunkSize = 64 * 1_024
     private static let maximumLineSize = 512 * 1_024
 
-    static func references(in url: URL, candidates: [String: [URL]]) -> Set<String> {
+    static func references(
+        in url: URL,
+        candidates: [String: [URL]],
+        onRead: ((Int) -> Void)? = nil
+    ) -> Set<String> {
         guard !candidates.isEmpty, let handle = try? openSafeRegularFile(url) else { return [] }
         defer { try? handle.close() }
 
@@ -2177,6 +3725,7 @@ private enum ClaudeToolReferenceReader {
         while true {
             if Task.isCancelled { break }
             guard let chunk = try? handle.read(upToCount: chunkSize), !chunk.isEmpty else { break }
+            onRead?(chunk.count)
             if droppingOversizedLine {
                 if let newline = chunk.firstIndex(of: 0x0A) {
                     droppingOversizedLine = false
@@ -2251,7 +3800,7 @@ private enum CodexRolloutTitleReader {
     private static let maximumPrefixSize = 1 * 1_024 * 1_024
     private static let maximumLineSize = 512 * 1_024
 
-    static func title(at url: URL) -> String? {
+    static func title(at url: URL, onRead: ((Int) -> Void)? = nil) -> String? {
         guard let handle = try? openSafeRegularFile(url) else { return nil }
         defer { try? handle.close() }
         var buffer = Data()
@@ -2263,6 +3812,7 @@ private enum CodexRolloutTitleReader {
             guard let chunk = try? handle.read(upToCount: min(64 * 1_024, remaining)),
                   !chunk.isEmpty else { break }
             bytesRead += chunk.count
+            onRead?(chunk.count)
             buffer.append(chunk)
             while let newline = buffer.firstIndex(of: 0x0A) {
                 let line = buffer.prefix(upTo: newline)
@@ -2477,9 +4027,147 @@ private func shortID(_ id: String) -> String {
     String(id.prefix(8))
 }
 
-private func projectName(from path: String) -> String {
-    guard !path.isEmpty else { return "Unknown project" }
-    return URL(fileURLWithPath: path).lastPathComponent
+private struct AgentStorageProjectResolver: Sendable {
+    static let nonProjectDirectoryName = "Non-project directory"
+
+    private var cachedNames: [String: String] = [:]
+    private var learnedRepositoryNames: [String: String] = [:]
+
+    mutating func register(cwd: String, gitOriginURL: String?) {
+        guard let gitOriginURL = nonEmptyTrimmed(gitOriginURL ?? ""),
+              let repositoryName = Self.repositoryName(from: gitOriginURL),
+              let path = Self.normalizedPath(cwd)
+        else { return }
+        learnedRepositoryNames[path] = repositoryName
+        cachedNames[path] = repositoryName
+    }
+
+    mutating func projectName(cwd: String, gitOriginURL: String?) -> String {
+        if let gitOriginURL = nonEmptyTrimmed(gitOriginURL ?? ""),
+           let repositoryName = Self.repositoryName(from: gitOriginURL) {
+            if let path = Self.normalizedPath(cwd) {
+                learnedRepositoryNames[path] = repositoryName
+                cachedNames[path] = repositoryName
+            }
+            return repositoryName
+        }
+
+        guard let path = Self.normalizedPath(cwd) else {
+            return Self.nonProjectDirectoryName
+        }
+        if let cached = cachedNames[path] { return cached }
+        if let learned = learnedRepositoryNames[path] {
+            cachedNames[path] = learned
+            return learned
+        }
+
+        let root = Self.managedClaudeWorktreeRoot(from: path)
+            ?? Self.rootGitProject(from: path)
+        let resolved = root
+            .map { URL(fileURLWithPath: $0).lastPathComponent }
+            .flatMap(nonEmptyTrimmed)
+            ?? Self.nonProjectDirectoryName
+        cachedNames[path] = resolved
+        return resolved
+    }
+
+    func titleContext(cwd: String, project: String) -> String {
+        guard project == Self.nonProjectDirectoryName,
+              let path = Self.normalizedPath(cwd),
+              let leaf = nonEmptyTrimmed(URL(fileURLWithPath: path).lastPathComponent)
+        else { return project }
+        return leaf
+    }
+
+    private static func normalizedPath(_ cwd: String) -> String? {
+        guard let cwd = nonEmptyTrimmed(cwd) else { return nil }
+        return URL(fileURLWithPath: cwd).standardizedFileURL.path
+    }
+
+    private static func repositoryName(from originURL: String) -> String? {
+        var value = originURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let separator = value.firstIndex(where: { $0 == "?" || $0 == "#" }) {
+            value = String(value[..<separator])
+        }
+        while value.last == "/" { value.removeLast() }
+        guard !value.isEmpty else { return nil }
+        let separator = value.lastIndex(where: { $0 == "/" || $0 == ":" })
+        var name = separator.map { String(value[value.index(after: $0)...]) } ?? value
+        if name.lowercased().hasSuffix(".git") {
+            name.removeLast(4)
+        }
+        return nonEmptyTrimmed(name)
+    }
+
+    private static func managedClaudeWorktreeRoot(from path: String) -> String? {
+        let marker = "/.claude/worktrees/"
+        guard let markerRange = path.range(of: marker) else { return nil }
+        let root = String(path[..<markerRange.lowerBound])
+        return nonEmptyTrimmed(root)
+    }
+
+    private static func rootGitProject(from path: String) -> String? {
+        var candidate = URL(fileURLWithPath: path).standardizedFileURL
+        while true {
+            let dotGit = candidate.appending(path: ".git")
+            var value = stat()
+            if lstat(dotGit.path, &value) == 0 {
+                switch value.st_mode & S_IFMT {
+                case S_IFDIR:
+                    return candidate.path
+                case S_IFREG:
+                    if let mainRoot = mainRepositoryRoot(
+                        worktreeRoot: candidate,
+                        dotGit: dotGit,
+                        fileSize: value.st_size
+                    ) {
+                        return mainRoot
+                    }
+                    return candidate.path
+                default:
+                    return candidate.path
+                }
+            }
+            let parent = candidate.deletingLastPathComponent()
+            if parent.path == candidate.path { return nil }
+            candidate = parent
+        }
+    }
+
+    private static func mainRepositoryRoot(
+        worktreeRoot: URL,
+        dotGit: URL,
+        fileSize: off_t
+    ) -> String? {
+        guard fileSize >= 0, fileSize <= 65_536,
+              let contents = try? String(contentsOf: dotGit, encoding: .utf8),
+              let pointer = contents
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .split(separator: "\n", maxSplits: 1)
+                .first,
+              pointer.hasPrefix("gitdir:")
+        else { return nil }
+        let rawPath = pointer.dropFirst("gitdir:".count)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawPath.isEmpty else { return nil }
+        let gitDirectory: URL
+        if rawPath.hasPrefix("/") {
+            gitDirectory = URL(fileURLWithPath: rawPath).standardizedFileURL
+        } else {
+            gitDirectory = worktreeRoot.appending(path: rawPath).standardizedFileURL
+        }
+        let worktreesDirectory = gitDirectory.deletingLastPathComponent()
+        guard worktreesDirectory.lastPathComponent == "worktrees" else { return nil }
+        return worktreesDirectory
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .path
+    }
+}
+
+private func nonEmptyTrimmed(_ value: String) -> String? {
+    let result = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return result.isEmpty ? nil : result
 }
 
 private func decodedClaudeProjectName(_ encoded: String) -> String {
@@ -2502,6 +4190,23 @@ private func sumClamped(_ values: [UInt64], overflowed: inout Bool) -> UInt64 {
         total = result.partialValue
     }
     return total
+}
+
+private func addingExact(_ lhs: UInt64, _ rhs: UInt64) throws -> UInt64 {
+    let result = lhs.addingReportingOverflow(rhs)
+    guard !result.overflow else { throw DatabaseAttributionMathError.overflow }
+    return result.partialValue
+}
+
+private func scaledDatabaseBytes(
+    logicalBytes: UInt64,
+    physicalBytes: UInt64,
+    totalEstimatedBytes: UInt64
+) throws -> UInt64 {
+    guard totalEstimatedBytes > 0 else { return 0 }
+    guard totalEstimatedBytes > physicalBytes else { return logicalBytes }
+    let product = logicalBytes.multipliedFullWidth(by: physicalBytes)
+    return totalEstimatedBytes.dividingFullWidth(product).quotient
 }
 
 private extension UInt64 {
