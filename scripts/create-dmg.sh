@@ -25,7 +25,7 @@ if [[ -n "$template_dmg" && ! -f "$template_dmg" ]]; then
     exit 1
 fi
 
-for command_name in ditto hdiutil osascript xcrun; do
+for command_name in ditto du hdiutil osascript xcrun; do
     command -v "$command_name" >/dev/null || {
         echo "Required command is unavailable: $command_name" >&2
         exit 1
@@ -52,6 +52,11 @@ if [[ -n "$template_dmg" ]]; then
     hdiutil convert "$template_dmg" \
         -format UDRW \
         -o "$read_write_dmg" >/dev/null
+    app_size_kib=$(du -sk "$app_path" | awk '{print $1}')
+    minimum_image_mib=$(((app_size_kib + 1023) / 1024 + 64))
+    hdiutil resize \
+        -size "${minimum_image_mib}m" \
+        "$read_write_dmg" >/dev/null
 else
     mkdir -p "$background_directory"
     ditto "$app_path" "$staging_directory/$app_name"
