@@ -109,6 +109,16 @@ targets:
         copy:
           destination: wrapper
           subpath: Contents/Library/LaunchDaemons
+      - target: FindDiskKillerClaudeCleanupHelper
+        link: false
+        embed: true
+        codeSign: true
+        copy:
+          destination: executables
+    postBuildScripts:
+      - name: Prepare Official Claude Cleanup Runtime
+        script: /bin/zsh "$SRCROOT/scripts/prepare-claude-cleanup-runtime.sh"
+        basedOnDependencyAnalysis: false
     scheme:
       gatherCoverageData: false
       testTargets: []
@@ -145,3 +155,15 @@ targets:
         product: FindDiskKillerTraceProtocol
       - package: FindDiskKillerPackage
         product: CFindDiskKillerTrace
+
+  FindDiskKillerClaudeCleanupHelper:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Sources/FindDiskKillerClaudeCleanupHelper
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jianyintang.FindDiskKiller.ClaudeCleanupHelper
+        PRODUCT_NAME: FindDiskKillerClaudeCleanupHelper
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+        SKIP_INSTALL: YES

@@ -606,9 +606,7 @@ struct AgentStorageView: View {
     @State private var projectionTask: Task<Void, Never>?
     @State private var isBatchSelecting = false
     @State private var selectedFamilyIDs: Set<String> = []
-    @State private var cleanupReview: AgentStorageCleanupReview?
-    @State private var cleanupResult: AgentStorageCleanupResult?
-    @State private var isCleaning = false
+    @State private var cleanupSession: AgentStorageCleanupSession?
     @FocusState private var tableHasFocus: Bool
     @FocusState private var focusedProvider: AgentStorageProvider?
     @AccessibilityFocusState private var accessibilityFocusedProvider: AgentStorageProvider?
@@ -690,23 +688,16 @@ struct AgentStorageView: View {
             .frame(minWidth: 560, minHeight: 560)
             .onDisappear { tableHasFocus = true }
         }
-        .sheet(item: $cleanupReview) { review in
+        .sheet(item: $cleanupSession) { session in
             AgentStorageCleanupReviewView(
-                review: review,
-                isCleaning: isCleaning,
-                cancel: { cleanupReview = nil },
-                confirm: { performCleanup(review) }
+                session: session,
+                close: { cleanupSession = nil },
+                didFinish: {
+                    exitBatchSelection()
+                    model.invalidateCachedResults()
+                }
             )
-            .interactiveDismissDisabled(isCleaning)
-        }
-        .alert(
-            L10n.text("清理完成"),
-            isPresented: cleanupResultIsPresented,
-            presenting: cleanupResult
-        ) { _ in
-            Button(L10n.text("完成")) { cleanupResult = nil }
-        } message: { result in
-            Text(cleanupResultMessage(result))
+            .interactiveDismissDisabled(session.phase == .deleting)
         }
     }
 
@@ -726,7 +717,7 @@ struct AgentStorageView: View {
         }
         .navigationTitle(selectedProvider?.displayName ?? L10n.text("AI 空间"))
         .modifier(AgentStorageFocusedActions(
-            refresh: { model.isScanning ? model.stop() : model.refresh() },
+            refresh: { model.isScanning ? model.stop() : model.startAnalysis() },
             back: exitAction
         ))
         .modifier(AgentStorageConditionalSearch(
@@ -763,14 +754,14 @@ struct AgentStorageView: View {
                 .accessibilityIdentifier("agent-storage-detail")
             }
 
-            if !model.requiresInitialAnalysisConsent {
+            if model.snapshot != nil || model.isScanning {
                 Button {
-                    model.isScanning ? model.stop() : model.refresh()
+                    model.isScanning ? model.stop() : model.startAnalysis()
                 } label: {
                     Image(systemName: model.isScanning ? "stop.fill" : "arrow.clockwise")
                 }
-                .help(L10n.text(model.isScanning ? "停止本次扫描" : "刷新 AI 空间"))
-                .accessibilityLabel(L10n.text(model.isScanning ? "停止本次扫描" : "刷新 AI 空间"))
+                .help(L10n.text(model.isScanning ? "停止本次扫描" : "重新分析"))
+                .accessibilityLabel(L10n.text(model.isScanning ? "停止本次扫描" : "重新分析"))
                 .accessibilityIdentifier("agent-storage-refresh")
             }
         }
@@ -888,7 +879,7 @@ struct AgentStorageView: View {
             } description: {
                 Text(L10n.text("分析 Codex 和 Claude 的聊天、子代理与全局运行时"))
             } actions: {
-                Button(L10n.text("重新扫描")) { model.refresh() }
+                Button(L10n.text("重新分析")) { model.startAnalysis() }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
@@ -1246,7 +1237,7 @@ struct AgentStorageView: View {
                 Text(model.isScanning ? L10n.text("正在分析 AI Agent 空间") : L10n.text("尚未分析"))
                 Spacer()
                 if !model.isScanning {
-                    Button(L10n.text("开始分析")) { model.refresh() }
+                    Button(L10n.text("开始分析")) { model.startAnalysis() }
                 }
             }
             .font(.caption)
@@ -1690,7 +1681,7 @@ struct AgentStorageView: View {
 
     private func batchReviewButton(_ review: AgentStorageCleanupReview) -> some View {
         Button {
-            cleanupReview = review
+            cleanupSession = AgentStorageCleanupSession(review: review)
         } label: {
             Label(L10n.text("检查并清理"), systemImage: "arrow.right.circle.fill")
         }
@@ -1948,7 +1939,7 @@ struct AgentStorageView: View {
             } description: {
                 Text(L10n.text("尚未生成可显示的结果"))
             } actions: {
-                Button(L10n.text("重新扫描")) { model.refresh() }
+                Button(L10n.text("重新分析")) { model.startAnalysis() }
             }
         case .failed(let message):
             ContentUnavailableView {
@@ -1956,17 +1947,17 @@ struct AgentStorageView: View {
             } description: {
                 Text(message)
             } actions: {
-                Button(L10n.text("重试")) { model.refresh() }
+                Button(L10n.text("重试")) { model.startAnalysis() }
             }
-        case .idle where model.requiresInitialAnalysisConsent:
-            AgentStorageAnalysisInvitation(start: model.refresh)
+        case .idle where model.requiresAnalysis:
+            AgentStorageAnalysisInvitation(start: model.startAnalysis)
         default:
             ContentUnavailableView {
                 Label(L10n.text("尚未分析 AI Agent 空间"), systemImage: "sparkles")
             } description: {
                 Text(L10n.text("分析 Codex 和 Claude 的聊天、子代理与全局运行时"))
             } actions: {
-                Button(L10n.text("开始分析")) { model.refresh() }
+                Button(L10n.text("开始分析")) { model.startAnalysis() }
             }
         }
     }
@@ -2461,15 +2452,6 @@ struct AgentStorageView: View {
         return visibleChatSummary.families.filter { eligibleIDs.contains($0.id) }
     }
 
-    private var cleanupResultIsPresented: Binding<Bool> {
-        Binding(
-            get: { cleanupResult != nil },
-            set: { isPresented in
-                if !isPresented { cleanupResult = nil }
-            }
-        )
-    }
-
     private func toggleBatchSelection() {
         if isBatchSelecting {
             exitBatchSelection()
@@ -2515,36 +2497,6 @@ struct AgentStorageView: View {
         selectedFamilyIDs = AgentStorageBatchSelectionEngine.togglingCurrentPage(
             selectedIDs: selectedFamilyIDs,
             pageFamilyIDs: currentPageFamilyIDs
-        )
-    }
-
-    private func performCleanup(_ review: AgentStorageCleanupReview) {
-        guard !isCleaning else { return }
-        isCleaning = true
-        Task { @MainActor in
-            let result = await AgentStorageCleanupExecutor.moveToTrash(review)
-            isCleaning = false
-            cleanupReview = nil
-            cleanupResult = result
-            exitBatchSelection()
-            model.refresh()
-        }
-    }
-
-    private func cleanupResultMessage(_ result: AgentStorageCleanupResult) -> String {
-        if let error = result.errorDescription {
-            return L10n.format(
-                "已移到废纸篓 %@；%d 个文件未处理。%@",
-                AgentStorageSizeFormatter.string(result.movedBytes),
-                result.skippedFileCount,
-                error
-            )
-        }
-        return L10n.format(
-            "已将 %d 个文件（%@）移到废纸篓；%d 个变化或不可用的文件已跳过。",
-            result.movedFileCount,
-            AgentStorageSizeFormatter.string(result.movedBytes),
-            result.skippedFileCount
         )
     }
 

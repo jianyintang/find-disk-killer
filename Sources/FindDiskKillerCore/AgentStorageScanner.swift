@@ -356,7 +356,7 @@ private struct AgentStorageScanEngine {
                     completedScopes: index,
                     totalScopes: metadataScopes.count
                 )
-            case .claudeCode:
+            case .claudeCode, .claudeDesktopAgent:
                 try loadClaudeMetadata(
                     from: scope,
                     completedScopes: index,
@@ -520,7 +520,7 @@ private struct AgentStorageScanEngine {
                 ] where fileManager.fileExists(atPath: desktopRoot.path) {
                     let nestedHomes = discoverNestedClaudeHomes(in: desktopRoot)
                     candidates.append(contentsOf: nestedHomes.map {
-                        ($0, .claude, .claudeCode, "Claude Desktop Agent")
+                        ($0, .claude, .claudeDesktopAgent, "Claude Desktop Agent")
                     })
                 }
             }
@@ -558,6 +558,8 @@ private struct AgentStorageScanEngine {
                 path: resolved.path,
                 isAvailable: true,
                 isSessionSource: kind == .codexHome || kind == .claudeCode
+                    || kind == .claudeDesktopAgent,
+                kind: kind.publicKind
             ))
         }
         return result.sorted { $0.root.path < $1.root.path }
@@ -762,6 +764,7 @@ private struct AgentStorageScanEngine {
                     nativeThreadID: rootID,
                     title: rootNode.title,
                     project: project,
+                    projectPath: root.cwd,
                     updatedAt: root.updatedAt,
                     isArchived: root.isArchived,
                     mainNodeID: rootNode.id,
@@ -942,6 +945,7 @@ private struct AgentStorageScanEngine {
                 nativeThreadID: sessionID,
                 title: title,
                 project: project,
+                projectPath: cwd,
                 updatedAt: preferred.metadata.updatedAt,
                 isArchived: false,
                 mainNodeID: rootNodeID,
@@ -1421,7 +1425,7 @@ private struct AgentStorageScanEngine {
                 components: components,
                 scope: scope
             )
-        case .claudeCode:
+        case .claudeCode, .claudeDesktopAgent:
             return classifyClaude(
                 path: url.path,
                 relativePath: relative,
@@ -2211,7 +2215,7 @@ private struct AgentStorageScanEngine {
         node.allocatedBytes = node.allocatedBytes.addingClamped(entry.allocatedBytes)
         node.artifactCount += 1
         node.path = node.path ?? path
-        if let artifact = cleanupArtifact(for: entry, path: path) {
+        if let artifact = cleanupArtifact(for: entry, path: path, category: category) {
             node.cleanupArtifacts.append(artifact)
         }
         family.nodes[nodeID] = node
@@ -2241,7 +2245,7 @@ private struct AgentStorageScanEngine {
             .addingClamped(entry.allocatedBytes)
         family.artifactCount += 1
         family.path = family.path ?? path
-        if let artifact = cleanupArtifact(for: entry, path: path) {
+        if let artifact = cleanupArtifact(for: entry, path: path, category: category) {
             family.cleanupArtifacts.append(artifact)
         }
         family.composition[category, default: 0] = family.composition[category, default: 0]
@@ -2251,7 +2255,8 @@ private struct AgentStorageScanEngine {
 
     private func cleanupArtifact(
         for entry: PhysicalEntry,
-        path: String
+        path: String,
+        category: AgentStorageArtifactCategory
     ) -> AgentStorageCleanupArtifact? {
         guard entry.isStable, entry.linkCount == 1,
               let observation = entry.observations.first(where: { $0.path == path }),
@@ -2265,7 +2270,8 @@ private struct AgentStorageScanEngine {
             logicalBytes: signature.logicalBytes,
             blocks: signature.blocks,
             modifiedSeconds: signature.modifiedSeconds,
-            modifiedNanoseconds: signature.modifiedNanoseconds
+            modifiedNanoseconds: signature.modifiedNanoseconds,
+            category: category
         )
     }
 
@@ -2347,7 +2353,10 @@ private struct AgentStorageScanEngine {
                 path: family.path,
                 subagents: subagents,
                 composition: family.composition,
-                cleanupArtifacts: cleanupArtifacts
+                cleanupArtifacts: cleanupArtifacts,
+                sourceKind: scopes.first(where: { $0.id == family.sourceID })?.kind.publicKind,
+                sourcePath: scopes.first(where: { $0.id == family.sourceID })?.root.path,
+                projectPath: family.projectPath
             )
         }.filter { $0.attributedBytes > 0 }.sorted {
             if $0.updatedAt == $1.updatedAt { return $0.id < $1.id }
@@ -2536,6 +2545,17 @@ private enum ScanScopeKind: Sendable {
     case codexDesktop
     case claudeCode
     case claudeDesktop
+    case claudeDesktopAgent
+
+    var publicKind: AgentStorageSourceKind {
+        switch self {
+        case .codexHome: .codexHome
+        case .codexDesktop: .codexDesktop
+        case .claudeCode: .claudeCode
+        case .claudeDesktop: .claudeDesktop
+        case .claudeDesktopAgent: .claudeDesktopAgent
+        }
+    }
 }
 
 private struct ProviderMetadataOutcome: Sendable {
@@ -3015,6 +3035,7 @@ private struct MutableFamily: Sendable {
     let nativeThreadID: String
     let title: String
     let project: String
+    let projectPath: String?
     var updatedAt: Date
     let isArchived: Bool
     let mainNodeID: String

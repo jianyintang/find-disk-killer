@@ -57,6 +57,9 @@ let package = Package(
                 "FindDiskKillerTraceProtocol"
             ]
         ),
+        .executableTarget(
+            name: "FindDiskKillerClaudeCleanupHelper"
+        ),
         .testTarget(
             name: "FindDiskKillerCoreTests",
             dependencies: [

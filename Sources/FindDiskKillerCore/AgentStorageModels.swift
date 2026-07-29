@@ -7,6 +7,14 @@ public enum AgentStorageProvider: String, CaseIterable, Codable, Hashable, Ident
     public var id: String { rawValue }
 }
 
+public enum AgentStorageSourceKind: String, Codable, Hashable, Sendable {
+    case codexHome
+    case codexDesktop
+    case claudeCode
+    case claudeDesktop
+    case claudeDesktopAgent
+}
+
 public enum AgentStorageProviderSupportStatus: String, Codable, Hashable, Sendable {
     case supported
     case partial
@@ -144,6 +152,7 @@ public struct AgentStorageSource: Identifiable, Codable, Hashable, Sendable {
     public let path: String
     public let isAvailable: Bool
     public let isSessionSource: Bool
+    public let kind: AgentStorageSourceKind?
 
     public init(
         id: String,
@@ -151,7 +160,8 @@ public struct AgentStorageSource: Identifiable, Codable, Hashable, Sendable {
         displayName: String,
         path: String,
         isAvailable: Bool,
-        isSessionSource: Bool
+        isSessionSource: Bool,
+        kind: AgentStorageSourceKind? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -159,6 +169,7 @@ public struct AgentStorageSource: Identifiable, Codable, Hashable, Sendable {
         self.path = path
         self.isAvailable = isAvailable
         self.isSessionSource = isSessionSource
+        self.kind = kind
     }
 }
 
@@ -215,6 +226,7 @@ public struct AgentStorageCleanupArtifact: Codable, Hashable, Sendable {
     public let blocks: Int64
     public let modifiedSeconds: Int64
     public let modifiedNanoseconds: Int64
+    public let category: AgentStorageArtifactCategory?
 
     public init(
         path: String,
@@ -224,7 +236,8 @@ public struct AgentStorageCleanupArtifact: Codable, Hashable, Sendable {
         logicalBytes: Int64,
         blocks: Int64,
         modifiedSeconds: Int64,
-        modifiedNanoseconds: Int64
+        modifiedNanoseconds: Int64,
+        category: AgentStorageArtifactCategory? = nil
     ) {
         self.path = path
         self.allocatedBytes = allocatedBytes
@@ -234,6 +247,7 @@ public struct AgentStorageCleanupArtifact: Codable, Hashable, Sendable {
         self.blocks = blocks
         self.modifiedSeconds = modifiedSeconds
         self.modifiedNanoseconds = modifiedNanoseconds
+        self.category = category
     }
 }
 
@@ -256,6 +270,9 @@ public struct AgentStorageThreadFamily: Identifiable, Codable, Hashable, Sendabl
     public let subagents: [AgentStorageThreadNode]
     public let composition: [AgentStorageArtifactCategory: UInt64]
     public let cleanupArtifacts: [AgentStorageCleanupArtifact]
+    public let sourceKind: AgentStorageSourceKind?
+    public let sourcePath: String?
+    public let projectPath: String?
 
     public init(
         id: String,
@@ -275,7 +292,10 @@ public struct AgentStorageThreadFamily: Identifiable, Codable, Hashable, Sendabl
         path: String?,
         subagents: [AgentStorageThreadNode],
         composition: [AgentStorageArtifactCategory: UInt64],
-        cleanupArtifacts: [AgentStorageCleanupArtifact] = []
+        cleanupArtifacts: [AgentStorageCleanupArtifact] = [],
+        sourceKind: AgentStorageSourceKind? = nil,
+        sourcePath: String? = nil,
+        projectPath: String? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -295,6 +315,9 @@ public struct AgentStorageThreadFamily: Identifiable, Codable, Hashable, Sendabl
         self.subagents = subagents
         self.composition = composition
         self.cleanupArtifacts = cleanupArtifacts
+        self.sourceKind = sourceKind
+        self.sourcePath = sourcePath
+        self.projectPath = projectPath
     }
 
     public var allocatedBytes: UInt64 {
