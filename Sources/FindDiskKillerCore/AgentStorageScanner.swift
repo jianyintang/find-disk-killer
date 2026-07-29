@@ -119,19 +119,15 @@ public actor AgentStorageScanner {
     ) async throws -> AgentStorageSnapshot {
         let configuration = configuration
         let interruptRegistry = AgentSQLiteInterruptRegistry()
-        let task = Task.detached(priority: .utility) {
+        return try await withTaskCancellationHandler {
             var engine = AgentStorageScanEngine(
                 configuration: configuration,
                 progressHandler: progress,
                 interruptRegistry: interruptRegistry
             )
             return try await engine.scan()
-        }
-        return try await withTaskCancellationHandler {
-            try await task.value
         } onCancel: {
             interruptRegistry.cancelAndInterrupt()
-            task.cancel()
         }
     }
 }

@@ -47,6 +47,31 @@ import Testing
     })
 }
 
+@Test func agentStorageScannerSupportsRepeatedSequentialScans() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let project = root.appending(
+        path: ".claude/projects/-tmp-repeated-scan",
+        directoryHint: .isDirectory
+    )
+    try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+    let sessionID = "32000000-0000-0000-0000-000000000001"
+    try """
+    {"type":"user","sessionId":"\(sessionID)","cwd":"/tmp/repeated-scan"}
+    """.data(using: .utf8)!.write(to: project.appending(path: "\(sessionID).jsonl"))
+    let scanner = AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    ))
+
+    let first = try await scanner.scan()
+    let second = try await scanner.scan()
+
+    #expect(first.coverage.measuredBytes == second.coverage.measuredBytes)
+    #expect(first.families.map(\.nativeThreadID) == second.families.map(\.nativeThreadID))
+    #expect(second.coverage.isPhysicalMeasurementComplete)
+}
+
 @Test func agentStorageScannerOnlyOffersStableSingleLinkThreadFilesForCleanup() async throws {
     let root = makeTemporaryRoot()
     defer { try? FileManager.default.removeItem(at: root) }
