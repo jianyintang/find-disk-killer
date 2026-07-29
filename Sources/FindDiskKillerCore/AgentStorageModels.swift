@@ -23,6 +23,83 @@ public enum AgentStorageProviderSupportStatus: String, Codable, Hashable, Sendab
     case notInstalled
 }
 
+public enum AgentStorageAttributionStatus: String, Codable, Hashable, Sendable {
+    case complete
+    case partial
+    case unavailable
+    case noConversationSource
+}
+
+public enum AgentStorageDiagnosticKind: String, Codable, Hashable, Sendable {
+    case sourceUnreadable
+    case sourceUnsupportedFormat
+    case mainTranscriptUnreadable
+    case sessionIdentityMismatch
+    case malformedTranscriptRecords
+    case subagentTranscriptUnverified
+    case subagentMetadataOnly
+    case ambiguousToolResult
+    case databaseRecordUnverified
+    case databaseAttributionUnavailable
+    case relationshipConflict
+    case filesystemEntrySkipped
+    case changedDuringScan
+}
+
+public enum AgentStorageDiagnosticArea: String, Codable, Hashable, Sendable {
+    case mainChat
+    case subagent
+    case toolResult
+    case dataSource
+    case database
+    case fileSystem
+}
+
+public enum AgentStorageDiagnosticImpact: String, Codable, Hashable, Sendable {
+    case chatDiscovery
+    case chatMetadata
+    case threadComposition
+    case databaseAttribution
+    case physicalMeasurement
+}
+
+public struct AgentStorageDiagnostic: Identifiable, Codable, Hashable, Sendable {
+    public let id: String
+    public let provider: AgentStorageProvider
+    public let sourceID: String
+    public let sourceKind: AgentStorageSourceKind?
+    public let kind: AgentStorageDiagnosticKind
+    public let area: AgentStorageDiagnosticArea
+    public let impact: AgentStorageDiagnosticImpact
+    public let affectedEntityCount: Int
+    public let affectedAllocatedBytes: UInt64?
+    public let relativePath: String?
+
+    public init(
+        id: String,
+        provider: AgentStorageProvider,
+        sourceID: String,
+        sourceKind: AgentStorageSourceKind? = nil,
+        kind: AgentStorageDiagnosticKind,
+        area: AgentStorageDiagnosticArea,
+        impact: AgentStorageDiagnosticImpact,
+        affectedEntityCount: Int = 1,
+        affectedAllocatedBytes: UInt64? = nil,
+        relativePath: String? = nil
+    ) {
+        self.id = id
+        self.provider = provider
+        self.sourceID = sourceID
+        self.sourceKind = sourceKind
+        self.kind = kind
+        self.area = area
+        self.impact = impact
+        self.affectedEntityCount = max(1, affectedEntityCount)
+        self.affectedAllocatedBytes = affectedAllocatedBytes
+        self.relativePath = relativePath
+    }
+}
+
 public enum AgentStorageDatabaseAttributionStatus: String, Codable, Hashable, Sendable {
     case completed
     case unsupportedFormat
@@ -142,6 +219,13 @@ public struct AgentStorageCoverage: Codable, Equatable, Sendable {
         self.overflowed = overflowed
         self.reconciliationDelta = reconciliationDelta
         self.isComplete = isComplete
+    }
+
+    public var isPhysicalMeasurementComplete: Bool {
+        skippedEntryCount == 0
+            && unstableEntryCount == 0
+            && !overflowed
+            && reconciliationDelta == 0
     }
 }
 
@@ -437,6 +521,9 @@ public struct AgentStorageProviderSummary: Identifiable, Codable, Hashable, Send
     public let supportStatus: AgentStorageProviderSupportStatus
     public let unsupportedSourceCount: Int
     public let unreadableSourceCount: Int
+    public let attributionStatus: AgentStorageAttributionStatus
+    public let diagnosticCounts: [AgentStorageDiagnosticKind: Int]
+    public let knownAffectedBytes: UInt64
 
     public init(
         provider: AgentStorageProvider,
@@ -455,7 +542,10 @@ public struct AgentStorageProviderSummary: Identifiable, Codable, Hashable, Send
         unstableEntryCount: Int = 0,
         supportStatus: AgentStorageProviderSupportStatus = .supported,
         unsupportedSourceCount: Int = 0,
-        unreadableSourceCount: Int = 0
+        unreadableSourceCount: Int = 0,
+        attributionStatus: AgentStorageAttributionStatus? = nil,
+        diagnosticCounts: [AgentStorageDiagnosticKind: Int] = [:],
+        knownAffectedBytes: UInt64 = 0
     ) {
         self.provider = provider
         self.exclusiveBytes = exclusiveBytes
@@ -474,6 +564,76 @@ public struct AgentStorageProviderSummary: Identifiable, Codable, Hashable, Send
         self.supportStatus = supportStatus
         self.unsupportedSourceCount = unsupportedSourceCount
         self.unreadableSourceCount = unreadableSourceCount
+        self.attributionStatus = attributionStatus ?? Self.attributionStatus(for: supportStatus)
+        self.diagnosticCounts = diagnosticCounts
+        self.knownAffectedBytes = knownAffectedBytes
+    }
+
+    private static func attributionStatus(
+        for supportStatus: AgentStorageProviderSupportStatus
+    ) -> AgentStorageAttributionStatus {
+        switch supportStatus {
+        case .supported: .complete
+        case .partial: .partial
+        case .unsupportedFormat, .notInstalled: .unavailable
+        case .noConversationSource: .noConversationSource
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider, exclusiveBytes, chatBytes, globalBytes, unattributedBytes
+        case mainThreadBytes, subagentBytes, familyOtherBytes, databaseAttributedBytes
+        case threadCount, subagentCount, sourceCount, issueCount, unstableEntryCount
+        case supportStatus, unsupportedSourceCount, unreadableSourceCount
+        case attributionStatus, diagnosticCounts, knownAffectedBytes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        provider = try values.decode(AgentStorageProvider.self, forKey: .provider)
+        exclusiveBytes = try values.decode(UInt64.self, forKey: .exclusiveBytes)
+        chatBytes = try values.decode(UInt64.self, forKey: .chatBytes)
+        globalBytes = try values.decode(UInt64.self, forKey: .globalBytes)
+        unattributedBytes = try values.decode(UInt64.self, forKey: .unattributedBytes)
+        mainThreadBytes = try values.decode(UInt64.self, forKey: .mainThreadBytes)
+        subagentBytes = try values.decode(UInt64.self, forKey: .subagentBytes)
+        familyOtherBytes = try values.decode(UInt64.self, forKey: .familyOtherBytes)
+        databaseAttributedBytes = try values.decodeIfPresent(
+            UInt64.self,
+            forKey: .databaseAttributedBytes
+        ) ?? 0
+        threadCount = try values.decode(Int.self, forKey: .threadCount)
+        subagentCount = try values.decode(Int.self, forKey: .subagentCount)
+        sourceCount = try values.decode(Int.self, forKey: .sourceCount)
+        issueCount = try values.decode(Int.self, forKey: .issueCount)
+        unstableEntryCount = try values.decodeIfPresent(
+            Int.self,
+            forKey: .unstableEntryCount
+        ) ?? 0
+        supportStatus = try values.decode(
+            AgentStorageProviderSupportStatus.self,
+            forKey: .supportStatus
+        )
+        unsupportedSourceCount = try values.decodeIfPresent(
+            Int.self,
+            forKey: .unsupportedSourceCount
+        ) ?? 0
+        unreadableSourceCount = try values.decodeIfPresent(
+            Int.self,
+            forKey: .unreadableSourceCount
+        ) ?? 0
+        attributionStatus = try values.decodeIfPresent(
+            AgentStorageAttributionStatus.self,
+            forKey: .attributionStatus
+        ) ?? Self.attributionStatus(for: supportStatus)
+        diagnosticCounts = try values.decodeIfPresent(
+            [AgentStorageDiagnosticKind: Int].self,
+            forKey: .diagnosticCounts
+        ) ?? [:]
+        knownAffectedBytes = try values.decodeIfPresent(
+            UInt64.self,
+            forKey: .knownAffectedBytes
+        ) ?? 0
     }
 }
 
@@ -552,6 +712,7 @@ public struct AgentStorageSnapshot: Codable, Equatable, Sendable {
     public let crossAgentSharedBytes: UInt64
     public let providerDatasets: [AgentStorageProviderDataset]
     public let databaseAttributions: [AgentStorageDatabaseAttributionSummary]
+    public let diagnostics: [AgentStorageDiagnostic]
     public let chatBytes: UInt64
     public let globalBytes: UInt64
     public let unattributedBytes: UInt64
@@ -567,7 +728,8 @@ public struct AgentStorageSnapshot: Codable, Equatable, Sendable {
         coverage: AgentStorageCoverage,
         crossAgentSharedBytes: UInt64,
         providerDatasets: [AgentStorageProviderDataset]? = nil,
-        databaseAttributions: [AgentStorageDatabaseAttributionSummary] = []
+        databaseAttributions: [AgentStorageDatabaseAttributionSummary] = [],
+        diagnostics: [AgentStorageDiagnostic] = []
     ) {
         self.scannedAt = scannedAt
         self.families = families
@@ -586,6 +748,7 @@ public struct AgentStorageSnapshot: Codable, Equatable, Sendable {
             )
         }
         self.databaseAttributions = databaseAttributions
+        self.diagnostics = diagnostics
         chatBytes = families.reduce(0) { $0.addingClamped($1.attributedBytes) }
         globalBytes = globalItems.reduce(0) { $0.addingClamped($1.allocatedBytes) }
         unattributedBytes = unattributedItems.reduce(0) { $0.addingClamped($1.allocatedBytes) }
@@ -594,6 +757,44 @@ public struct AgentStorageSnapshot: Codable, Equatable, Sendable {
 
     public func dataset(for provider: AgentStorageProvider) -> AgentStorageProviderDataset? {
         providerDatasets.first { $0.provider == provider }
+    }
+
+    public func diagnostics(for provider: AgentStorageProvider) -> [AgentStorageDiagnostic] {
+        diagnostics.filter { $0.provider == provider }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scannedAt, families, globalItems, unattributedItems, providers, sources
+        case coverage, crossAgentSharedBytes, providerDatasets, databaseAttributions, diagnostics
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            scannedAt: try values.decode(Date.self, forKey: .scannedAt),
+            families: try values.decode([AgentStorageThreadFamily].self, forKey: .families),
+            globalItems: try values.decode([AgentStorageGlobalItem].self, forKey: .globalItems),
+            unattributedItems: try values.decode(
+                [AgentStorageUnattributedItem].self,
+                forKey: .unattributedItems
+            ),
+            providers: try values.decode([AgentStorageProviderSummary].self, forKey: .providers),
+            sources: try values.decode([AgentStorageSource].self, forKey: .sources),
+            coverage: try values.decode(AgentStorageCoverage.self, forKey: .coverage),
+            crossAgentSharedBytes: try values.decode(UInt64.self, forKey: .crossAgentSharedBytes),
+            providerDatasets: try values.decodeIfPresent(
+                [AgentStorageProviderDataset].self,
+                forKey: .providerDatasets
+            ),
+            databaseAttributions: try values.decodeIfPresent(
+                [AgentStorageDatabaseAttributionSummary].self,
+                forKey: .databaseAttributions
+            ) ?? [],
+            diagnostics: try values.decodeIfPresent(
+                [AgentStorageDiagnostic].self,
+                forKey: .diagnostics
+            ) ?? []
+        )
     }
 }
 

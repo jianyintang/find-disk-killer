@@ -251,6 +251,7 @@ private struct AgentStorageScanEngine {
     private var overflowed = false
     private var providerIssueCounts: [AgentStorageProvider: Int] = [:]
     private var providerMetadataOutcomes: [AgentStorageProvider: ProviderMetadataOutcome] = [:]
+    private var diagnosticDrafts: [AgentStorageDiagnosticKey: AgentStorageDiagnosticDraft] = [:]
     private var databaseAttributions: [AgentStorageDatabaseAttributionSummary] = []
     private var pendingDatabaseProjections: [PendingDatabaseAttribution] = []
     private var projectResolver = AgentStorageProjectResolver()
@@ -459,6 +460,19 @@ private struct AgentStorageScanEngine {
             current.merge(outcome)
             providerMetadataOutcomes[provider] = current
         }
+        for (key, incoming) in other.diagnosticDrafts {
+            if var current = diagnosticDrafts[key] {
+                current.affectedEntityCount += incoming.affectedEntityCount
+                current.affectedAllocatedBytes = mergeKnownBytes(
+                    current.affectedAllocatedBytes,
+                    incoming.affectedAllocatedBytes
+                )
+                current.absolutePaths.formUnion(incoming.absolutePaths)
+                diagnosticDrafts[key] = current
+            } else {
+                diagnosticDrafts[key] = incoming
+            }
+        }
         databaseAttributions.append(contentsOf: other.databaseAttributions)
         pendingDatabaseProjections.append(contentsOf: other.pendingDatabaseProjections)
         measuredEntryCount = physicalLedger.count
@@ -632,6 +646,14 @@ private struct AgentStorageScanEngine {
         guard fileManager.fileExists(atPath: databaseURL.path) else {
             if fileManager.fileExists(atPath: scope.root.appending(path: "sessions").path) {
                 recordMetadataOutcome(.unsupported, provider: .codex)
+                recordDiagnostic(
+                    provider: .codex,
+                    sourceID: scope.id,
+                    kind: .sourceUnsupportedFormat,
+                    area: .dataSource,
+                    impact: .chatDiscovery,
+                    absolutePath: databaseURL.path
+                )
             } else {
                 recordMetadataOutcome(.empty, provider: .codex)
             }
@@ -657,6 +679,16 @@ private struct AgentStorageScanEngine {
             let edges = snapshot.edges
             if snapshot.issueCount > 0 {
                 providerIssueCounts[.codex, default: 0] += snapshot.issueCount
+                recordDiagnostic(
+                    provider: .codex,
+                    sourceID: scope.id,
+                    kind: .databaseRecordUnverified,
+                    area: .database,
+                    impact: .chatDiscovery,
+                    affectedEntityCount: snapshot.issueCount,
+                    absolutePath: databaseURL.path,
+                    entityKey: "thread-records"
+                )
             }
 
             // Older rows can be missing repository metadata even when another thread from the
@@ -730,6 +762,16 @@ private struct AgentStorageScanEngine {
             }
             if !invalidThreadIDs.isEmpty {
                 providerIssueCounts[.codex, default: 0] += invalidThreadIDs.count
+                recordDiagnostic(
+                    provider: .codex,
+                    sourceID: scope.id,
+                    kind: .relationshipConflict,
+                    area: .subagent,
+                    impact: .threadComposition,
+                    affectedEntityCount: invalidThreadIDs.count,
+                    absolutePath: databaseURL.path,
+                    entityKey: "thread-relationships"
+                )
             }
             codexRelationshipConflictIDs[scope.id] = invalidThreadIDs
 
@@ -804,8 +846,24 @@ private struct AgentStorageScanEngine {
             throw CancellationError()
         } catch AgentSQLiteError.unsupportedSchema(_) {
             recordMetadataOutcome(.unsupported, provider: .codex)
+            recordDiagnostic(
+                provider: .codex,
+                sourceID: scope.id,
+                kind: .sourceUnsupportedFormat,
+                area: .dataSource,
+                impact: .chatDiscovery,
+                absolutePath: databaseURL.path
+            )
         } catch {
             recordMetadataOutcome(.unreadable, provider: .codex)
+            recordDiagnostic(
+                provider: .codex,
+                sourceID: scope.id,
+                kind: .sourceUnreadable,
+                area: .dataSource,
+                impact: .chatDiscovery,
+                absolutePath: databaseURL.path
+            )
         }
     }
 
@@ -822,6 +880,14 @@ private struct AgentStorageScanEngine {
             options: [.skipsSubdirectoryDescendants]
         ) else {
             recordSkipped(provider: .claude)
+            recordDiagnostic(
+                provider: .claude,
+                sourceID: scope.id,
+                kind: .sourceUnreadable,
+                area: .dataSource,
+                impact: .chatDiscovery,
+                absolutePath: projectsURL.path
+            )
             return
         }
 
@@ -881,19 +947,67 @@ private struct AgentStorageScanEngine {
                 } catch {
                     providerIssueCounts[.claude, default: 0] += 1
                     foundUnreadableData = true
+                    recordDiagnostic(
+                        provider: .claude,
+                        sourceID: scope.id,
+                        kind: .mainTranscriptUnreadable,
+                        area: .mainChat,
+                        impact: .chatDiscovery,
+                        absolutePath: file.path
+                    )
                     continue
                 }
                 if metadata.validJSONObjectCount > 0,
                    metadata.supportedRecordCount == 0 {
                     foundUnsupportedFormat = true
+                    recordDiagnostic(
+                        provider: .claude,
+                        sourceID: scope.id,
+                        kind: .sourceUnsupportedFormat,
+                        area: .mainChat,
+                        impact: .chatDiscovery,
+                        absolutePath: file.path
+                    )
+                    continue
+                }
+                if metadata.validJSONObjectCount == 0,
+                   metadata.malformedLineCount > 0 {
+                    foundUnreadableData = true
+                    providerIssueCounts[.claude, default: 0] += 1
+                    recordDiagnostic(
+                        provider: .claude,
+                        sourceID: scope.id,
+                        kind: .mainTranscriptUnreadable,
+                        area: .mainChat,
+                        impact: .chatDiscovery,
+                        affectedEntityCount: metadata.malformedLineCount,
+                        absolutePath: file.path
+                    )
                     continue
                 }
                 if metadata.malformedLineCount > 0 {
                     foundUnreadableData = true
+                    recordDiagnostic(
+                        provider: .claude,
+                        sourceID: scope.id,
+                        kind: .malformedTranscriptRecords,
+                        area: .mainChat,
+                        impact: .chatMetadata,
+                        affectedEntityCount: metadata.malformedLineCount,
+                        absolutePath: file.path
+                    )
                 }
                 guard metadata.sessionIDs == [sessionID] else {
                     providerIssueCounts[.claude, default: 0] += 1
                     foundUnreadableData = true
+                    recordDiagnostic(
+                        provider: .claude,
+                        sourceID: scope.id,
+                        kind: .sessionIdentityMismatch,
+                        area: .mainChat,
+                        impact: .chatDiscovery,
+                        absolutePath: file.path
+                    )
                     continue
                 }
                 recordsBySession[sessionID, default: []].append(MainRecord(
@@ -994,6 +1108,16 @@ private struct AgentStorageScanEngine {
                 }
                 if !candidate.jsonlFiles.isEmpty, validJSONLs.isEmpty {
                     providerIssueCounts[.claude, default: 0] += 1
+                    recordDiagnostic(
+                        provider: .claude,
+                        sourceID: scope.id,
+                        kind: .subagentTranscriptUnverified,
+                        area: .subagent,
+                        impact: .threadComposition,
+                        affectedEntityCount: candidate.jsonlFiles.count,
+                        absolutePath: candidate.jsonlFiles.first?.path,
+                        entityKey: agentID
+                    )
                     continue
                 }
                 if validJSONLs.isEmpty, candidate.metadataFiles.isEmpty { continue }
@@ -1021,6 +1145,16 @@ private struct AgentStorageScanEngine {
                 validAgentTranscripts[agentID] = validJSONLs
                 if validJSONLs.isEmpty {
                     providerIssueCounts[.claude, default: 0] += 1
+                    recordDiagnostic(
+                        provider: .claude,
+                        sourceID: scope.id,
+                        kind: .subagentMetadataOnly,
+                        area: .subagent,
+                        impact: .threadComposition,
+                        affectedEntityCount: candidate.metadataFiles.count,
+                        absolutePath: candidate.metadataFiles.first?.path,
+                        entityKey: agentID
+                    )
                 }
             }
 
@@ -1054,6 +1188,17 @@ private struct AgentStorageScanEngine {
             for files in toolFilesByName.values {
                 if files.count > 1 {
                     providerIssueCounts[.claude, default: 0] += 1
+                    recordDiagnostic(
+                        provider: .claude,
+                        sourceID: scope.id,
+                        kind: .ambiguousToolResult,
+                        area: .toolResult,
+                        impact: .threadComposition,
+                        affectedEntityCount: files.count,
+                        absolutePath: files.first?.path,
+                        absolutePaths: files.map(\.path),
+                        entityKey: files.first?.lastPathComponent
+                    )
                 }
                 for file in files {
                     let path = file.standardizedFileURL.path
@@ -1347,6 +1492,7 @@ private struct AgentStorageScanEngine {
                 }
                 existing.allocatedBytes = max(existing.allocatedBytes, allocated)
                 existing.logicalBytes = max(existing.logicalBytes, logical)
+                existing.isStable = false
             }
             existing.updatedAt = max(existing.updatedAt, updatedAt)
             existing.claims.append(claim)
@@ -2391,10 +2537,8 @@ private struct AgentStorageScanEngine {
         let reconciliationDelta = measured >= classified
             ? measured - classified
             : classified - measured
-        let metadataIssueCount = providerMetadataOutcomes.values.reduce(0) {
-            $0 + $1.unsupportedCount + $1.unreadableCount
-        }
-        let providerIssueCount = providerIssueCounts.values.reduce(0, +) + metadataIssueCount
+        let diagnostics = finalizedDiagnostics()
+        let providerIssueCount = diagnostics.count
         let coverage = AgentStorageCoverage(
             measuredBytes: measured,
             classifiedBytes: classified,
@@ -2441,9 +2585,8 @@ private struct AgentStorageScanEngine {
             let sessionSourceCount = sources.filter {
                 $0.provider == provider && $0.isSessionSource
             }.count
-            let issueCount = providerIssueCounts[provider, default: 0]
-                + metadataOutcome.unsupportedCount
-                + metadataOutcome.unreadableCount
+            let providerDiagnostics = diagnostics.filter { $0.provider == provider }
+            let issueCount = providerDiagnostics.count
             let databaseIssueCount = databaseAttributions.filter {
                 $0.provider == provider && $0.status != .completed
             }.count
@@ -2483,11 +2626,20 @@ private struct AgentStorageScanEngine {
                 threadCount: providerFamilies.count,
                 subagentCount: providerFamilies.reduce(0) { $0 + $1.subagentCount },
                 sourceCount: sourceCount,
-                issueCount: issueCount + databaseIssueCount,
+                issueCount: issueCount,
                 unstableEntryCount: unstableEntries.count(for: provider),
                 supportStatus: supportStatus,
                 unsupportedSourceCount: metadataOutcome.unsupportedCount,
-                unreadableSourceCount: metadataOutcome.unreadableCount
+                unreadableSourceCount: metadataOutcome.unreadableCount,
+                attributionStatus: attributionStatus(
+                    supportStatus: supportStatus,
+                    diagnostics: providerDiagnostics,
+                    hasConversationSource: !providerFamilies.isEmpty
+                        || metadataOutcome.supportedCount > 0
+                ),
+                diagnosticCounts: Dictionary(grouping: providerDiagnostics, by: \.kind)
+                    .mapValues(\.count),
+                knownAffectedBytes: uniqueKnownAffectedBytes(providerDiagnostics)
             )
         }
 
@@ -2503,8 +2655,122 @@ private struct AgentStorageScanEngine {
                 .filter { $0.category == .crossAgentShared }
                 .reduce(0) { $0.addingClamped($1.allocatedBytes) },
             providerDatasets: providerDatasets,
-            databaseAttributions: databaseAttributions.sorted { $0.id < $1.id }
+            databaseAttributions: databaseAttributions.sorted { $0.id < $1.id },
+            diagnostics: diagnostics
         )
+    }
+
+    private func attributionStatus(
+        supportStatus: AgentStorageProviderSupportStatus,
+        diagnostics: [AgentStorageDiagnostic],
+        hasConversationSource: Bool
+    ) -> AgentStorageAttributionStatus {
+        switch supportStatus {
+        case .notInstalled, .unsupportedFormat: return .unavailable
+        case .noConversationSource: return .noConversationSource
+        case .partial, .supported:
+            if diagnostics.contains(where: { $0.impact != .physicalMeasurement }) {
+                return .partial
+            }
+            return hasConversationSource ? .complete : .noConversationSource
+        }
+    }
+
+    private func uniqueKnownAffectedBytes(
+        _ diagnostics: [AgentStorageDiagnostic]
+    ) -> UInt64 {
+        var seen = Set<String>()
+        return diagnostics.reduce(0) { total, diagnostic in
+            guard let bytes = diagnostic.affectedAllocatedBytes else { return total }
+            let key = diagnostic.relativePath.map {
+                "\(diagnostic.sourceID)|\($0)"
+            } ?? diagnostic.id
+            guard seen.insert(key).inserted else { return total }
+            return total.addingClamped(bytes)
+        }
+    }
+
+    private func finalizedDiagnostics() -> [AgentStorageDiagnostic] {
+        var values = diagnosticDrafts.map { key, draft in
+            let source = sources.first { $0.id == key.sourceID }
+            let measuredPathBytes: UInt64? = shouldKeepAffectedBytesUnknown(for: key.kind)
+                ? nil
+                : knownAllocatedBytes(for: draft.absolutePaths)
+            let affectedBytes = draft.affectedAllocatedBytes ?? measuredPathBytes
+            let displayPath = draft.absolutePaths.sorted().first
+            let displayRelativePath = displayPath.flatMap { path in
+                guard let source else { return URL(fileURLWithPath: path).lastPathComponent }
+                return relativePath(
+                    of: URL(fileURLWithPath: path),
+                    under: URL(fileURLWithPath: source.path, isDirectory: true)
+                )
+            }
+            return AgentStorageDiagnostic(
+                id: key.stableID,
+                provider: key.provider,
+                sourceID: key.sourceID,
+                sourceKind: source?.kind,
+                kind: key.kind,
+                area: draft.area,
+                impact: draft.impact,
+                affectedEntityCount: draft.affectedEntityCount,
+                affectedAllocatedBytes: affectedBytes,
+                relativePath: displayRelativePath
+            )
+        }
+
+        for entry in physicalLedger.values where !entry.isStable {
+            for observation in entry.observations {
+                guard let claim = entry.claims.first(where: {
+                    $0.provider == observation.provider && $0.path == observation.path
+                }) else { continue }
+                values.append(AgentStorageDiagnostic(
+                    id: "\(observation.provider.rawValue)|\(claim.sourceID)|changed|\(observation.path)",
+                    provider: observation.provider,
+                    sourceID: claim.sourceID,
+                    sourceKind: sources.first(where: { $0.id == claim.sourceID })?.kind,
+                    kind: .changedDuringScan,
+                    area: .fileSystem,
+                    impact: .physicalMeasurement,
+                    affectedAllocatedBytes: entry.allocatedBytes,
+                    relativePath: relativePath(
+                        of: URL(fileURLWithPath: observation.path),
+                        under: URL(fileURLWithPath: sources.first(where: {
+                            $0.id == claim.sourceID
+                        })?.path ?? observation.path, isDirectory: true)
+                    )
+                ))
+            }
+        }
+
+        for attribution in databaseAttributions where attribution.status != .completed {
+            values.append(AgentStorageDiagnostic(
+                id: "\(attribution.provider.rawValue)|\(attribution.sourceID)|database|\(attribution.id)",
+                provider: attribution.provider,
+                sourceID: attribution.sourceID,
+                sourceKind: sources.first(where: { $0.id == attribution.sourceID })?.kind,
+                kind: .databaseAttributionUnavailable,
+                area: .database,
+                impact: .databaseAttribution,
+                affectedAllocatedBytes: attribution.physicalBundleBytes,
+                relativePath: URL(fileURLWithPath: attribution.path).lastPathComponent
+            ))
+        }
+
+        var seen = Set<String>()
+        return values.filter { seen.insert($0.id).inserted }.sorted { $0.id < $1.id }
+    }
+
+    private func shouldKeepAffectedBytesUnknown(
+        for kind: AgentStorageDiagnosticKind
+    ) -> Bool {
+        switch kind {
+        case .malformedTranscriptRecords, .subagentMetadataOnly,
+             .databaseRecordUnverified, .relationshipConflict:
+            return true
+        default:
+            return false
+        }
     }
 
     private func uniqueCleanupArtifacts(
@@ -2522,6 +2788,69 @@ private struct AgentStorageScanEngine {
     private mutating func recordSkipped(provider: AgentStorageProvider, count: Int = 1) {
         skippedEntryCount += count
         providerIssueCounts[provider, default: 0] += count
+        recordDiagnostic(
+            provider: provider,
+            sourceID: scopes.first(where: { $0.provider == provider })?.id,
+            kind: .filesystemEntrySkipped,
+            area: .fileSystem,
+            impact: .physicalMeasurement,
+            affectedEntityCount: count,
+            entityKey: "filesystem"
+        )
+    }
+
+    private mutating func recordDiagnostic(
+        provider: AgentStorageProvider,
+        sourceID: String?,
+        kind: AgentStorageDiagnosticKind,
+        area: AgentStorageDiagnosticArea,
+        impact: AgentStorageDiagnosticImpact,
+        affectedEntityCount: Int = 1,
+        affectedAllocatedBytes: UInt64? = nil,
+        absolutePath: String? = nil,
+        absolutePaths: [String] = [],
+        entityKey: String? = nil
+    ) {
+        let resolvedSourceID = sourceID
+            ?? scopes.first(where: { $0.provider == provider })?.id
+            ?? "\(provider.rawValue):unknown"
+        let key = AgentStorageDiagnosticKey(
+            provider: provider,
+            sourceID: resolvedSourceID,
+            kind: kind,
+            entityKey: entityKey ?? absolutePath ?? kind.rawValue
+        )
+        if var current = diagnosticDrafts[key] {
+            current.affectedEntityCount += max(1, affectedEntityCount)
+            current.affectedAllocatedBytes = mergeKnownBytes(
+                current.affectedAllocatedBytes,
+                affectedAllocatedBytes
+            )
+            current.absolutePaths.formUnion(absolutePaths)
+            if let absolutePath { current.absolutePaths.insert(absolutePath) }
+            diagnosticDrafts[key] = current
+            return
+        }
+        diagnosticDrafts[key] = AgentStorageDiagnosticDraft(
+            area: area,
+            impact: impact,
+            affectedEntityCount: max(1, affectedEntityCount),
+            affectedAllocatedBytes: affectedAllocatedBytes,
+            absolutePaths: Set(absolutePaths + [absolutePath].compactMap { $0 })
+        )
+    }
+
+    private func knownAllocatedBytes(for paths: Set<String>) -> UInt64? {
+        guard !paths.isEmpty else { return nil }
+        var matchedPaths = Set<String>()
+        var total: UInt64 = 0
+        for entry in physicalLedger.values {
+            let matches = Set(entry.observations.lazy.map(\.path)).intersection(paths)
+            guard !matches.isEmpty else { continue }
+            matchedPaths.formUnion(matches)
+            total = total.addingClamped(entry.allocatedBytes)
+        }
+        return matchedPaths == paths ? total : nil
     }
 
     private mutating func recordMetadataOutcome(
@@ -2580,6 +2909,33 @@ private struct ProviderMetadataOutcome: Sendable {
         unsupportedCount += other.unsupportedCount
         unreadableCount += other.unreadableCount
         emptyCount += other.emptyCount
+    }
+}
+
+private struct AgentStorageDiagnosticKey: Hashable, Sendable {
+    let provider: AgentStorageProvider
+    let sourceID: String
+    let kind: AgentStorageDiagnosticKind
+    let entityKey: String
+
+    var stableID: String {
+        "\(provider.rawValue)|\(sourceID)|\(kind.rawValue)|\(entityKey)"
+    }
+}
+
+private struct AgentStorageDiagnosticDraft: Sendable {
+    let area: AgentStorageDiagnosticArea
+    let impact: AgentStorageDiagnosticImpact
+    var affectedEntityCount: Int
+    var affectedAllocatedBytes: UInt64?
+    var absolutePaths: Set<String>
+}
+
+private func mergeKnownBytes(_ lhs: UInt64?, _ rhs: UInt64?) -> UInt64? {
+    switch (lhs, rhs) {
+    case (.some(let lhs), .some(let rhs)): lhs.addingClamped(rhs)
+    case (.some(let value), .none), (.none, .some(let value)): value
+    case (.none, .none): nil
     }
 }
 
