@@ -221,11 +221,15 @@ public actor DiskutilCommandRunner: DiskHealthCommandRunning {
         let process = Process()
         let output = Pipe()
         let runState = DiskutilRunState()
+        let termination = DiskutilProcessTermination()
         process.executableURL = executableURL
         process.arguments = arguments
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
+        process.terminationHandler = { completedProcess in
+            termination.complete(with: completedProcess.terminationStatus)
+        }
 
         do {
             try process.run()
@@ -241,16 +245,16 @@ public actor DiskutilCommandRunner: DiskHealthCommandRunning {
                         data.append(byte)
                         if data.count > maximumOutputBytes {
                             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-                            process.waitUntilExit()
+                            _ = await termination.status()
                             throw DiskHealthProviderError.outputTooLarge
                         }
                     }
-                    process.waitUntilExit()
+                    let terminationStatus = await termination.status()
                     if runState.didTimeOut {
                         throw DiskHealthProviderError.timedOut
                     }
-                    guard process.terminationStatus == 0 else {
-                        throw DiskHealthProviderError.commandFailed(process.terminationStatus)
+                    guard terminationStatus == 0 else {
+                        throw DiskHealthProviderError.commandFailed(terminationStatus)
                     }
                     return data
                 }
@@ -270,6 +274,37 @@ public actor DiskutilCommandRunner: DiskHealthCommandRunning {
             }
         } onCancel: {
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        }
+    }
+}
+
+private final class DiskutilProcessTermination: @unchecked Sendable {
+    private let lock = NSLock()
+    private var terminationStatus: Int32?
+    private var continuations: [CheckedContinuation<Int32, Never>] = []
+
+    func complete(with status: Int32) {
+        let waitingContinuations = lock.withLock { () -> [CheckedContinuation<Int32, Never>] in
+            guard terminationStatus == nil else { return [] }
+            terminationStatus = status
+            defer { continuations.removeAll() }
+            return continuations
+        }
+        for continuation in waitingContinuations {
+            continuation.resume(returning: status)
+        }
+    }
+
+    func status() async -> Int32 {
+        await withCheckedContinuation { continuation in
+            let completedStatus = lock.withLock { () -> Int32? in
+                if let terminationStatus { return terminationStatus }
+                continuations.append(continuation)
+                return nil
+            }
+            if let completedStatus {
+                continuation.resume(returning: completedStatus)
+            }
         }
     }
 }
