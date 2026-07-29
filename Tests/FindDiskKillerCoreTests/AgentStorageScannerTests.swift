@@ -47,7 +47,7 @@ import Testing
     })
 }
 
-@Test func agentStorageScannerSupportsRepeatedSequentialScans() async throws {
+@Test func agentStorageScannerHandlesNonRepositoryPathsAcrossRepeatedScans() async throws {
     let root = makeTemporaryRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     let project = root.appending(
@@ -69,6 +69,7 @@ import Testing
 
     #expect(first.coverage.measuredBytes == second.coverage.measuredBytes)
     #expect(first.families.map(\.nativeThreadID) == second.families.map(\.nativeThreadID))
+    #expect(second.families.first?.project == "Non-project directory")
     #expect(second.coverage.isPhysicalMeasurementComplete)
 }
 

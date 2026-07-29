@@ -119,15 +119,19 @@ public actor AgentStorageScanner {
     ) async throws -> AgentStorageSnapshot {
         let configuration = configuration
         let interruptRegistry = AgentSQLiteInterruptRegistry()
-        return try await withTaskCancellationHandler {
+        let task = Task.detached(priority: .utility) {
             var engine = AgentStorageScanEngine(
                 configuration: configuration,
                 progressHandler: progress,
                 interruptRegistry: interruptRegistry
             )
             return try await engine.scan()
+        }
+        return try await withTaskCancellationHandler {
+            try await task.value
         } onCancel: {
             interruptRegistry.cancelAndInterrupt()
+            task.cancel()
         }
     }
 }
@@ -4501,6 +4505,7 @@ private struct AgentStorageProjectResolver: Sendable {
                     return candidate.path
                 }
             }
+            if candidate.path == "/" { return nil }
             let parent = candidate.deletingLastPathComponent()
             if parent.path == candidate.path { return nil }
             candidate = parent
