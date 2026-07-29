@@ -412,51 +412,162 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
 }
 
 @MainActor
-@Test func agentStorageFirstEntryWaitsForExplicitAnalysisConsent() async throws {
+@Test func agentStorageEntryNeverScansWithoutAnExplicitAction() async throws {
     let suiteName = "AgentStorageConsentTests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suiteName)!
     defer { defaults.removePersistentDomain(forName: suiteName) }
+    defaults.set(true, forKey: AgentStoragePreferences.analysisConsentKey)
+    defaults.set(true, forKey: AgentStoragePreferences.autoScanKey)
     let probe = ImmediateAgentStorageScanProbe()
     let model = AgentStorageModel(defaults: defaults) { configuration in
         await probe.scan(configuration)
     }
 
     model.enterFeature()
+    model.enterFeature()
+    model.resumeAfterWake()
     try await Task.sleep(for: .milliseconds(80))
 
     #expect(model.state == .idle)
-    #expect(model.requiresInitialAnalysisConsent)
+    #expect(model.requiresAnalysis)
     #expect(await probe.callCount == 0)
 
-    model.refresh()
+    model.startAnalysis()
     try await waitUntil { model.state == .ready }
 
-    #expect(!model.requiresInitialAnalysisConsent)
-    #expect(defaults.bool(forKey: AgentStoragePreferences.analysisConsentKey))
+    #expect(!model.requiresAnalysis)
     #expect(await probe.callCount == 1)
 }
 
 @MainActor
-@Test func agentStorageAuthorizedEntryHonorsTheAutomaticScanPreference() async throws {
+@Test func agentStorageEntryDisplaysValidCacheWithoutScanning() async throws {
     let suiteName = "AgentStorageAuthorizedEntryTests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suiteName)!
     defer { defaults.removePersistentDomain(forName: suiteName) }
     defaults.set(true, forKey: AgentStoragePreferences.analysisConsentKey)
-    defaults.set(false, forKey: AgentStoragePreferences.autoScanKey)
+    defaults.set(true, forKey: AgentStoragePreferences.autoScanKey)
     let probe = ImmediateAgentStorageScanProbe()
-    let model = AgentStorageModel(defaults: defaults) { configuration in
+    let cachedSnapshot = emptySnapshot(scannedAt: Date(timeIntervalSince1970: 123))
+    let model = AgentStorageModel(defaults: defaults, initialSnapshot: cachedSnapshot) { configuration in
         await probe.scan(configuration)
     }
 
     model.enterFeature()
-    try await Task.sleep(for: .milliseconds(80))
-    #expect(await probe.callCount == 0)
-
-    model.automaticallyScans = true
     model.enterFeature()
-    try await waitUntil { model.state == .ready }
+    model.resumeAfterWake()
+    try await Task.sleep(for: .milliseconds(80))
+
+    #expect(await probe.callCount == 0)
+    #expect(model.snapshot == cachedSnapshot)
+    #expect(model.state == .ready)
+    #expect(!model.requiresAnalysis)
+}
+
+@MainActor
+@Test func agentStorageWakeCancelsAnActiveAnalysisWithoutResumingIt() async throws {
+    let suiteName = "AgentStorageWakeTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let probe = AgentStorageScanProbe()
+    let cachedSnapshot = emptySnapshot(scannedAt: Date(timeIntervalSince1970: 123))
+    let model = AgentStorageModel(defaults: defaults, initialSnapshot: cachedSnapshot) { configuration in
+        try await probe.scan(configuration)
+    }
+
+    model.startAnalysis()
+    try await waitUntil { await probe.callCount == 1 }
+    await model.prepareForSleep()
+    model.resumeAfterWake()
+    model.enterFeature()
+    try await Task.sleep(for: .milliseconds(80))
 
     #expect(await probe.callCount == 1)
+    #expect(model.snapshot == cachedSnapshot)
+    #expect(model.state == .stale)
+}
+
+@MainActor
+@Test func agentStorageInvalidatedCacheReturnsToInvitationWithoutScanning() async throws {
+    let suiteName = "AgentStorageInvalidationTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let probe = ImmediateAgentStorageScanProbe()
+    let model = AgentStorageModel(
+        defaults: defaults,
+        initialSnapshot: emptySnapshot()
+    ) { configuration in
+        await probe.scan(configuration)
+    }
+
+    model.invalidateCachedResults()
+    model.enterFeature()
+    model.resumeAfterWake()
+    try await Task.sleep(for: .milliseconds(80))
+
+    #expect(model.snapshot == nil)
+    #expect(model.requiresAnalysis)
+    #expect(model.state == .idle)
+    #expect(await probe.callCount == 0)
+}
+
+@MainActor
+@Test func agentStorageCustomRootChangesInvalidateCacheWithoutScanning() async throws {
+    let suiteName = "AgentStorageCustomRootTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: root)
+    }
+    try FileManager.default.createDirectory(
+        at: root.appending(path: "sessions", directoryHint: .isDirectory),
+        withIntermediateDirectories: true
+    )
+    let probe = ImmediateAgentStorageScanProbe()
+    let model = AgentStorageModel(
+        defaults: defaults,
+        initialSnapshot: emptySnapshot()
+    ) { configuration in
+        await probe.scan(configuration)
+    }
+
+    model.addCustomRoot(root)
+    model.enterFeature()
+    try await Task.sleep(for: .milliseconds(80))
+    #expect(model.snapshot == nil)
+    #expect(await probe.callCount == 0)
+
+    model.startAnalysis()
+    try await waitUntil { model.state == .ready }
+    model.removeCustomRoot(root)
+    model.enterFeature()
+    try await Task.sleep(for: .milliseconds(80))
+    #expect(model.snapshot == nil)
+    #expect(await probe.callCount == 1)
+}
+
+@MainActor
+@Test func agentStorageReanalysisKeepsCachedResultsUntilReplacementCompletes() async throws {
+    let suiteName = "AgentStorageReanalysisCacheTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let probe = ControlledAgentStorageScanProbe()
+    let cachedSnapshot = emptySnapshot(scannedAt: Date(timeIntervalSince1970: 123))
+    let replacement = emptySnapshot(scannedAt: Date(timeIntervalSince1970: 456))
+    let model = AgentStorageModel(defaults: defaults, initialSnapshot: cachedSnapshot) { configuration in
+        await probe.scan(configuration, result: replacement)
+    }
+
+    model.startAnalysis()
+    try await waitUntil { await probe.callCount == 1 }
+
+    #expect(model.isScanning)
+    #expect(model.snapshot == cachedSnapshot)
+
+    await probe.finish()
+    try await waitUntil { model.state == .ready }
+    #expect(model.snapshot == replacement)
 }
 
 @MainActor
@@ -469,9 +580,9 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
         try await probe.scan(configuration)
     }
 
-    model.refresh()
+    model.startAnalysis()
     try await waitUntil { await probe.callCount == 1 }
-    model.refresh()
+    model.startAnalysis()
     try await waitUntil { model.state == .ready }
 
     #expect(await probe.callCount == 2)
@@ -490,7 +601,7 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
         try await probe.scan(configuration)
     }
 
-    model.refresh()
+    model.startAnalysis()
     try await waitUntil { await probe.callCount == 1 }
     model.stop()
     try await waitUntil { await probe.activeCalls == 0 }
@@ -510,9 +621,9 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
         try await probe.scan(configuration, progress: progress)
     }
 
-    model.refresh()
+    model.startAnalysis()
     try await waitUntil { await probe.callCount == 1 }
-    model.refresh()
+    model.startAnalysis()
     try await waitUntil { model.state == .ready }
     try await waitUntil { model.progress.completedCount == 42 }
     try await Task.sleep(for: .milliseconds(250))
@@ -532,7 +643,7 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
         try await probe.scan(configuration, progress: progress)
     }
 
-    model.refresh()
+    model.startAnalysis()
     try await waitUntil { await probe.callCount == 1 }
     model.stop()
     try await Task.sleep(for: .milliseconds(250))
@@ -565,7 +676,7 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
         return emptySnapshot()
     }
 
-    model.refresh()
+    model.startAnalysis()
     try await waitUntil { model.state == .ready }
     try await waitUntil { model.progress.phase == .validatingEntries }
 
@@ -605,7 +716,7 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
         return emptySnapshot()
     }
 
-    model.refresh()
+    model.startAnalysis()
     try await waitUntil {
         model.progressByProvider[.codex]?.phase == .attributingDatabase
             && model.progressByProvider[.claude]?.phase == .organizingResults
@@ -668,6 +779,25 @@ private actor ImmediateAgentStorageScanProbe {
     }
 }
 
+private actor ControlledAgentStorageScanProbe {
+    private(set) var callCount = 0
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func scan(
+        _ configuration: AgentStorageScanner.Configuration,
+        result: AgentStorageSnapshot
+    ) async -> AgentStorageSnapshot {
+        callCount += 1
+        await withCheckedContinuation { continuation = $0 }
+        return result
+    }
+
+    func finish() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 private actor LateAgentStorageProgressProbe {
     private(set) var callCount = 0
 
@@ -699,9 +829,9 @@ private actor LateAgentStorageProgressProbe {
     }
 }
 
-private func emptySnapshot() -> AgentStorageSnapshot {
+private func emptySnapshot(scannedAt: Date = Date()) -> AgentStorageSnapshot {
     AgentStorageSnapshot(
-        scannedAt: Date(),
+        scannedAt: scannedAt,
         families: [],
         globalItems: [],
         unattributedItems: [],

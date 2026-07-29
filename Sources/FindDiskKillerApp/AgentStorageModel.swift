@@ -16,7 +16,7 @@ enum AgentStorageLoadState: Equatable {
 final class AgentStorageModel {
     private(set) var snapshot: AgentStorageSnapshot?
     private(set) var snapshotRevision = 0
-    private(set) var state: AgentStorageLoadState = .idle
+    private(set) var state: AgentStorageLoadState
     private(set) var progress = AgentStorageScanProgress(phase: .discoveringSources)
     private(set) var progressByProvider: [AgentStorageProvider: AgentStorageScanProgress] = [:]
     private(set) var generation = 0
@@ -28,11 +28,9 @@ final class AgentStorageModel {
         @escaping @Sendable (AgentStorageScanProgress) -> Void
     ) async throws -> AgentStorageSnapshot
     @ObservationIgnored private var scanTask: Task<Void, Never>?
-    @ObservationIgnored private var hasEnteredFeature = false
-    @ObservationIgnored private var shouldResumeAfterWake = false
-
     init(
         defaults: UserDefaults = .standard,
+        initialSnapshot: AgentStorageSnapshot? = nil,
         scanAction: @escaping @Sendable (
             AgentStorageScanner.Configuration,
             @escaping @Sendable (AgentStorageScanProgress) -> Void
@@ -41,15 +39,18 @@ final class AgentStorageModel {
             }
     ) {
         self.defaults = defaults
+        snapshot = initialSnapshot
+        state = initialSnapshot == nil ? .idle : .ready
         self.scanAction = scanAction
     }
 
     convenience init(
         defaults: UserDefaults = .standard,
+        initialSnapshot: AgentStorageSnapshot? = nil,
         scanAction: @escaping @Sendable (AgentStorageScanner.Configuration) async throws
             -> AgentStorageSnapshot
     ) {
-        self.init(defaults: defaults) { configuration, _ in
+        self.init(defaults: defaults, initialSnapshot: initialSnapshot) { configuration, _ in
             try await scanAction(configuration)
         }
     }
@@ -68,36 +69,15 @@ final class AgentStorageModel {
         AgentStoragePreferences.customRoots(defaults: defaults)
     }
 
-    var requiresInitialAnalysisConsent: Bool {
-        snapshot == nil && !isScanning && !hasAuthorizedAnalysis
-    }
-
-    private var hasAuthorizedAnalysis: Bool {
-        defaults.bool(forKey: AgentStoragePreferences.analysisConsentKey)
-    }
-
-    var automaticallyScans: Bool {
-        get {
-            guard defaults.object(forKey: AgentStoragePreferences.autoScanKey) != nil else {
-                return true
-            }
-            return defaults.bool(forKey: AgentStoragePreferences.autoScanKey)
-        }
-        set { defaults.set(newValue, forKey: AgentStoragePreferences.autoScanKey) }
+    var requiresAnalysis: Bool {
+        snapshot == nil && !isScanning
     }
 
     func enterFeature() {
-        hasEnteredFeature = true
-        guard hasAuthorizedAnalysis,
-              snapshot == nil,
-              !isScanning,
-              automaticallyScans
-        else { return }
-        refresh()
+        // Entering or restoring this feature may only reveal the current cache.
     }
 
-    func refresh() {
-        defaults.set(true, forKey: AgentStoragePreferences.analysisConsentKey)
+    func startAnalysis() {
         let previousTask = scanTask
         previousTask?.cancel()
         generation += 1
@@ -196,30 +176,34 @@ final class AgentStorageModel {
         }
         customRootError = nil
         AgentStoragePreferences.add(url, defaults: defaults)
-        refresh()
+        invalidateCachedResults()
     }
 
     func removeCustomRoot(_ url: URL) {
         customRootError = nil
         AgentStoragePreferences.remove(url, defaults: defaults)
-        refresh()
+        invalidateCachedResults()
+    }
+
+    func invalidateCachedResults() {
+        generation += 1
+        scanTask?.cancel()
+        snapshot = nil
+        snapshotRevision &+= 1
+        progress = AgentStorageScanProgress(phase: .discoveringSources)
+        progressByProvider = [:]
+        state = .idle
     }
 
     func prepareForSleep() async {
-        guard !requiresInitialAnalysisConsent else {
-            shouldResumeAfterWake = false
-            return
-        }
-        shouldResumeAfterWake = isScanning || (hasEnteredFeature && hasAuthorizedAnalysis)
+        guard isScanning else { return }
         stop()
         await scanTask?.value
+        scanTask = nil
     }
 
     func resumeAfterWake() {
-        guard shouldResumeAfterWake else { return }
-        shouldResumeAfterWake = false
-        if snapshot != nil { state = .stale }
-        if hasEnteredFeature, automaticallyScans { refresh() }
+        // Resuming may only show the cache left by the interrupted scan.
     }
 
     func prepareForTermination() async {
@@ -231,6 +215,7 @@ final class AgentStorageModel {
 }
 
 enum AgentStoragePreferences {
+    // Retained only so older defaults can be ignored and covered by migration tests.
     static let autoScanKey = "agentStorageAutoScan"
     static let analysisConsentKey = "agentStorageAnalysisConsent"
     static let hidePrivateDetailsKey = "agentStorageHidePrivateDetails"

@@ -595,6 +595,7 @@
 "扫描已停止" = "Scan angehalten";
 "尚未生成可显示的结果" = "Noch keine Ergebnisse verfügbar";
 "重新扫描" = "Erneut scannen";
+"重新分析" = "Erneut analysieren";
 "已完成" = "Vollständig";
 "独占占用" = "Exklusiver Speicher";
 "返回 AI 空间" = "Zurück zum KI-Speicher";
@@ -796,3 +797,6 @@
 "1 个月" = "1 Monat";
 "3 个月" = "3 Monate";
 "%d 天" = "%d Tage";
+"%d 个聊天可安全提交给官方清理" = "%d Chats können sicher zur offiziellen Bereinigung übergeben werden";
+"成功 %d · 跳过 %d · 失败 %d" = "%d erfolgreich · %d übersprungen · %d fehlgeschlagen";
+"实际复核释放 %@" = "Nach Überprüfung tatsächlich freigegeben: %@";

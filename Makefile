@@ -1,4 +1,4 @@
-.PHONY: project test test-privileged lint release
+.PHONY: project test test-agent-cleanup-fixtures test-privileged lint release
 
 project:
 	xcodegen generate
@@ -6,6 +6,9 @@ project:
 test:
 	@echo "Running non-privileged unit tests (the App and Trace Helper will not be launched)."
 	swift test --no-parallel
+
+test-agent-cleanup-fixtures:
+	/bin/zsh scripts/verify-agent-cleanup-fixtures.sh
 
 test-privileged:
 	@test "$(ALLOW_PRIVILEGED_TEST)" = "1" || (echo "Refusing to launch the privileged Helper test. Re-run once with ALLOW_PRIVILEGED_TEST=1 after installing the signed release App." >&2; exit 64)

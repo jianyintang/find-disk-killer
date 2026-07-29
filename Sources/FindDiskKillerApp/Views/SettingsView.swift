@@ -17,7 +17,6 @@ struct SettingsPage: View {
     @AppStorage("sampleInterval") private var sampleInterval = MonitorStore.defaultSamplingInterval
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.system.rawValue
     @AppStorage("openMainWindowAtLogin") private var openMainWindowAtLogin = false
-    @AppStorage(AgentStoragePreferences.autoScanKey) private var agentStorageAutoScan = true
     @AppStorage(AgentStoragePreferences.hidePrivateDetailsKey)
     private var hidesAgentStoragePrivateDetails = false
     @State private var loginItem = LoginItemSettingsModel()
@@ -139,10 +138,6 @@ struct SettingsPage: View {
             Form {
                 Section(L10n.text("AI Agent 空间")) {
                     Toggle(
-                        L10n.text("自动扫描 AI Agent 空间"),
-                        isOn: $agentStorageAutoScan
-                    )
-                    Toggle(
                         L10n.text("隐藏聊天标题和完整路径"),
                         isOn: $hidesAgentStoragePrivateDetails
                     )
@@ -191,10 +186,12 @@ struct SettingsPage: View {
                         }
                         Spacer()
                         Button {
-                            agentStorage.isScanning ? agentStorage.stop() : agentStorage.refresh()
+                            agentStorage.isScanning ? agentStorage.stop() : agentStorage.startAnalysis()
                         } label: {
                             Label(
-                                L10n.text(agentStorage.isScanning ? "停止本次扫描" : "立即刷新"),
+                                L10n.text(agentStorage.isScanning
+                                    ? "停止本次扫描"
+                                    : agentStorage.snapshot == nil ? "开始分析" : "重新分析"),
                                 systemImage: agentStorage.isScanning ? "stop.fill" : "arrow.clockwise"
                             )
                         }
@@ -404,9 +401,6 @@ struct SettingsPage: View {
         }
         .onChange(of: sampleInterval) { _, newValue in
             store.setSamplingInterval(newValue)
-        }
-        .onChange(of: agentStorageAutoScan) { _, newValue in
-            agentStorage.automaticallyScans = newValue
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshServiceStates()

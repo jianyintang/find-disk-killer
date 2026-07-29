@@ -595,6 +595,7 @@
 "扫描已停止" = "Analyse arrêtée";
 "尚未生成可显示的结果" = "Aucun résultat disponible pour le moment";
 "重新扫描" = "Relancer l’analyse";
+"重新分析" = "Relancer l’analyse";
 "已完成" = "Terminé";
 "独占占用" = "Stockage exclusif";
 "返回 AI 空间" = "Retour à l’espace IA";
@@ -796,3 +797,6 @@
 "1 个月" = "1 mois";
 "3 个月" = "3 mois";
 "%d 天" = "%d jours";
+"%d 个聊天可安全提交给官方清理" = "%d discussions peuvent être confiées au nettoyage officiel";
+"成功 %d · 跳过 %d · 失败 %d" = "%d réussies · %d ignorées · %d échouées";
+"实际复核释放 %@" = "Réellement libéré après vérification : %@";

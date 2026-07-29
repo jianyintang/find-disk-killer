@@ -206,7 +206,7 @@ private struct LoginFixtureError: LocalizedError {
         history: HistoryModel(databaseURL: root.appending(path: "monitor.sqlite3")),
         agentStorage: agentStorage
     ) {}
-    agentStorage.refresh()
+    agentStorage.startAnalysis()
     while !(await scan.hasStarted) {
         try await Task.sleep(for: .milliseconds(5))
     }
