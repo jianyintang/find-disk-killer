@@ -34,6 +34,8 @@ privacy_manifest="$app_path/Contents/Resources/PrivacyInfo.xcprivacy"
 third_party_notices="$app_path/Contents/Resources/THIRD_PARTY_NOTICES.md"
 provisioning_profile="$app_path/Contents/embedded.provisionprofile"
 sparkle_framework="$app_path/Contents/Frameworks/Sparkle.framework"
+claude_cleanup_helper="$app_path/Contents/MacOS/FindDiskKillerClaudeCleanupHelper"
+claude_cleanup_node="$app_path/Contents/Resources/AgentCleanup/node"
 
 for required_path in \
     "$info_plist" \
@@ -43,6 +45,8 @@ for required_path in \
     "$privacy_manifest" \
     "$third_party_notices" \
     "$sparkle_framework" \
+    "$claude_cleanup_helper" \
+    "$claude_cleanup_node" \
     "$provisioning_profile"; do
     [[ -e "$required_path" ]] || { echo "Required release payload missing: $required_path" >&2; exit 1; }
 done
@@ -94,15 +98,23 @@ privacy_tracking=$(plutil -extract NSPrivacyTracking raw "$privacy_manifest")
 
 codesign --verify --deep --strict --verbose=2 "$app_path"
 codesign --verify --strict --verbose=2 "$helper"
+codesign --verify --strict --verbose=2 "$claude_cleanup_helper"
+codesign --verify --strict --verbose=2 "$claude_cleanup_node"
 
 app_signature=$(codesign -dvvv "$app_path" 2>&1)
 helper_signature=$(codesign -dvvv "$helper" 2>&1)
+claude_cleanup_helper_signature=$(codesign -dvvv "$claude_cleanup_helper" 2>&1)
+claude_cleanup_node_signature=$(codesign -dvvv "$claude_cleanup_node" 2>&1)
 team_identifier=$(awk -F= '/^TeamIdentifier=/{print $2}' <<<"$app_signature")
 [[ "$team_identifier" == "Y3A8BJ4475" ]] || {
     echo "Unexpected signing team: ${team_identifier:-missing}" >&2
     exit 1
 }
-for signature in "$app_signature" "$helper_signature"; do
+for signature in \
+    "$app_signature" \
+    "$helper_signature" \
+    "$claude_cleanup_helper_signature" \
+    "$claude_cleanup_node_signature"; do
     grep -Fq "Authority=Developer ID Application: Jianyin Tang (Y3A8BJ4475)" <<<"$signature" || {
         echo "Release payload is not signed with the expected Developer ID identity" >&2
         exit 1
@@ -194,6 +206,12 @@ plutil -remove 'com\.apple\.application-identifier' "$helper_entitlements"
     plutil -p "$helper_entitlements" >&2
     exit 1
 }
+require_empty_entitlements \
+    "$claude_cleanup_helper" \
+    "$temporary_directory/claude-cleanup-helper-entitlements.plist"
+require_empty_entitlements \
+    "$claude_cleanup_node" \
+    "$temporary_directory/claude-cleanup-node-entitlements.plist"
 
 helper_program=$(plutil -extract BundleProgram raw "$helper_plist")
 [[ "$helper_program" == \
@@ -227,6 +245,8 @@ require_universal_binary() {
 
 require_universal_binary "$app_path/Contents/MacOS/FindDiskKiller"
 require_universal_binary "$helper"
+require_universal_binary "$claude_cleanup_helper"
+require_universal_binary "$claude_cleanup_node"
 
 if [[ -n "$dmg_path" ]]; then
     [[ -f "$dmg_path" ]] || { echo "Disk image not found: $dmg_path" >&2; exit 1; }

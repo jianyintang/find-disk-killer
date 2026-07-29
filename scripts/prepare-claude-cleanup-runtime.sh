@@ -66,4 +66,9 @@ done
 lipo -create "${node_binaries[@]}" -output "${resource_root}/node"
 chmod 755 "${resource_root}/node"
 signing_identity="${EXPANDED_CODE_SIGN_IDENTITY:--}"
-codesign --force --sign "${signing_identity}" --timestamp=none "${resource_root}/node"
+codesign \
+  --force \
+  --options runtime \
+  --sign "${signing_identity}" \
+  --timestamp=none \
+  "${resource_root}/node"
