@@ -21,10 +21,10 @@ enum AppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
         }
     }
 
-    var navigationPlaceholderKind: SectionNavigationPlaceholderKind {
+    var navigationPlaceholderKind: SectionNavigationPlaceholderKind? {
         switch self {
         case .processes: .processes
-        case .agentStorage: .agentStorage
+        case .agentStorage: nil
         case .reports: .history
         case .overview: .overview
         case .disks: .resources
@@ -39,7 +39,6 @@ enum AppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
 enum SectionNavigationPlaceholderKind: Equatable, Sendable {
     case overview
     case processes
-    case agentStorage
     case history
     case resources
 }
@@ -149,15 +148,14 @@ struct RootView: View {
 
     @ViewBuilder
     private var detail: some View {
-        if requestedSection == loadedSection {
+        if requestedSection.navigationPlaceholderKind == nil {
+            sectionDetail(requestedSection)
+        } else if requestedSection == loadedSection {
             loadedDetail
         } else {
             SectionNavigationPlaceholder(
                 section: requestedSection,
                 snapshot: sectionSnapshots[requestedSection],
-                agentStorageProgress: agentStorage.progress,
-                agentStorageProgressByProvider: agentStorage.progressByProvider,
-                agentStorageStartedAt: agentStorage.scanStartedAt,
                 processSearchText: $processSearchText
             )
         }
@@ -165,7 +163,12 @@ struct RootView: View {
 
     @ViewBuilder
     private var loadedDetail: some View {
-        switch loadedSection {
+        sectionDetail(loadedSection)
+    }
+
+    @ViewBuilder
+    private func sectionDetail(_ section: AppSection) -> some View {
+        switch section {
         case .overview:
             OverviewView(store: store, processDetailWindows: processDetailWindows)
         case .disks:
@@ -383,29 +386,26 @@ private struct VolumePreviewRow: Identifiable, Sendable {
 private struct SectionNavigationPlaceholder: View {
     let section: AppSection
     let snapshot: SectionPreviewSnapshot?
-    let agentStorageProgress: AgentStorageScanProgress
-    let agentStorageProgressByProvider: [AgentStorageProvider: AgentStorageScanProgress]
-    let agentStorageStartedAt: Date?
     @Binding var processSearchText: String
     @State private var processTableWidth: CGFloat = 0
 
     var body: some View {
         Group {
             switch section.navigationPlaceholderKind {
-            case .overview:
+            case .some(.overview):
                 overviewPlaceholder
-            case .processes:
+            case .some(.processes):
                 processPlaceholder
                     .searchable(
                         text: $processSearchText,
                         prompt: L10n.text("搜索应用或进程")
                     )
-            case .agentStorage:
-                agentStoragePlaceholder
-            case .history:
+            case .some(.history):
                 HistoryReportNavigationPlaceholder()
-            case .resources:
+            case .some(.resources):
                 resourcePlaceholder
+            case nil:
+                EmptyView()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -726,14 +726,6 @@ private struct SectionNavigationPlaceholder: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-    }
-
-    private var agentStoragePlaceholder: some View {
-        AgentStorageOverviewSkeleton(
-            progress: agentStorageProgress,
-            progressByProvider: agentStorageProgressByProvider,
-            startedAt: agentStorageStartedAt
-        )
     }
 
     private var previewProcesses: [ProcessPreviewRow] {

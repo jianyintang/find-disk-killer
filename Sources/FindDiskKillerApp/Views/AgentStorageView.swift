@@ -2,9 +2,9 @@ import AppKit
 import FindDiskKillerCore
 import SwiftUI
 
-private let agentStorageNonProjectDirectoryName = "Non-project directory"
+let agentStorageNonProjectDirectoryName = "Non-project directory"
 
-private func localizedAgentStorageProjectName(_ project: String) -> String {
+func localizedAgentStorageProjectName(_ project: String) -> String {
     project == agentStorageNonProjectDirectoryName ? L10n.text(project) : project
 }
 
@@ -98,6 +98,22 @@ private struct AgentStorageProviderWorkspaceState {
 
 private struct AgentStorageDetailSelection: Identifiable, Hashable {
     let id: String
+}
+
+private struct AgentStorageCleanupCompletion: Equatable {
+    let provider: AgentStorageProvider
+    let succeededCount: Int
+    let skippedCount: Int
+    let failedCount: Int
+    let measuredReleasedBytes: UInt64
+
+    init(provider: AgentStorageProvider, result: AgentStorageCleanupResult) {
+        self.provider = provider
+        succeededCount = result.succeededCount
+        skippedCount = result.skippedCount
+        failedCount = result.failedCount
+        measuredReleasedBytes = result.measuredReleasedBytes
+    }
 }
 
 private struct AgentStorageSummaryProjection {
@@ -604,9 +620,8 @@ struct AgentStorageView: View {
     @State private var isProjecting = false
     @State private var projectionGeneration = 0
     @State private var projectionTask: Task<Void, Never>?
-    @State private var isBatchSelecting = false
-    @State private var selectedFamilyIDs: Set<String> = []
-    @State private var cleanupSession: AgentStorageCleanupSession?
+    @State private var batchCleanupContext: AgentStorageBatchCleanupContext?
+    @State private var cleanupCompletion: AgentStorageCleanupCompletion?
     @State private var qualityDetails: AgentStorageQualityDetails?
     @FocusState private var tableHasFocus: Bool
     @FocusState private var focusedProvider: AgentStorageProvider?
@@ -633,7 +648,6 @@ struct AgentStorageView: View {
         .onChange(of: timeRange) { _, _ in
             if !isRestoringWorkspace {
                 clearSelectionAndDetails()
-                selectedFamilyIDs = []
                 resetChatPage()
                 scheduleProjection(debounce: .milliseconds(80))
             }
@@ -650,9 +664,8 @@ struct AgentStorageView: View {
         .onChange(of: selectedUnattributedReason) { _, _ in
             if !isRestoringWorkspace { scheduleProjection() }
         }
-        .onChange(of: scope) { _, newScope in
+        .onChange(of: scope) { _, _ in
             if !isRestoringWorkspace { clearSelectionAndDetails() }
-            if newScope != .chats { exitBatchSelection() }
             if !isRestoringWorkspace { scheduleProjection() }
         }
         .onChange(of: searchText) { _, _ in
@@ -673,7 +686,6 @@ struct AgentStorageView: View {
         .onChange(of: unattributedSortOrder) { _, _ in scheduleProjection() }
         .onDisappear { projectionTask?.cancel() }
         .onChange(of: selection) { _, newValue in
-            guard !isBatchSelecting else { return }
             guard let newValue, resolvedDetail(id: newValue) != nil else { return }
             presentDetail(id: newValue)
         }
@@ -689,16 +701,14 @@ struct AgentStorageView: View {
             .frame(minWidth: 560, minHeight: 560)
             .onDisappear { tableHasFocus = true }
         }
-        .sheet(item: $cleanupSession) { session in
-            AgentStorageCleanupReviewView(
-                session: session,
-                close: { cleanupSession = nil },
-                didFinish: {
-                    exitBatchSelection()
-                    model.invalidateCachedResults()
+        .sheet(item: $batchCleanupContext) { context in
+            AgentStorageBatchCleanupSheet(
+                context: context,
+                close: { batchCleanupContext = nil },
+                didFinish: { result in
+                    handleCleanupCompletion(result, provider: context.provider)
                 }
             )
-            .interactiveDismissDisabled(session.phase == .deleting)
         }
         .sheet(item: $qualityDetails) { details in
             AgentStorageQualityDetailsView(
@@ -756,7 +766,7 @@ struct AgentStorageView: View {
                 } label: {
                     Image(systemName: "sidebar.right")
                 }
-                .disabled(selection == nil || isBatchSelecting)
+                .disabled(selection == nil)
                 .help(L10n.text("显示详情"))
                 .accessibilityLabel(L10n.text("显示详情"))
                 .accessibilityIdentifier("agent-storage-detail")
@@ -784,7 +794,7 @@ struct AgentStorageView: View {
     }
 
     private func clearFilters() {
-        timeRange = isBatchSelecting ? .thirtyDays : .all
+        timeRange = .all
         clearScopeFilters()
     }
 
@@ -891,6 +901,14 @@ struct AgentStorageView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
+        } else if let cleanupCompletion {
+            AgentStorageCleanupCompletedView(
+                completion: cleanupCompletion,
+                reanalyze: {
+                    self.cleanupCompletion = nil
+                    model.startAnalysis()
+                }
+            )
         } else {
             emptyOrLoadingContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -933,9 +951,6 @@ struct AgentStorageView: View {
             providerStrip
             Divider()
             scopeActionBar
-            if isBatchSelecting, scope == .chats {
-                batchSelectionBar
-            }
             Divider()
             scopeContextBar
             contentTable
@@ -970,32 +985,44 @@ struct AgentStorageView: View {
         }
         .controlSize(.small)
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .frame(minHeight: 46)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.48))
+        .padding(.vertical, 7)
+        .frame(minHeight: 48)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.24))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-storage-scope-actions")
     }
 
     @ViewBuilder
     private var scopeViewControls: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 0) {
             if scope == .chats {
                 Button {
                     showsTimeRangePopover.toggle()
                 } label: {
-                    Label(
-                        timeRange.inactiveTitle ?? L10n.text("全部时间"),
-                        systemImage: timeRange == .all ? "clock" : "calendar.badge.clock"
+                    HStack(spacing: 7) {
+                        Image(systemName: timeRange == .all ? "clock" : "calendar.badge.clock")
+                            .foregroundStyle(timeRange == .all ? Color.secondary : Color.accentColor)
+                        Text(timeRange.inactiveTitle ?? L10n.text("全部时间"))
+                            .foregroundStyle(.primary)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 9)
+                    .frame(height: 28)
+                    .background(
+                        timeRange == .all ? Color.clear : Color.accentColor.opacity(0.1),
+                        in: RoundedRectangle(cornerRadius: 6)
                     )
+                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(AgentStorageCompactToolbarButtonStyle())
                 .popover(isPresented: $showsTimeRangePopover, arrowEdge: .bottom) {
                     AgentStorageAgeFilterPopover(
                         range: $timeRange,
                         scannedAt: model.snapshot?.scannedAt ?? .now,
                         summary: visibleChatSummary,
-                        isBatchSelecting: isBatchSelecting,
                         isUpdating: isProjecting
                     )
                 }
@@ -1005,6 +1032,9 @@ struct AgentStorageView: View {
                     timeRange.inactiveTitle ?? L10n.text("显示全部聊天")
                 )
                 .accessibilityIdentifier("agent-storage-time-range")
+
+                Divider()
+                    .frame(height: 16)
             }
 
             Button {
@@ -1014,7 +1044,9 @@ struct AgentStorageView: View {
                     Image(systemName: scopeFilterCount > 0
                         ? "line.3.horizontal.decrease.circle.fill"
                         : "line.3.horizontal.decrease.circle")
+                        .foregroundStyle(scopeFilterCount > 0 ? Color.accentColor : Color.secondary)
                     Text(L10n.text("筛选"))
+                        .foregroundStyle(.primary)
                     if scopeFilterCount > 0 {
                         Text(scopeFilterCount.formatted())
                             .font(.caption2.monospacedDigit().weight(.bold))
@@ -1023,8 +1055,16 @@ struct AgentStorageView: View {
                             .background(Color.accentColor, in: Circle())
                     }
                 }
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 9)
+                .frame(height: 28)
+                .background(
+                    scopeFilterCount > 0 ? Color.accentColor.opacity(0.1) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 6)
+                )
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(AgentStorageCompactToolbarButtonStyle())
             .popover(isPresented: $showsFilterPopover, arrowEdge: .bottom) {
                 AgentStorageFilterPopover(
                     scope: scope,
@@ -1044,16 +1084,41 @@ struct AgentStorageView: View {
             .accessibilityValue(L10n.format("%d 个筛选条件", scopeFilterCount))
             .accessibilityIdentifier("agent-storage-filter")
         }
+        .padding(2)
+        .background(
+            Color(nsColor: .controlBackgroundColor).opacity(0.72),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.58))
+        }
         .fixedSize(horizontal: true, vertical: false)
     }
 
     @ViewBuilder
     private var scopeManagementControls: some View {
-        if scope == .chats, !isBatchSelecting {
-            Button(action: toggleBatchSelection) {
-                Label(L10n.text("批量清理"), systemImage: "checklist")
+        if scope == .chats {
+            Button(action: presentBatchCleanup) {
+                HStack(spacing: 7) {
+                    Image(systemName: "checklist.checked")
+                    Text(L10n.text("批量清理"))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .padding(.horizontal, 10)
+                .frame(height: 32)
+                .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 7))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7)
+                        .stroke(Color.accentColor.opacity(0.32))
+                }
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(AgentStorageCompactToolbarButtonStyle())
             .disabled(
                 selectedProviderSummary?.supportStatus == .unsupportedFormat
                     || visibleChatSummary.families.isEmpty
@@ -1353,8 +1418,8 @@ struct AgentStorageView: View {
             TableColumn(L10n.text("聊天"), value: \.title) { row in
                 AgentStorageChatIdentityCell(
                     row: row,
-                    isSelecting: isBatchSelecting,
-                    isSelected: selectedFamilyIDs.contains(row.familyID),
+                    isSelecting: false,
+                    isSelected: false,
                     isExpanded: expandedFamilies.contains(row.familyID),
                     isExpanding: expandingFamilies.contains(row.familyID),
                     toggleExpanded: { toggleExpanded(row.familyID) },
@@ -1415,12 +1480,7 @@ struct AgentStorageView: View {
         .accessibilityFocused($tableAccessibilityFocus)
         .accessibilityIdentifier("agent-storage-chat-table")
         .onKeyPress(.return) {
-            if isBatchSelecting, let selection,
-               let row = visibleChatRows.first(where: { $0.id == selection }) {
-                toggleFamilySelection(row.familyID)
-            } else {
-                showSelectedDetail()
-            }
+            showSelectedDetail()
             return .handled
         }
         .onKeyPress(.rightArrow) {
@@ -1440,199 +1500,6 @@ struct AgentStorageView: View {
             }
             return .handled
         }
-    }
-
-    private var batchSelectionBar: some View {
-        let selectedFamilies = selectedBatchFamilies
-        let review = AgentStorageCleanupReview(families: selectedFamilies)
-        let pageFamilyIDs = currentPageFamilyIDs
-        let selectedPageCount = pageFamilyIDs.intersection(selectedFamilyIDs).count
-        let allPageSelected = !pageFamilyIDs.isEmpty && selectedPageCount == pageFamilyIDs.count
-        return ViewThatFits(in: .horizontal) {
-            HStack(spacing: 14) {
-                batchSelectionHeading
-                batchPageSelectionControl(
-                    pageCount: pageFamilyIDs.count,
-                    selectedCount: selectedPageCount,
-                    allSelected: allPageSelected
-                )
-                batchSelectionMenu
-                Spacer(minLength: 12)
-                batchSelectionSummary(review: review, count: selectedFamilies.count)
-                batchReviewButton(review)
-                batchSelectionCloseButton
-            }
-            VStack(alignment: .leading, spacing: 9) {
-                HStack(spacing: 10) {
-                    batchSelectionHeading
-                    Spacer(minLength: 8)
-                    batchSelectionCloseButton
-                }
-                HStack(spacing: 10) {
-                    batchPageSelectionControl(
-                        pageCount: pageFamilyIDs.count,
-                        selectedCount: selectedPageCount,
-                        allSelected: allPageSelected
-                    )
-                    batchSelectionMenu
-                    Spacer(minLength: 8)
-                    batchReviewButton(review)
-                }
-                batchSelectionSummary(review: review, count: selectedFamilies.count)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 11)
-        .frame(minHeight: 64)
-        .background(Color.accentColor.opacity(0.075))
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(Color.accentColor)
-                .frame(width: 3)
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("agent-storage-batch-summary")
-    }
-
-    private var batchSelectionHeading: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "checklist.checked")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 28, height: 28)
-                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(L10n.text("批量选择"))
-                    .font(.callout.weight(.semibold))
-                Text(timeRange.inactiveTitle ?? L10n.text("选择旧聊天"))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private func batchPageSelectionControl(
-        pageCount: Int,
-        selectedCount: Int,
-        allSelected: Bool
-    ) -> some View {
-        Button(action: toggleCurrentPageSelection) {
-            Label {
-                Text(L10n.format("当前页 %d / %d", selectedCount, pageCount))
-            } icon: {
-                Image(systemName: allSelected
-                    ? "checkmark.square.fill"
-                    : selectedCount > 0 ? "minus.square.fill" : "square")
-            }
-        }
-        .buttonStyle(.bordered)
-        .disabled(pageCount == 0)
-        .help(L10n.text(allSelected ? "取消选择当前页" : "选择当前页"))
-        .accessibilityLabel(L10n.text(allSelected ? "取消选择当前页" : "选择当前页"))
-        .accessibilityValue(L10n.format("已选择 %d，共 %d 个聊天", selectedCount, pageCount))
-        .accessibilityIdentifier("agent-storage-select-current-page")
-        .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private var batchSelectionMenu: some View {
-        let eligibleCount = batchEligibleFamilies.count
-        return Menu {
-            Button(action: selectAllMatchingFamilies) {
-                Label(
-                    L10n.format("选择全部 %d 个筛选结果", eligibleCount),
-                    systemImage: "checkmark.square"
-                )
-            }
-            .disabled(eligibleCount == 0)
-            Divider()
-            Button {
-                selectedFamilyIDs = []
-            } label: {
-                Label(L10n.text("清除全部选择"), systemImage: "square.dashed")
-            }
-            .disabled(selectedFamilyIDs.isEmpty)
-        } label: {
-            Label(L10n.text("选择范围"), systemImage: "chevron.down")
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize(horizontal: true, vertical: false)
-        .accessibilityIdentifier("agent-storage-selection-scope")
-    }
-
-    private func batchSelectionSummary(
-        review: AgentStorageCleanupReview,
-        count: Int
-    ) -> some View {
-        HStack(spacing: 13) {
-            batchSelectionMetric(
-                title: L10n.text("已选聊天"),
-                value: count.formatted(),
-                symbol: "checkmark.circle.fill"
-            )
-            batchSelectionMetric(
-                title: L10n.text("独占文件"),
-                value: review.artifacts.count.formatted(),
-                symbol: "doc.fill"
-            )
-            batchSelectionMetric(
-                title: L10n.text("预计释放"),
-                value: AgentStorageSizeFormatter.string(review.reclaimableBytes),
-                symbol: "arrow.down.to.line.compact",
-                valueColor: review.reclaimableBytes > 0 ? .green : .secondary
-            )
-        }
-        .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private func batchSelectionMetric(
-        title: String,
-        value: String,
-        symbol: String,
-        valueColor: Color = .primary
-    ) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(title)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text(value)
-                    .font(.caption.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(valueColor)
-            }
-        }
-        .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private func batchReviewButton(_ review: AgentStorageCleanupReview) -> some View {
-        Button {
-            cleanupSession = AgentStorageCleanupSession(review: review)
-        } label: {
-            Label(L10n.text("检查并清理"), systemImage: "arrow.right.circle.fill")
-        }
-        .buttonStyle(.borderedProminent)
-        .disabled(review.artifacts.isEmpty)
-        .help(review.artifacts.isEmpty
-            ? L10n.text("所选聊天没有可清理的独占文件")
-            : L10n.text("查看预计释放空间和文件明细"))
-        .accessibilityIdentifier("agent-storage-review-cleanup")
-        .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private var batchSelectionCloseButton: some View {
-        Button(action: exitBatchSelection) {
-            Image(systemName: "xmark")
-                .font(.system(size: 11, weight: .semibold))
-                .frame(width: 22, height: 22)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .help(L10n.text("退出批量选择"))
-        .accessibilityLabel(L10n.text("退出批量选择"))
-        .accessibilityIdentifier("agent-storage-exit-batch-selection")
     }
 
     private var chatPaginationBar: some View {
@@ -1982,9 +1849,6 @@ struct AgentStorageView: View {
         case .unattributed(let items):
             visibleUnattributedItems = items
         }
-        if case .chats = result.content {
-            selectedFamilyIDs.formIntersection(Set(visibleChatSummary.families.map(\.id)))
-        }
         guard let selection, !result.visibleIDs.contains(selection) else { return }
         clearSelectionAndDetails()
     }
@@ -2287,6 +2151,22 @@ struct AgentStorageView: View {
         }
     }
 
+    private func handleCleanupCompletion(
+        _ result: AgentStorageCleanupResult,
+        provider: AgentStorageProvider
+    ) {
+        batchCleanupContext = nil
+        guard result.changedStorage else { return }
+
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            cleanupCompletion = AgentStorageCleanupCompletion(provider: provider, result: result)
+            leaveProvider()
+            model.invalidateCachedResults()
+        }
+    }
+
     private func reconcileWorkspaceState(with dataset: AgentStorageProviderDataset) {
         let validFamilies = Set(dataset.families.map(\.id))
         expandedFamilies.formIntersection(validFamilies)
@@ -2359,73 +2239,20 @@ struct AgentStorageView: View {
         detailIndex[id]
     }
 
-    private var selectedBatchFamilies: [AgentStorageThreadFamily] {
-        let eligibleIDs = Set(batchEligibleFamilies.map(\.id))
-        return selectedFamilyIDs.intersection(eligibleIDs).compactMap { familyIndex[$0] }
-    }
-
-    private var currentPageFamilyIDs: Set<String> {
-        let pageIDs = AgentStorageBatchSelectionEngine.pageFamilyIDs(in: visibleChatRows)
-        guard isBatchSelecting else { return pageIDs }
-        return pageIDs.intersection(Set(batchEligibleFamilies.map(\.id)))
-    }
-
-    private var batchEligibleFamilies: [AgentStorageThreadFamily] {
-        let referenceDate = model.snapshot?.scannedAt ?? .now
-        let eligibleIDs = AgentStorageBatchSelectionEngine.eligibleFamilyIDs(
-            in: visibleChatSummary.families,
-            timeRange: timeRange,
-            relativeTo: referenceDate
+    private func presentBatchCleanup() {
+        guard let provider = selectedProvider,
+              let snapshot = model.snapshot,
+              let dataset = snapshot.dataset(for: provider) else { return }
+        batchCleanupContext = AgentStorageBatchCleanupContext(
+            provider: provider,
+            families: dataset.families,
+            scannedAt: snapshot.scannedAt,
+            hidesPrivateDetails: hidesPrivateDetails
         )
-        return visibleChatSummary.families.filter { eligibleIDs.contains($0.id) }
-    }
-
-    private func toggleBatchSelection() {
-        if isBatchSelecting {
-            exitBatchSelection()
-        } else {
-            clearSelectionAndDetails()
-            selectedFamilyIDs = []
-            if timeRange == .all { timeRange = .thirtyDays }
-            isBatchSelecting = true
-            Task { @MainActor in
-                await Task.yield()
-                showsTimeRangePopover = true
-            }
-        }
-    }
-
-    private func exitBatchSelection() {
-        isBatchSelecting = false
-        selectedFamilyIDs = []
-        showsTimeRangePopover = false
     }
 
     private func activateChatRow(_ row: AgentStorageChatRow) {
-        if isBatchSelecting {
-            toggleFamilySelection(row.familyID)
-        } else {
-            activateDetail(id: row.id)
-        }
-    }
-
-    private func toggleFamilySelection(_ familyID: String) {
-        if selectedFamilyIDs.contains(familyID) {
-            selectedFamilyIDs.remove(familyID)
-        } else if batchEligibleFamilies.contains(where: { $0.id == familyID }) {
-            selectedFamilyIDs.insert(familyID)
-        }
-    }
-
-    private func selectAllMatchingFamilies() {
-        selectedFamilyIDs = Set(batchEligibleFamilies.map(\.id))
-    }
-
-    private func toggleCurrentPageSelection() {
-        selectedFamilyIDs = AgentStorageBatchSelectionEngine.togglingCurrentPage(
-            selectedIDs: selectedFamilyIDs,
-            pageFamilyIDs: currentPageFamilyIDs
-        )
+        activateDetail(id: row.id)
     }
 
     private func relativeDate(_ date: Date) -> String {
@@ -2437,7 +2264,6 @@ private struct AgentStorageAgeFilterPopover: View {
     @Binding var range: AgentStorageTimeRange
     let scannedAt: Date
     let summary: AgentStorageChatRangeProjection
-    let isBatchSelecting: Bool
     let isUpdating: Bool
 
     @Environment(\.dismiss) private var dismiss
@@ -2448,25 +2274,15 @@ private struct AgentStorageAgeFilterPopover: View {
         VStack(alignment: .leading, spacing: 18) {
             header
 
-            if !isBatchSelecting {
-                Picker(L10n.text("聊天范围"), selection: showsInactiveOnly) {
-                    Text(L10n.text("全部聊天")).tag(false)
-                    Text(L10n.text("旧聊天")).tag(true)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .accessibilityLabel(L10n.text("聊天范围"))
-            } else {
-                Label(
-                    L10n.text("批量清理只会选择门槛之前最后活动的聊天。"),
-                    systemImage: "checkmark.shield.fill"
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Picker(L10n.text("聊天范围"), selection: showsInactiveOnly) {
+                Text(L10n.text("全部聊天")).tag(false)
+                Text(L10n.text("旧聊天")).tag(true)
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityLabel(L10n.text("聊天范围"))
 
-            if range != .all || isBatchSelecting {
+            if range != .all {
                 inactivityControls
                 cutoffSummary
             } else {
@@ -2488,25 +2304,20 @@ private struct AgentStorageAgeFilterPopover: View {
         }
         .padding(18)
         .frame(width: 400)
-        .onAppear {
-            if isBatchSelecting, range == .all {
-                range = .thirtyDays
-            }
-        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-storage-age-filter-popover")
     }
 
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: isBatchSelecting ? "clock.badge.checkmark.fill" : "calendar.badge.clock")
+            Image(systemName: "calendar.badge.clock")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
                 .frame(width: 34, height: 34)
                 .background(Color.accentColor.opacity(0.11), in: RoundedRectangle(cornerRadius: 7))
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.text(isBatchSelecting ? "清理旧聊天" : "按未活动时间筛选"))
+                Text(L10n.text("按未活动时间筛选"))
                     .font(.headline)
                 Text(L10n.text("按主聊天及其子代理的最后活动时间设置门槛。"))
                     .font(.caption)
@@ -3627,6 +3438,135 @@ private struct AgentStorageCategoryCell: View {
     }
 }
 
+private struct AgentStorageCleanupCompletedView: View {
+    let completion: AgentStorageCleanupCompletion
+    let reanalyze: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                completionHeader
+                resultSummary
+                    .padding(.top, 24)
+                accuracyNotice
+                    .padding(.top, 24)
+                Button(action: reanalyze) {
+                    Label(L10n.text("重新分析"), systemImage: "arrow.clockwise")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .frame(width: 220, height: 46)
+                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 8))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(AgentStoragePrimaryActionButtonStyle())
+                .keyboardShortcut(.defaultAction)
+                .padding(.top, 24)
+                .accessibilityIdentifier("agent-storage-reanalyze-after-cleanup")
+
+                Label(
+                    L10n.text("分析会增加 CPU 与磁盘读取，可随时停止。"),
+                    systemImage: "speedometer"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.top, 12)
+            }
+            .frame(maxWidth: 620)
+            .frame(maxWidth: .infinity, alignment: .top)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 72)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var completionHeader: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(.green)
+                .frame(width: 72, height: 72)
+                .background(Color.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.green.opacity(0.2))
+                }
+                .accessibilityHidden(true)
+            VStack(spacing: 6) {
+                Text(L10n.text("清理已完成"))
+                    .font(.title2.weight(.semibold))
+                Label(completion.provider.displayName, systemImage: providerSymbol)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var resultSummary: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                outcomeSummary
+                Divider().frame(height: 18)
+                releasedSummary
+            }
+            VStack(spacing: 8) {
+                outcomeSummary
+                releasedSummary
+            }
+        }
+        .font(.callout.monospacedDigit())
+    }
+
+    private var outcomeSummary: some View {
+        Text(L10n.format(
+            "成功 %d · 跳过 %d · 失败 %d",
+            completion.succeededCount,
+            completion.skippedCount,
+            completion.failedCount
+        ))
+        .foregroundStyle(.secondary)
+    }
+
+    private var releasedSummary: some View {
+        Label(
+            L10n.format(
+                "实际复核释放 %@",
+                AgentStorageSizeFormatter.string(completion.measuredReleasedBytes)
+            ),
+            systemImage: "internaldrive"
+        )
+        .fontWeight(.semibold)
+    }
+
+    private var accuracyNotice: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "checkmark.shield.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 22, height: 22)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L10n.text("占用数据需要更新"))
+                    .font(.callout.weight(.semibold))
+                Text(L10n.text("旧的空间结果已隐藏，避免显示删除前的占用数据。重新分析后即可查看最新构成。"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(15)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.54), in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.56))
+        }
+    }
+
+    private var providerSymbol: String {
+        completion.provider == .codex ? "terminal" : "bubble.left.and.text.bubble.right"
+    }
+}
+
 private struct AgentStorageAnalysisInvitation: View {
     let start: () -> Void
     @State private var isStartHovered = false
@@ -3868,6 +3808,17 @@ private struct AgentStoragePrimaryActionButtonStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
             .brightness(configuration.isPressed ? -0.06 : 0)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+private struct AgentStorageCompactToolbarButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(isEnabled ? (configuration.isPressed ? 0.72 : 1) : 0.42)
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
     }
 }
 

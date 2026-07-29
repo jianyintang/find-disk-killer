@@ -58,8 +58,25 @@ private actor CancellationGate {
     let result = await coordinator.execute(prepared, shouldCancel: { false }, didUpdate: { _ in })
 
     #expect(result.failedCount == 1)
+    #expect(!result.changedStorage)
     #expect(FileManager.default.fileExists(atPath: fixture.artifactURLs[0].path))
     #expect(try Data(contentsOf: fixture.artifactURLs[0]) == fixture.contents)
+}
+
+@Test func cleanupResultInvalidatesTheSnapshotOnlyAfterOfficialSuccess() async throws {
+    let fixture = try CleanupFixture(provider: .codex, count: 1)
+    defer { fixture.destroy() }
+    let adapter = FakeCleanupAdapter(outcomes: [.succeeded])
+    let coordinator = AgentStorageCleanupCoordinator(
+        codex: adapter,
+        claude: adapter,
+        activityInspector: FakeActivityInspector(hasWriter: false)
+    )
+    let prepared = await coordinator.prepare(AgentStorageCleanupReview(families: fixture.families))
+    let result = await coordinator.execute(prepared, shouldCancel: { false }, didUpdate: { _ in })
+
+    #expect(result.succeededCount == 1)
+    #expect(result.changedStorage)
 }
 
 @Test func cleanupActivityAndIdentityGatesSkipWithoutProviderCall() async throws {

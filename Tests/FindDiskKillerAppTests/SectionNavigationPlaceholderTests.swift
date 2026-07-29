@@ -5,9 +5,12 @@ import Testing
     #expect(AppSection.reports.navigationPlaceholderKind == .history)
 }
 
-@Test func otherSectionsKeepTheirPurposeBuiltNavigationPlaceholders() {
+@Test func agentStorageNeverUsesANavigationSkeleton() {
+    #expect(AppSection.agentStorage.navigationPlaceholderKind == nil)
+}
+
+@Test func deferredSectionsKeepTheirPurposeBuiltNavigationPlaceholders() {
     #expect(AppSection.processes.navigationPlaceholderKind == .processes)
-    #expect(AppSection.agentStorage.navigationPlaceholderKind == .agentStorage)
     #expect(AppSection.overview.navigationPlaceholderKind == .overview)
     #expect(AppSection.disks.navigationPlaceholderKind == .resources)
 }

@@ -60,6 +60,7 @@ struct AgentStorageCleanupResult: Sendable {
     let measuredReleasedBytes: UInt64
 
     var succeededCount: Int { targets.count(where: { $0.outcome == .succeeded }) }
+    var changedStorage: Bool { succeededCount > 0 }
     var skippedCount: Int {
         targets.count { target in
             if case .skipped = target.outcome { return true }
@@ -535,7 +536,7 @@ final class AgentStorageCleanupSession: ObservableObject, Identifiable {
 struct AgentStorageCleanupReviewView: View {
     @ObservedObject var session: AgentStorageCleanupSession
     let close: () -> Void
-    let didFinish: () -> Void
+    let didFinish: (AgentStorageCleanupResult) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -553,9 +554,6 @@ struct AgentStorageCleanupReviewView: View {
         .frame(minWidth: 660, idealWidth: 720, minHeight: 560, idealHeight: 640)
         .background(Color(nsColor: .windowBackgroundColor))
         .task { await session.prepare() }
-        .onChange(of: session.phase) { _, phase in
-            if phase == .finished { didFinish() }
-        }
         .accessibilityIdentifier("agent-storage-cleanup-review")
     }
 
@@ -573,7 +571,7 @@ struct AgentStorageCleanupReviewView: View {
             }
             Spacer()
             if session.phase != .deleting {
-                Button(action: close) { Image(systemName: "xmark") }
+                Button(action: dismissReview) { Image(systemName: "xmark") }
                     .buttonStyle(.borderless)
                     .help(L10n.text("关闭"))
             }
@@ -743,7 +741,7 @@ struct AgentStorageCleanupReviewView: View {
             if session.phase == .deleting {
                 Button(L10n.text("取消剩余任务")) { session.cancelRemaining() }
             } else if session.phase == .finished {
-                Button(L10n.text("完成"), action: close).keyboardShortcut(.defaultAction)
+                Button(L10n.text("完成"), action: dismissReview).keyboardShortcut(.defaultAction)
             } else {
                 Button(L10n.text("取消"), action: close).keyboardShortcut(.cancelAction)
                 Button {
@@ -757,5 +755,13 @@ struct AgentStorageCleanupReviewView: View {
             }
         }
         .padding(.horizontal, 20).frame(height: 66).background(.bar)
+    }
+
+    private func dismissReview() {
+        if session.phase == .finished, let result = session.result {
+            didFinish(result)
+        } else {
+            close()
+        }
     }
 }

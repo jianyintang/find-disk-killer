@@ -109,6 +109,63 @@ import Testing
     #expect(summary.chatBytes == 70)
 }
 
+@Test func agentStorageBatchCleanupOwnsAnIndependentProtectedScope() {
+    let reference = Date(timeIntervalSince1970: 20_000_000)
+    let recent = makeFamily(
+        id: "recent",
+        updatedAt: reference.addingTimeInterval(-2 * 24 * 60 * 60),
+        bytes: 10,
+        title: "Recent work",
+        project: "Current"
+    )
+    let alpha = makeFamily(
+        id: "alpha-old",
+        updatedAt: reference.addingTimeInterval(-31 * 24 * 60 * 60),
+        bytes: 20,
+        title: "Alpha cleanup",
+        project: "Alpha"
+    )
+    let beta = makeFamily(
+        id: "beta-old",
+        updatedAt: reference.addingTimeInterval(-90 * 24 * 60 * 60),
+        bytes: 30,
+        title: "Beta archive",
+        project: "Beta"
+    )
+
+    #expect(AgentStorageBatchCleanupEngine.defaultTimeRange == .thirtyDays)
+    let initial = AgentStorageBatchCleanupEngine.project(
+        families: [recent, alpha, beta],
+        timeRange: AgentStorageBatchCleanupEngine.defaultTimeRange,
+        selectedProject: nil,
+        query: "",
+        relativeTo: reference,
+        hidesPrivateDetails: false
+    )
+    #expect(initial.families.map(\.id) == ["alpha-old", "beta-old"])
+    #expect(initial.projects == ["Alpha", "Beta"])
+
+    let projectOnly = AgentStorageBatchCleanupEngine.project(
+        families: [recent, alpha, beta],
+        timeRange: .thirtyDays,
+        selectedProject: "Beta",
+        query: "archive",
+        relativeTo: reference,
+        hidesPrivateDetails: false
+    )
+    #expect(projectOnly.families.map(\.id) == ["beta-old"])
+
+    let privacyProtected = AgentStorageBatchCleanupEngine.project(
+        families: [alpha],
+        timeRange: .thirtyDays,
+        selectedProject: nil,
+        query: "Alpha cleanup",
+        relativeTo: reference,
+        hidesPrivateDetails: true
+    )
+    #expect(privacyProtected.families.isEmpty)
+}
+
 @Test func agentStorageLargestSubagentsAreRankedByAllocatedSpace() {
     let date = Date(timeIntervalSince1970: 1_000)
     let family = AgentStorageThreadFamily(
@@ -499,15 +556,17 @@ private func makeSubagent(id: String, bytes: UInt64, updatedAt: Date) -> AgentSt
 private func makeFamily(
     id: String,
     updatedAt: Date,
-    bytes: UInt64
+    bytes: UInt64,
+    title: String? = nil,
+    project: String = "Project"
 ) -> AgentStorageThreadFamily {
     AgentStorageThreadFamily(
         id: id,
         provider: .codex,
         sourceID: "source",
         nativeThreadID: id,
-        title: id,
-        project: "Project",
+        title: title ?? id,
+        project: project,
         updatedAt: updatedAt,
         isArchived: false,
         mainAllocatedBytes: bytes,
