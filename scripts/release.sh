@@ -92,7 +92,7 @@ keychain_public_key=$("$generate_keys" --account "$sparkle_key_account" -p | tr 
     exit 1
 }
 
-xcodegen generate
+SWIFT_DETERMINISTIC_HASHING=1 xcodegen generate
 if [[ ${ALLOW_DIRTY:-0} != 1 && -n "$(git status --porcelain)" ]]; then
     echo "XcodeGen changed tracked release files. Regenerate and commit them before releasing." >&2
     exit 1

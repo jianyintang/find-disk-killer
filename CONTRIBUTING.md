@@ -12,7 +12,7 @@ XcodeGen is the source of truth for the checked-in Xcode project.
 ```bash
 git clone https://github.com/jianyintang/find-disk-killer.git
 cd find-disk-killer
-xcodegen generate
+make project
 swift test
 xcodebuild \
   -project FindDiskKiller.xcodeproj \
@@ -37,7 +37,7 @@ permissions.
 - Keep changes narrowly scoped and preserve the existing Swift and SwiftUI
   patterns.
 - Run `swift test` and `make lint`.
-- Run `xcodegen generate` and include any resulting tracked project changes.
+- Run `make project` and include any resulting tracked project changes.
 - Add or update focused tests when measurement, parsing, or aggregation behavior
   changes.
 - Keep application I/O, physical-device throughput, recent file changes, and

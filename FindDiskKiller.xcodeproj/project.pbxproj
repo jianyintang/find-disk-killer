@@ -86,10 +86,10 @@
 		1CD4BC1DF097731EE34DD149 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = Contents/Library/LaunchDaemons;
-			dstSubfolderSpec = 1;
+			dstPath = "";
+			dstSubfolderSpec = 6;
 			files = (
-				9E3B6D513AAF6D1ECFA54F73 /* FindDiskKillerTraceHelper in Embed Dependencies */,
+				F56D28AD59EEE6EAF5521F2A /* FindDiskKillerClaudeCleanupHelper in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -108,10 +108,10 @@
 		EF8A0DAD366D2321393EC137 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 6;
+			dstPath = Contents/Library/LaunchDaemons;
+			dstSubfolderSpec = 1;
 			files = (
-				F56D28AD59EEE6EAF5521F2A /* FindDiskKillerClaudeCleanupHelper in Embed Dependencies */,
+				9E3B6D513AAF6D1ECFA54F73 /* FindDiskKillerTraceHelper in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;

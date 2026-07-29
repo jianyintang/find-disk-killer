@@ -1,7 +1,7 @@
 .PHONY: project test test-agent-cleanup-fixtures test-privileged lint release
 
 project:
-	xcodegen generate
+	SWIFT_DETERMINISTIC_HASHING=1 xcodegen generate
 
 test:
 	@echo "Running non-privileged unit tests (the App and Trace Helper will not be launched)."

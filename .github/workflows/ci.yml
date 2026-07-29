@@ -36,7 +36,7 @@ jobs:
           "$install_root/xcodegen/bin/xcodegen" --version
       - name: Build the app and trace helper
         run: |
-          xcodegen generate
+          make project
           git diff --exit-code -- AppConfig/FindDiskKiller-Info.plist FindDiskKiller.xcodeproj/project.pbxproj
           xcodebuild \
             -project FindDiskKiller.xcodeproj \
