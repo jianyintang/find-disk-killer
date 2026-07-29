@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0979572E0A5DF2D9EC840C36 /* AgentStorageQualityViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2848171CEE38313F3FC594EC /* AgentStorageQualityViews.swift */; };
 		1499823B10B0CC6D47F29166 /* codex-openai.svg in Resources */ = {isa = PBXBuildFile; fileRef = 557B99818141A5F6C7641804 /* codex-openai.svg */; };
 		149AD03F0F95F5953BC2472D /* THIRD_PARTY_ASSETS.md in Resources */ = {isa = PBXBuildFile; fileRef = DEAF50A4052D9A28723D4E58 /* THIRD_PARTY_ASSETS.md */; };
 		1BFD6A0C548294189B5161F1 /* FindDiskKillerCore in Frameworks */ = {isa = PBXBuildFile; productRef = DF40BF11AB711252275ECD86 /* FindDiskKillerCore */; };
@@ -126,6 +127,7 @@
 		19522173F0ADEF7848BBB1F9 /* claude-code.svg */ = {isa = PBXFileReference; path = "claude-code.svg"; sourceTree = "<group>"; };
 		195FD2EA225982A5C2A7D542 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		1F0023EE9E80BF9FD710B334 /* FileAccessTraceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileAccessTraceStore.swift; sourceTree = "<group>"; };
+		2848171CEE38313F3FC594EC /* AgentStorageQualityViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStorageQualityViews.swift; sourceTree = "<group>"; };
 		294F590D986AF1CE1F5F6243 /* HistoryApplicationTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryApplicationTable.swift; sourceTree = "<group>"; };
 		2B6407D04086DD337BBFE898 /* AgentStorageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStorageView.swift; sourceTree = "<group>"; };
 		2CD437307D2C3FFC14DBC510 /* AppNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppNavigation.swift; sourceTree = "<group>"; };
@@ -133,7 +135,6 @@
 		397BF22044FB3F231AE3EF11 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		3BDED8FB2CC79A69D2E701EF /* TraceActivityRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraceActivityRegistry.swift; sourceTree = "<group>"; };
 		3C5B6D633FF601F496BFED97 /* ProcessHoverCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessHoverCard.swift; sourceTree = "<group>"; };
-		42FB1A75DB64A29BAE2CC4D9 /* find-disk-killer-official-agent-cleanup */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "find-disk-killer-official-agent-cleanup"; path = .; sourceTree = SOURCE_ROOT; };
 		4553CEB12FD65DB0D81627E2 /* AgentStorageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStorageModel.swift; sourceTree = "<group>"; };
 		4555CB0F323A2704AA5AC37B /* HistoryReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryReportView.swift; sourceTree = "<group>"; };
 		457028605863AA4C13E784A4 /* ProcessesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessesView.swift; sourceTree = "<group>"; };
@@ -174,6 +175,7 @@
 		DCA525FC8E67E0D64066F068 /* HistoryChartViewport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryChartViewport.swift; sourceTree = "<group>"; };
 		DEAF50A4052D9A28723D4E58 /* THIRD_PARTY_ASSETS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_ASSETS.md; sourceTree = "<group>"; };
 		E01B15E8F0C14456E698603B /* LoginItemSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginItemSettingsModel.swift; sourceTree = "<group>"; };
+		E04236245903A75F04C44603 /* find-disk-killer-agent-storage-diagnostics */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "find-disk-killer-agent-storage-diagnostics"; path = .; sourceTree = SOURCE_ROOT; };
 		E10F875FFF3EC9D9FECC30CD /* ProcessIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessIcon.swift; sourceTree = "<group>"; };
 		E2B7CDE4FFBC48FA99A96EE0 /* AgentStorageCleanup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStorageCleanup.swift; sourceTree = "<group>"; };
 		F233B95DF10CF40F0DE7228B /* AppRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRuntime.swift; sourceTree = "<group>"; };
@@ -271,6 +273,7 @@
 			isa = PBXGroup;
 			children = (
 				4774912235CC4A05F06D35F7 /* AboutPage.swift */,
+				2848171CEE38313F3FC594EC /* AgentStorageQualityViews.swift */,
 				2B6407D04086DD337BBFE898 /* AgentStorageView.swift */,
 				7F13AE24E17E72270635D523 /* DisksView.swift */,
 				5A3C91E9D097BF60792BFA1D /* FileAccessTraceView.swift */,
@@ -290,7 +293,7 @@
 		ADC8128EAF213ACF0F089EDC /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				42FB1A75DB64A29BAE2CC4D9 /* find-disk-killer-official-agent-cleanup */,
+				E04236245903A75F04C44603 /* find-disk-killer-agent-storage-diagnostics */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
@@ -518,6 +521,7 @@
 				E59CA58612FC6FBA781EA7A4 /* AgentStorageCleanup.swift in Sources */,
 				F7658E946A5B496036ED45DA /* AgentStorageModel.swift in Sources */,
 				24785A3A48032270D42A5699 /* AgentStorageOfficialCleanupAdapters.swift in Sources */,
+				0979572E0A5DF2D9EC840C36 /* AgentStorageQualityViews.swift in Sources */,
 				3AB42A16B49F82400C7FF300 /* AgentStorageView.swift in Sources */,
 				38188339774F720B848980D0 /* AppNavigation.swift in Sources */,
 				F9330F09999DF74A07CFD4C2 /* AppRuntime.swift in Sources */,

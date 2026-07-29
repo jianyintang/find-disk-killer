@@ -35,9 +35,16 @@ import Testing
 
     #expect(snapshot.coverage.unstableEntryCount > 0)
     #expect(!snapshot.coverage.isComplete)
+    #expect(!snapshot.coverage.isPhysicalMeasurementComplete)
     let claudeSummary = try #require(snapshot.providers.first { $0.provider == .claude })
     #expect(claudeSummary.unstableEntryCount > 0)
     #expect(claudeSummary.supportStatus == .partial)
+    #expect(claudeSummary.attributionStatus == .noConversationSource)
+    #expect(snapshot.diagnostics.contains {
+        $0.provider == .claude
+            && $0.kind == .changedDuringScan
+            && $0.impact == .physicalMeasurement
+    })
 }
 
 @Test func agentStorageScannerOnlyOffersStableSingleLinkThreadFilesForCleanup() async throws {
@@ -346,6 +353,13 @@ import Testing
     let summary = try #require(snapshot.providers.first { $0.provider == .codex })
     #expect(summary.supportStatus == .partial)
     #expect(snapshot.coverage.measuredBytes == snapshot.coverage.classifiedBytes)
+    #expect(snapshot.coverage.isPhysicalMeasurementComplete)
+    #expect(snapshot.diagnostics.count == 1)
+    let diagnostic = try #require(snapshot.diagnostics.first)
+    #expect(diagnostic.kind == .databaseAttributionUnavailable)
+    #expect(diagnostic.affectedAllocatedBytes == attribution.physicalBundleBytes)
+    #expect(summary.issueCount == 1)
+    #expect(summary.diagnosticCounts[.databaseAttributionUnavailable] == 1)
 }
 
 @Test func agentStorageDatabaseProgressStaysMonotonicAcrossMultipleCodexHomes() async throws {
@@ -1080,6 +1094,97 @@ import Testing
     #expect(damaged.providers.first { $0.provider == .claude }?.supportStatus == .partial)
     #expect(unsupported.coverage.measuredBytes == unsupported.coverage.classifiedBytes)
     #expect(damaged.coverage.measuredBytes == damaged.coverage.classifiedBytes)
+    #expect(unsupported.coverage.isPhysicalMeasurementComplete)
+    #expect(damaged.coverage.isPhysicalMeasurementComplete)
+    #expect(unsupported.diagnostics.map(\.kind) == [.sourceUnsupportedFormat])
+    #expect(damaged.diagnostics.map(\.kind) == [.mainTranscriptUnreadable])
+    #expect(damaged.diagnostics.first?.affectedAllocatedBytes == allocatedBytes(
+        of: damagedProject.appending(path: "\(damagedID).jsonl")
+    ))
+    #expect(damaged.providers.first { $0.provider == .claude }?.issueCount == 1)
+}
+
+@Test func agentStorageScannerKeepsValidClaudeIdentityWhenOneRecordIsDamaged() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let project = root.appending(
+        path: ".claude/projects/-tmp-partial",
+        directoryHint: .isDirectory
+    )
+    try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+    let sessionID = "54000000-0000-0000-0000-000000000001"
+    let transcript = project.appending(path: "\(sessionID).jsonl")
+    try Data("""
+    {"type":"user","sessionId":"\(sessionID)","cwd":"/tmp/partial","message":{"role":"user","content":"Keep me"}}
+    {not-json
+    """.utf8).write(to: transcript)
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan()
+
+    #expect(snapshot.families.contains { $0.nativeThreadID == sessionID })
+    #expect(snapshot.coverage.isPhysicalMeasurementComplete)
+    #expect(!snapshot.coverage.isComplete)
+    let diagnostic = try #require(snapshot.diagnostics.first)
+    #expect(snapshot.diagnostics.count == 1)
+    #expect(diagnostic.kind == .malformedTranscriptRecords)
+    #expect(diagnostic.impact == .chatMetadata)
+    #expect(diagnostic.affectedEntityCount == 1)
+    #expect(diagnostic.affectedAllocatedBytes == nil)
+    let summary = try #require(snapshot.providers.first { $0.provider == .claude })
+    #expect(summary.attributionStatus == .partial)
+    #expect(summary.issueCount == 1)
+    #expect(summary.knownAffectedBytes == 0)
+}
+
+@Test func agentStorageScannerClassifiesClaudeMetadataOnlyAndAmbiguousToolResults() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let project = root.appending(
+        path: ".claude/projects/-tmp-diagnostics",
+        directoryHint: .isDirectory
+    )
+    let sessionID = "55000000-0000-0000-0000-000000000001"
+    let sessionDirectory = project.appending(path: sessionID, directoryHint: .isDirectory)
+    let subagents = sessionDirectory.appending(path: "subagents", directoryHint: .isDirectory)
+    let toolResults = sessionDirectory.appending(path: "tool-results", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: subagents, withIntermediateDirectories: true)
+    let firstDirectory = toolResults.appending(path: "first", directoryHint: .isDirectory)
+    let secondDirectory = toolResults.appending(path: "second", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: firstDirectory, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: secondDirectory, withIntermediateDirectories: true)
+    let mainRecord = "{\"type\":\"user\",\"sessionId\":\"\(sessionID)\",\"cwd\":\"/tmp/diagnostics\"}\n"
+    try Data(mainRecord.utf8).write(to: project.appending(path: "\(sessionID).jsonl"))
+    try Data("{\"description\":\"Metadata only\",\"spawnDepth\":1}".utf8)
+        .write(to: subagents.appending(path: "agent-metadata.meta.json"))
+    let firstTool = firstDirectory.appending(path: "duplicate.txt")
+    let secondTool = secondDirectory.appending(path: "duplicate.txt")
+    try Data(repeating: 0x41, count: 4_096).write(to: firstTool)
+    try Data(repeating: 0x42, count: 8_192).write(to: secondTool)
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan()
+
+    let diagnostics = Dictionary(uniqueKeysWithValues: snapshot.diagnostics.map { ($0.kind, $0) })
+    let metadataOnly = try #require(diagnostics[.subagentMetadataOnly])
+    let ambiguousTool = try #require(diagnostics[.ambiguousToolResult])
+    #expect(snapshot.diagnostics.count == 2)
+    #expect(metadataOnly.area == .subagent)
+    #expect(metadataOnly.affectedAllocatedBytes == nil)
+    #expect(ambiguousTool.area == .toolResult)
+    #expect(ambiguousTool.affectedEntityCount == 2)
+    #expect(ambiguousTool.affectedAllocatedBytes
+        == allocatedBytes(of: firstTool) + allocatedBytes(of: secondTool))
+    #expect(snapshot.coverage.isPhysicalMeasurementComplete)
+    #expect(!snapshot.coverage.isComplete)
+    let summary = try #require(snapshot.providers.first { $0.provider == .claude })
+    #expect(summary.issueCount == 2)
+    #expect(summary.attributionStatus == .partial)
+    #expect(summary.knownAffectedBytes == ambiguousTool.affectedAllocatedBytes)
 }
 
 @Test func agentStorageTimeProjectionIncludesCompleteThreadFamiliesAtBoundary() throws {
@@ -1130,6 +1235,14 @@ import Testing
     #expect(snapshot.families.allSatisfy { $0.provider != .claude })
     #expect(snapshot.unattributedItems.contains { $0.provider == .claude && $0.allocatedBytes > 0 })
     #expect(!snapshot.coverage.isComplete)
+    #expect(snapshot.coverage.isPhysicalMeasurementComplete)
+    let diagnostic = try #require(snapshot.diagnostics.first)
+    #expect(snapshot.diagnostics.count == 1)
+    #expect(diagnostic.kind == .sessionIdentityMismatch)
+    #expect(diagnostic.impact == .chatDiscovery)
+    #expect(diagnostic.affectedAllocatedBytes == allocatedBytes(
+        of: project.appending(path: "\(fileID).jsonl")
+    ))
 }
 
 @Test func agentStorageScannerKeepsInvalidCodexRelationshipsUnattributed() async throws {

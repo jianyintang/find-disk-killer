@@ -358,6 +358,130 @@ import Testing
     #expect(lastRows.last?.id == "family-0")
 }
 
+@Test func agentStorageSnapshotDecodesLegacyCacheWithoutDiagnostics() throws {
+    let summary = AgentStorageProviderSummary(
+        provider: .claude,
+        exclusiveBytes: 0,
+        chatBytes: 0,
+        globalBytes: 0,
+        unattributedBytes: 0,
+        mainThreadBytes: 0,
+        subagentBytes: 0,
+        familyOtherBytes: 0,
+        threadCount: 0,
+        subagentCount: 0,
+        sourceCount: 1,
+        issueCount: 2,
+        supportStatus: .partial
+    )
+    let snapshot = AgentStorageSnapshot(
+        scannedAt: Date(timeIntervalSince1970: 1_000),
+        families: [],
+        globalItems: [],
+        unattributedItems: [],
+        providers: [summary],
+        sources: [],
+        coverage: AgentStorageCoverage(
+            measuredBytes: 0,
+            classifiedBytes: 0,
+            measuredEntryCount: 0,
+            skippedEntryCount: 0,
+            unstableEntryCount: 0,
+            overflowed: false,
+            reconciliationDelta: 0,
+            isComplete: false
+        ),
+        crossAgentSharedBytes: 0,
+        diagnostics: [AgentStorageDiagnostic(
+            id: "diagnostic",
+            provider: .claude,
+            sourceID: "source",
+            kind: .sourceUnreadable,
+            area: .dataSource,
+            impact: .chatDiscovery
+        )]
+    )
+    let encoded = try JSONEncoder().encode(snapshot)
+    var object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    object.removeValue(forKey: "diagnostics")
+    var providers = try #require(object["providers"] as? [[String: Any]])
+    providers[0].removeValue(forKey: "attributionStatus")
+    providers[0].removeValue(forKey: "diagnosticCounts")
+    providers[0].removeValue(forKey: "knownAffectedBytes")
+    object["providers"] = providers
+
+    let decoded = try JSONDecoder().decode(
+        AgentStorageSnapshot.self,
+        from: JSONSerialization.data(withJSONObject: object)
+    )
+
+    #expect(decoded.diagnostics.isEmpty)
+    #expect(decoded.providers.first?.attributionStatus == .partial)
+    #expect(decoded.providers.first?.diagnosticCounts.isEmpty == true)
+    #expect(decoded.providers.first?.knownAffectedBytes == 0)
+}
+
+@Test func agentStorageQualityPresentationSeparatesPhysicalAndAttributionProblems() {
+    let physical = AgentStorageDiagnostic(
+        id: "physical",
+        provider: .claude,
+        sourceID: "source",
+        kind: .changedDuringScan,
+        area: .fileSystem,
+        impact: .physicalMeasurement,
+        affectedAllocatedBytes: 4_096
+    )
+    let attribution = AgentStorageDiagnostic(
+        id: "attribution",
+        provider: .claude,
+        sourceID: "source",
+        kind: .malformedTranscriptRecords,
+        area: .mainChat,
+        impact: .chatMetadata
+    )
+    let summary = AgentStorageProviderSummary(
+        provider: .claude,
+        exclusiveBytes: 4_096,
+        chatBytes: 4_096,
+        globalBytes: 0,
+        unattributedBytes: 0,
+        mainThreadBytes: 4_096,
+        subagentBytes: 0,
+        familyOtherBytes: 0,
+        threadCount: 1,
+        subagentCount: 0,
+        sourceCount: 1,
+        issueCount: 2,
+        supportStatus: .partial,
+        attributionStatus: .partial,
+        knownAffectedBytes: 4_096
+    )
+    let coverage = AgentStorageCoverage(
+        measuredBytes: 4_096,
+        classifiedBytes: 4_096,
+        measuredEntryCount: 1,
+        skippedEntryCount: 0,
+        unstableEntryCount: 1,
+        overflowed: false,
+        reconciliationDelta: 0,
+        isComplete: false
+    )
+
+    let presentation = AgentStorageQualityPresentation(
+        coverage: coverage,
+        summary: summary,
+        diagnostics: [physical, attribution]
+    )
+
+    #expect(!presentation.isPhysicalMeasurementComplete)
+    #expect(presentation.totalDiagnosticCount == 2)
+    #expect(presentation.physicalDiagnosticCount == 1)
+    #expect(presentation.attributionDiagnosticCount == 1)
+    #expect(presentation.attributionStatus == .partial)
+    #expect(presentation.knownAffectedBytes == 4_096)
+    #expect(!presentation.hasUnknownAffectedBytes)
+}
+
 private func makeSubagent(id: String, bytes: UInt64, updatedAt: Date) -> AgentStorageThreadNode {
     AgentStorageThreadNode(
         id: id,

@@ -607,6 +607,7 @@ struct AgentStorageView: View {
     @State private var isBatchSelecting = false
     @State private var selectedFamilyIDs: Set<String> = []
     @State private var cleanupSession: AgentStorageCleanupSession?
+    @State private var qualityDetails: AgentStorageQualityDetails?
     @FocusState private var tableHasFocus: Bool
     @FocusState private var focusedProvider: AgentStorageProvider?
     @AccessibilityFocusState private var accessibilityFocusedProvider: AgentStorageProvider?
@@ -698,6 +699,13 @@ struct AgentStorageView: View {
                 }
             )
             .interactiveDismissDisabled(session.phase == .deleting)
+        }
+        .sheet(item: $qualityDetails) { details in
+            AgentStorageQualityDetailsView(
+                details: details,
+                hidesPrivateDetails: hidesPrivateDetails,
+                reanalyze: model.startAnalysis
+            )
         }
     }
 
@@ -1088,25 +1096,19 @@ struct AgentStorageView: View {
                             .accessibilityLabel(L10n.text("时间范围统计说明"))
                     }
                 }
-                if let summary = selectedProviderSummary, summary.supportStatus == .partial,
-                   summary.unsupportedSourceCount > 0 {
-                    Label(
-                        L10n.format(
-                            "部分聊天无法解析；已显示可识别的聊天，另有 %d 个数据位置的格式暂不支持。",
-                            summary.unsupportedSourceCount
-                        ),
-                        systemImage: "exclamationmark.triangle.fill"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                } else if let summary = selectedProviderSummary,
-                          summary.unreadableSourceCount > 0 {
-                    Label(
-                        L10n.text("部分聊天数据无法读取；已显示其余可识别的聊天。"),
-                        systemImage: "exclamationmark.triangle.fill"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                if let snapshot = model.snapshot,
+                   let summary = selectedProviderSummary {
+                    let diagnostics = snapshot.diagnostics(for: summary.provider)
+                    if !diagnostics.isEmpty {
+                        AgentStorageQualityBar(
+                            presentation: AgentStorageQualityPresentation(
+                                coverage: snapshot.coverage,
+                                summary: summary,
+                                diagnostics: diagnostics
+                            ),
+                            showDetails: { showQualityDetails(for: summary.provider) }
+                        )
+                    }
                 }
                 if let failure = selectedDatabaseFailures.first {
                     HStack(spacing: 8) {
@@ -1250,16 +1252,21 @@ struct AgentStorageView: View {
         Group {
             if model.isScanning {
                 AgentStorageRefreshingProgressView(model: model)
-            } else {
-                HStack(spacing: 6) {
-                    Image(systemName: providerStatusSymbol)
-                        .foregroundStyle(providerStatusColor)
-                    Text(providerStatusText(snapshot))
-                        .foregroundStyle(.secondary)
-                }
+            } else if let summary = selectedProviderSummary {
+                let diagnostics = snapshot.diagnostics(for: summary.provider)
+                AgentStorageQualityStatusCluster(
+                    presentation: AgentStorageQualityPresentation(
+                        coverage: snapshot.coverage,
+                        summary: summary,
+                        diagnostics: diagnostics
+                    ),
+                    showDetails: diagnostics.isEmpty
+                        ? nil
+                        : { showQualityDetails(for: summary.provider) }
+                )
             }
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 
     private func globalScanStatus(_ snapshot: AgentStorageSnapshot) -> some View {
@@ -1267,104 +1274,25 @@ struct AgentStorageView: View {
             if model.isScanning {
                 AgentStorageRefreshingProgressView(model: model)
             } else {
-                HStack(spacing: 6) {
-                    Image(systemName: globalStatusSymbol(snapshot))
-                        .foregroundStyle(globalStatusColor(snapshot))
-                    Text(globalStatusText(snapshot))
-                        .foregroundStyle(.secondary)
-                }
+                AgentStorageQualityStatusCluster(
+                    presentation: AgentStorageQualityPresentation(snapshot: snapshot),
+                    showDetails: snapshot.diagnostics.isEmpty
+                        ? nil
+                        : { showQualityDetails(for: nil) }
+                )
             }
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 
-    private func globalStatusText(_ snapshot: AgentStorageSnapshot) -> String {
-        if model.isScanning { return L10n.text("正在刷新，上次结果仍可查看") }
-        switch model.state {
-        case .failed:
-            return L10n.text("刷新失败，显示上次结果")
-        case .stale:
-            return L10n.text("扫描已停止，显示上次结果")
-        default:
-            break
-        }
-        if !snapshot.coverage.isComplete {
-            let metadataIssues = snapshot.providers.reduce(0) { $0 + $1.issueCount }
-            if metadataIssues > 0,
-               snapshot.coverage.skippedEntryCount == 0,
-               snapshot.coverage.unstableEntryCount == 0 {
-                return L10n.format("部分结果：%d 项元数据无法验证", metadataIssues)
-            }
-            return L10n.format(
-                "部分结果：跳过 %d 项，变化 %d 项",
-                snapshot.coverage.skippedEntryCount,
-                snapshot.coverage.unstableEntryCount
-            )
-        }
-        return L10n.format(
-            "扫描于 %@",
-            L10n.date(snapshot.scannedAt, date: .omitted, time: .shortened)
+    private func showQualityDetails(for provider: AgentStorageProvider?) {
+        guard let snapshot = model.snapshot else { return }
+        let diagnostics = provider.map(snapshot.diagnostics(for:)) ?? snapshot.diagnostics
+        guard !diagnostics.isEmpty else { return }
+        qualityDetails = AgentStorageQualityDetails(
+            snapshot: snapshot,
+            provider: provider
         )
-    }
-
-    private func globalStatusSymbol(_ snapshot: AgentStorageSnapshot) -> String {
-        if case .failed = model.state { return "xmark.circle.fill" }
-        if case .stale = model.state { return "pause.circle.fill" }
-        return snapshot.coverage.isComplete ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
-    }
-
-    private func globalStatusColor(_ snapshot: AgentStorageSnapshot) -> Color {
-        if case .failed = model.state { return .red }
-        if case .stale = model.state { return .orange }
-        return snapshot.coverage.isComplete ? .green : .orange
-    }
-
-    private func providerStatusText(_ snapshot: AgentStorageSnapshot) -> String {
-        if model.isScanning { return L10n.text("正在刷新，上次结果仍可查看") }
-        switch model.state {
-        case .failed:
-            return L10n.text("刷新失败，显示上次结果")
-        case .stale:
-            return L10n.text("扫描已停止，显示上次结果")
-        default:
-            break
-        }
-        guard let summary = selectedProviderSummary else {
-            return L10n.format("扫描于 %@", L10n.date(snapshot.scannedAt, date: .omitted, time: .shortened))
-        }
-        if summary.supportStatus == .unsupportedFormat {
-            return L10n.text("聊天索引版本待适配；全局和未归属数据仍可查看。")
-        }
-        if summary.supportStatus == .partial {
-            if summary.issueCount > 0 {
-                return L10n.format("部分结果：%d 项元数据无法验证", summary.issueCount)
-            }
-            return L10n.format(
-                "部分结果：跳过 %d 项，变化 %d 项",
-                0,
-                summary.unstableEntryCount
-            )
-        }
-        if summary.supportStatus == .noConversationSource {
-            return L10n.text("未发现聊天")
-        }
-        return L10n.format(
-            "扫描于 %@",
-            L10n.date(snapshot.scannedAt, date: .omitted, time: .shortened)
-        )
-    }
-
-    private var providerStatusSymbol: String {
-        if case .failed = model.state { return "xmark.circle.fill" }
-        if case .stale = model.state { return "pause.circle.fill" }
-        guard let summary = selectedProviderSummary else { return "checkmark.circle.fill" }
-        return summary.supportStatus == .supported ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
-    }
-
-    private var providerStatusColor: Color {
-        if case .failed = model.state { return .red }
-        if case .stale = model.state { return .orange }
-        return selectedProviderSummary?.supportStatus == .supported ? .green : .orange
     }
 
     @ViewBuilder
@@ -3703,49 +3631,20 @@ private struct AgentStorageAnalysisInvitation: View {
     let start: () -> Void
     @State private var isStartHovered = false
 
+    private let contentMaxWidth: CGFloat = 760
+    private let wideStepsMinimumWidth: CGFloat = 690
+    private let wideStepWidth: CGFloat = 214
+
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                VStack(spacing: 14) {
-                    analysisSymbol
-                        .accessibilityHidden(true)
-
-                    VStack(spacing: 6) {
-                        Text(L10n.text("尚未分析 AI Agent 空间"))
-                            .font(.title2.weight(.semibold))
-                        Text(L10n.text("分析 Codex 和 Claude 的聊天、子代理与全局运行时"))
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                }
-                .frame(maxWidth: .infinity)
+                invitationHeader
 
                 analysisSteps
-                    .padding(.top, 28)
+                    .padding(.top, 32)
 
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "speedometer")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.orange)
-                        .frame(width: 20)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(L10n.text("性能提示"))
-                            .font(.callout.weight(.semibold))
-                        Text(L10n.text("分析会增加 CPU 与磁盘读取，可随时停止。"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.orange.opacity(0.18), lineWidth: 1)
-                }
-                .padding(.top, 28)
+                performanceNotice
+                    .padding(.top, 30)
 
                 Button(action: start) {
                     HStack(spacing: 11) {
@@ -3788,20 +3687,69 @@ private struct AgentStorageAnalysisInvitation: View {
                 .accessibilityHint(L10n.text("开始读取并测量 AI Agent 数据"))
                 .accessibilityIdentifier("agent-storage-start-analysis")
 
-                Label(
-                    L10n.text("分析完全在本机进行；不会上传标题、路径或占用数据。"),
-                    systemImage: "lock.shield"
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.top, 12)
+                privacyNotice
+                    .padding(.top, 12)
             }
-            .frame(maxWidth: 600)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 28)
+            .frame(maxWidth: contentMaxWidth)
+            .frame(maxWidth: .infinity, alignment: .top)
+            .padding(.horizontal, 32)
             .padding(.vertical, 52)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var invitationHeader: some View {
+        VStack(spacing: 14) {
+            analysisSymbol
+                .accessibilityHidden(true)
+
+            VStack(spacing: 6) {
+                Text(L10n.text("尚未分析 AI Agent 空间"))
+                    .font(.title2.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                Text(L10n.text("分析 Codex 和 Claude 的聊天、子代理与全局运行时"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+    }
+
+    private var performanceNotice: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "speedometer")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.orange)
+                .frame(width: 20, height: 20)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L10n.text("性能提示"))
+                    .font(.callout.weight(.semibold))
+                Text(L10n.text("分析会增加 CPU 与磁盘读取，可随时停止。"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(15)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.orange.opacity(0.18), lineWidth: 1)
+        }
+    }
+
+    private var privacyNotice: some View {
+        Label(
+            L10n.text("分析完全在本机进行；不会上传标题、路径或占用数据。"),
+            systemImage: "lock.shield"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     private var analysisSymbol: some View {
@@ -3830,49 +3778,68 @@ private struct AgentStorageAnalysisInvitation: View {
 
     private var analysisSteps: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: 0) {
-                analysisStep(
+            HStack(alignment: .top, spacing: 24) {
+                wideAnalysisStep(
                     symbol: "point.3.connected.trianglepath.dotted",
                     title: "建立聊天关系",
                     detail: "关联主聊天、子代理与项目"
                 )
-                Divider().frame(height: 54)
-                analysisStep(
+                wideAnalysisStep(
                     symbol: "internaldrive",
                     title: "测量实际占用",
                     detail: "读取文件系统分配空间"
                 )
-                Divider().frame(height: 54)
-                analysisStep(
+                wideAnalysisStep(
                     symbol: "square.3.layers.3d",
                     title: "整理空间归属",
                     detail: "区分聊天、全局与未归属数据"
                 )
             }
-            .frame(maxWidth: .infinity)
+            .frame(minWidth: wideStepsMinimumWidth, maxWidth: .infinity, alignment: .topLeading)
 
-            VStack(alignment: .leading, spacing: 14) {
-                analysisStep(
+            VStack(alignment: .leading, spacing: 16) {
+                compactAnalysisStep(
                     symbol: "point.3.connected.trianglepath.dotted",
                     title: "建立聊天关系",
                     detail: "关联主聊天、子代理与项目"
                 )
-                analysisStep(
+                compactAnalysisStep(
                     symbol: "internaldrive",
                     title: "测量实际占用",
                     detail: "读取文件系统分配空间"
                 )
-                analysisStep(
+                compactAnalysisStep(
                     symbol: "square.3.layers.3d",
                     title: "整理空间归属",
                     detail: "区分聊天、全局与未归属数据"
                 )
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func analysisStep(
+    private func wideAnalysisStep(
+        symbol: String,
+        title: String,
+        detail: String
+    ) -> some View {
+        analysisStepContent(symbol: symbol, title: title, detail: detail)
+            .frame(width: wideStepWidth, alignment: .topLeading)
+            .frame(minHeight: 58, alignment: .topLeading)
+    }
+
+    private func compactAnalysisStep(
+        symbol: String,
+        title: String,
+        detail: String
+    ) -> some View {
+        analysisStepContent(symbol: symbol, title: title, detail: detail)
+            .frame(minHeight: 58, alignment: .topLeading)
+    }
+
+    private func analysisStepContent(
         symbol: String,
         title: String,
         detail: String
@@ -3881,18 +3848,17 @@ private struct AgentStorageAnalysisInvitation: View {
             Image(systemName: symbol)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
-                .frame(width: 22, height: 22)
+                .frame(width: 24, height: 24)
             VStack(alignment: .leading, spacing: 3) {
                 Text(L10n.text(title))
                     .font(.callout.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(L10n.text(detail))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 54, alignment: .topLeading)
-        .padding(.horizontal, 14)
     }
 }
 
@@ -5326,7 +5292,7 @@ enum AgentStorageSizeFormatter {
     }
 }
 
-private extension AgentStorageProvider {
+extension AgentStorageProvider {
     var displayName: String {
         switch self {
         case .codex: "Codex"
