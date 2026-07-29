@@ -18,6 +18,7 @@ final class AgentStorageModel {
     private(set) var snapshotRevision = 0
     private(set) var state: AgentStorageLoadState = .idle
     private(set) var progress = AgentStorageScanProgress(phase: .discoveringSources)
+    private(set) var progressByProvider: [AgentStorageProvider: AgentStorageScanProgress] = [:]
     private(set) var generation = 0
     private(set) var customRootError: String?
 
@@ -58,8 +59,21 @@ final class AgentStorageModel {
         return false
     }
 
+    var scanStartedAt: Date? {
+        if case .scanning(let startedAt) = state { return startedAt }
+        return nil
+    }
+
     var customRoots: [URL] {
         AgentStoragePreferences.customRoots(defaults: defaults)
+    }
+
+    var requiresInitialAnalysisConsent: Bool {
+        snapshot == nil && !isScanning && !hasAuthorizedAnalysis
+    }
+
+    private var hasAuthorizedAnalysis: Bool {
+        defaults.bool(forKey: AgentStoragePreferences.analysisConsentKey)
     }
 
     var automaticallyScans: Bool {
@@ -74,11 +88,16 @@ final class AgentStorageModel {
 
     func enterFeature() {
         hasEnteredFeature = true
-        guard snapshot == nil, !isScanning, automaticallyScans else { return }
+        guard hasAuthorizedAnalysis,
+              snapshot == nil,
+              !isScanning,
+              automaticallyScans
+        else { return }
         refresh()
     }
 
     func refresh() {
+        defaults.set(true, forKey: AgentStoragePreferences.analysisConsentKey)
         let previousTask = scanTask
         previousTask?.cancel()
         generation += 1
@@ -88,6 +107,9 @@ final class AgentStorageModel {
             includesDesktopData: true
         )
         progress = AgentStorageScanProgress(phase: .discoveringSources)
+        progressByProvider = Dictionary(uniqueKeysWithValues: AgentStorageProvider.allCases.map {
+            ($0, AgentStorageScanProgress(phase: .discoveringSources, provider: $0))
+        })
         state = .scanning(startedAt: Date())
         scanTask = Task { [weak self] in
             await previousTask?.value
@@ -127,12 +149,44 @@ final class AgentStorageModel {
 
     private func accept(_ candidate: AgentStorageScanProgress, for requestedGeneration: Int) {
         guard generation == requestedGeneration else { return }
+        if let provider = candidate.provider {
+            if let current = progressByProvider[provider] {
+                guard candidate.phase.rawValue >= current.phase.rawValue else { return }
+                if candidate.phase == current.phase,
+                   candidate.completedCount < current.completedCount {
+                    return
+                }
+            }
+            progressByProvider[provider] = candidate
+            progress = aggregateProgress(fallback: candidate)
+            return
+        }
+        if progress.provider != nil {
+            progress = candidate
+            return
+        }
         guard candidate.phase.rawValue >= progress.phase.rawValue else { return }
         if candidate.phase == progress.phase,
            candidate.completedCount < progress.completedCount {
             return
         }
         progress = candidate
+    }
+
+    private func aggregateProgress(
+        fallback: AgentStorageScanProgress
+    ) -> AgentStorageScanProgress {
+        progressByProvider.values.min { lhs, rhs in
+            if lhs.phase != rhs.phase { return lhs.phase.rawValue < rhs.phase.rawValue }
+            return progressFraction(lhs) < progressFraction(rhs)
+        } ?? fallback
+    }
+
+    private func progressFraction(_ value: AgentStorageScanProgress) -> Double {
+        guard let total = value.totalCount, total > 0 else {
+            return value.completedCount > 0 ? 0.5 : 0
+        }
+        return min(1, Double(value.completedCount) / Double(total))
     }
 
     func addCustomRoot(_ url: URL) {
@@ -152,7 +206,11 @@ final class AgentStorageModel {
     }
 
     func prepareForSleep() async {
-        shouldResumeAfterWake = isScanning || hasEnteredFeature
+        guard !requiresInitialAnalysisConsent else {
+            shouldResumeAfterWake = false
+            return
+        }
+        shouldResumeAfterWake = isScanning || (hasEnteredFeature && hasAuthorizedAnalysis)
         stop()
         await scanTask?.value
     }
@@ -174,6 +232,7 @@ final class AgentStorageModel {
 
 enum AgentStoragePreferences {
     static let autoScanKey = "agentStorageAutoScan"
+    static let analysisConsentKey = "agentStorageAnalysisConsent"
     static let hidePrivateDetailsKey = "agentStorageHidePrivateDetails"
     private static let customRootsKey = "agentStorageCustomRoots"
 

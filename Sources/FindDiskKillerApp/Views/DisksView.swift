@@ -172,7 +172,7 @@ struct DisksView: View {
                         }
                     }
                 }
-                .frame(minWidth: 230, idealWidth: 270, maxWidth: 320)
+                .frame(minWidth: 200, idealWidth: 240, maxWidth: 300)
 
                 if let selectedHealthDisk,
                    let disk = physicalHealthDisks.first(where: {
@@ -184,7 +184,7 @@ struct DisksView: View {
                         volumeNames: volumeNames(for: disk),
                         state: store.diskHealth.state(for: selectedHealthDisk)
                     )
-                    .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 340, maxWidth: .infinity, maxHeight: .infinity)
                 } else if let selectedHealthDisk,
                           let snapshot = store.diskHealth.state(for: selectedHealthDisk).snapshot {
                     DiskHealthDetail(
@@ -193,7 +193,7 @@ struct DisksView: View {
                         volumeNames: [],
                         state: store.diskHealth.state(for: selectedHealthDisk)
                     )
-                    .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 340, maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ContentUnavailableView(
                         L10n.text("选择物理磁盘"),
@@ -393,6 +393,8 @@ private struct DiskHealthDetail: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(state.snapshot?.model ?? diskName)
                     .font(.title2.weight(.semibold))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.82)
                 Text(volumeNames.isEmpty
                     ? bsdName
                     : L10n.format("物理设备 %@ · %@", bsdName, volumeNames.joined(separator: L10n.text("、"))))
@@ -479,37 +481,59 @@ private struct DiskHealthDetail: View {
 
             let metrics = headlineMetrics(snapshot, stale: stale)
             if !metrics.isEmpty {
-                HStack(spacing: 16) {
-                    ForEach(Array(metrics.enumerated()), id: \.element.id) { index, metric in
-                        if index > 0 { Divider().frame(height: 42) }
+                LazyVGrid(
+                    columns: [
+                        GridItem(
+                            .adaptive(minimum: 140, maximum: 220),
+                            spacing: 16,
+                            alignment: .leading
+                        )
+                    ],
+                    alignment: .leading,
+                    spacing: 14
+                ) {
+                    ForEach(metrics) { metric in
                         HealthHeadlineMetric(item: metric)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
                     }
                 }
             }
 
             Divider()
 
-            HStack(alignment: .top, spacing: 28) {
-                HealthDetailSection(
-                    title: "设备信息",
-                    symbol: "internaldrive",
-                    items: deviceDetails(snapshot)
-                )
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-
-                Divider()
-
-                HealthDetailSection(
-                    title: "运行与可靠性",
-                    symbol: "waveform.path.ecg",
-                    items: reliabilityDetails(snapshot)
-                )
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 28) {
+                    deviceInformation(snapshot)
+                    Divider()
+                    reliabilityInformation(snapshot)
+                }
+                VStack(alignment: .leading, spacing: 24) {
+                    deviceInformation(snapshot)
+                    Divider()
+                    reliabilityInformation(snapshot)
+                }
             }
 
             healthSource(snapshot)
         }
+    }
+
+    private func deviceInformation(_ snapshot: DiskHealthSnapshot) -> some View {
+        HealthDetailSection(
+            title: "设备信息",
+            symbol: "internaldrive",
+            items: deviceDetails(snapshot)
+        )
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func reliabilityInformation(_ snapshot: DiskHealthSnapshot) -> some View {
+        HealthDetailSection(
+            title: "运行与可靠性",
+            symbol: "waveform.path.ecg",
+            items: reliabilityDetails(snapshot)
+        )
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private func headlineMetrics(
@@ -740,6 +764,8 @@ private struct HealthHeadlineMetric: View {
                 Text(item.value)
                     .font(.system(.body, design: .rounded, weight: .semibold))
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
                 Text(item.title)
                     .font(.caption2)
                     .foregroundStyle(.secondary)

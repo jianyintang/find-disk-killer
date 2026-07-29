@@ -12,6 +12,63 @@ public enum AgentStorageProviderSupportStatus: String, Codable, Hashable, Sendab
     case partial
     case unsupportedFormat
     case noConversationSource
+    case notInstalled
+}
+
+public enum AgentStorageDatabaseAttributionStatus: String, Codable, Hashable, Sendable {
+    case completed
+    case unsupportedFormat
+    case unsupportedJournalMode
+    case temporarilyBusy
+    case unavailable
+    case unreadable
+    case ambiguousOwnership
+}
+
+public struct AgentStorageDatabaseAttributionSummary: Identifiable, Codable, Hashable, Sendable {
+    public let id: String
+    public let provider: AgentStorageProvider
+    public let sourceID: String
+    public let path: String
+    public let physicalBundleBytes: UInt64
+    public let attributedBytes: UInt64
+    public let residualBytes: UInt64
+    public let mappedEstimatedBytes: UInt64
+    public let unmappedEstimatedBytes: UInt64
+    public let processedRowCount: Int
+    public let totalRowCount: Int
+    public let status: AgentStorageDatabaseAttributionStatus
+    public let diagnosticComponent: String?
+
+    public init(
+        id: String,
+        provider: AgentStorageProvider,
+        sourceID: String,
+        path: String,
+        physicalBundleBytes: UInt64,
+        attributedBytes: UInt64,
+        residualBytes: UInt64,
+        mappedEstimatedBytes: UInt64,
+        unmappedEstimatedBytes: UInt64,
+        processedRowCount: Int,
+        totalRowCount: Int,
+        status: AgentStorageDatabaseAttributionStatus,
+        diagnosticComponent: String? = nil
+    ) {
+        self.id = id
+        self.provider = provider
+        self.sourceID = sourceID
+        self.path = path
+        self.physicalBundleBytes = physicalBundleBytes
+        self.attributedBytes = attributedBytes
+        self.residualBytes = residualBytes
+        self.mappedEstimatedBytes = mappedEstimatedBytes
+        self.unmappedEstimatedBytes = unmappedEstimatedBytes
+        self.processedRowCount = processedRowCount
+        self.totalRowCount = totalRowCount
+        self.status = status
+        self.diagnosticComponent = diagnosticComponent
+    }
 }
 
 public enum AgentStorageGlobalCategory: String, CaseIterable, Codable, Hashable, Sendable {
@@ -113,8 +170,10 @@ public struct AgentStorageThreadNode: Identifiable, Codable, Hashable, Sendable 
     public let title: String
     public let updatedAt: Date
     public let allocatedBytes: UInt64
+    public let databaseAttributedBytes: UInt64
     public let artifactCount: Int
     public let path: String?
+    public let cleanupArtifacts: [AgentStorageCleanupArtifact]
 
     public init(
         id: String,
@@ -124,8 +183,10 @@ public struct AgentStorageThreadNode: Identifiable, Codable, Hashable, Sendable 
         title: String,
         updatedAt: Date,
         allocatedBytes: UInt64,
+        databaseAttributedBytes: UInt64 = 0,
         artifactCount: Int,
-        path: String?
+        path: String?,
+        cleanupArtifacts: [AgentStorageCleanupArtifact] = []
     ) {
         self.id = id
         self.nativeID = nativeID
@@ -134,8 +195,45 @@ public struct AgentStorageThreadNode: Identifiable, Codable, Hashable, Sendable 
         self.title = title
         self.updatedAt = updatedAt
         self.allocatedBytes = allocatedBytes
+        self.databaseAttributedBytes = databaseAttributedBytes
         self.artifactCount = artifactCount
         self.path = path
+        self.cleanupArtifacts = cleanupArtifacts
+    }
+
+    public var attributedBytes: UInt64 {
+        allocatedBytes.addingClamped(databaseAttributedBytes)
+    }
+}
+
+public struct AgentStorageCleanupArtifact: Codable, Hashable, Sendable {
+    public let path: String
+    public let allocatedBytes: UInt64
+    public let device: UInt64
+    public let inode: UInt64
+    public let logicalBytes: Int64
+    public let blocks: Int64
+    public let modifiedSeconds: Int64
+    public let modifiedNanoseconds: Int64
+
+    public init(
+        path: String,
+        allocatedBytes: UInt64,
+        device: UInt64,
+        inode: UInt64,
+        logicalBytes: Int64,
+        blocks: Int64,
+        modifiedSeconds: Int64,
+        modifiedNanoseconds: Int64
+    ) {
+        self.path = path
+        self.allocatedBytes = allocatedBytes
+        self.device = device
+        self.inode = inode
+        self.logicalBytes = logicalBytes
+        self.blocks = blocks
+        self.modifiedSeconds = modifiedSeconds
+        self.modifiedNanoseconds = modifiedNanoseconds
     }
 }
 
@@ -151,10 +249,13 @@ public struct AgentStorageThreadFamily: Identifiable, Codable, Hashable, Sendabl
     public let mainAllocatedBytes: UInt64
     public let subagentAllocatedBytes: UInt64
     public let familyOtherAllocatedBytes: UInt64
+    public let mainDatabaseAttributedBytes: UInt64
+    public let subagentDatabaseAttributedBytes: UInt64
     public let artifactCount: Int
     public let path: String?
     public let subagents: [AgentStorageThreadNode]
     public let composition: [AgentStorageArtifactCategory: UInt64]
+    public let cleanupArtifacts: [AgentStorageCleanupArtifact]
 
     public init(
         id: String,
@@ -168,10 +269,13 @@ public struct AgentStorageThreadFamily: Identifiable, Codable, Hashable, Sendabl
         mainAllocatedBytes: UInt64,
         subagentAllocatedBytes: UInt64,
         familyOtherAllocatedBytes: UInt64,
+        mainDatabaseAttributedBytes: UInt64 = 0,
+        subagentDatabaseAttributedBytes: UInt64 = 0,
         artifactCount: Int,
         path: String?,
         subagents: [AgentStorageThreadNode],
-        composition: [AgentStorageArtifactCategory: UInt64]
+        composition: [AgentStorageArtifactCategory: UInt64],
+        cleanupArtifacts: [AgentStorageCleanupArtifact] = []
     ) {
         self.id = id
         self.provider = provider
@@ -184,10 +288,13 @@ public struct AgentStorageThreadFamily: Identifiable, Codable, Hashable, Sendabl
         self.mainAllocatedBytes = mainAllocatedBytes
         self.subagentAllocatedBytes = subagentAllocatedBytes
         self.familyOtherAllocatedBytes = familyOtherAllocatedBytes
+        self.mainDatabaseAttributedBytes = mainDatabaseAttributedBytes
+        self.subagentDatabaseAttributedBytes = subagentDatabaseAttributedBytes
         self.artifactCount = artifactCount
         self.path = path
         self.subagents = subagents
         self.composition = composition
+        self.cleanupArtifacts = cleanupArtifacts
     }
 
     public var allocatedBytes: UInt64 {
@@ -196,7 +303,19 @@ public struct AgentStorageThreadFamily: Identifiable, Codable, Hashable, Sendabl
             .addingClamped(familyOtherAllocatedBytes)
     }
 
+    public var databaseAttributedBytes: UInt64 {
+        mainDatabaseAttributedBytes.addingClamped(subagentDatabaseAttributedBytes)
+    }
+
+    public var attributedBytes: UInt64 {
+        allocatedBytes.addingClamped(databaseAttributedBytes)
+    }
+
     public var subagentCount: Int { subagents.count }
+
+    public var reclaimableBytes: UInt64 {
+        cleanupArtifacts.reduce(0) { $0.addingClamped($1.allocatedBytes) }
+    }
 }
 
 public struct AgentStorageGlobalItem: Identifiable, Codable, Hashable, Sendable {
@@ -205,6 +324,8 @@ public struct AgentStorageGlobalItem: Identifiable, Codable, Hashable, Sendable 
     public let category: AgentStorageGlobalCategory
     public let title: String
     public let allocatedBytes: UInt64
+    public let physicalAllocatedBytes: UInt64
+    public let databaseAttributedBytes: UInt64
     public let logicalBytes: UInt64
     public let artifactCount: Int
     public let path: String?
@@ -216,6 +337,8 @@ public struct AgentStorageGlobalItem: Identifiable, Codable, Hashable, Sendable 
         category: AgentStorageGlobalCategory,
         title: String,
         allocatedBytes: UInt64,
+        physicalAllocatedBytes: UInt64? = nil,
+        databaseAttributedBytes: UInt64 = 0,
         logicalBytes: UInt64,
         artifactCount: Int,
         path: String?,
@@ -226,6 +349,8 @@ public struct AgentStorageGlobalItem: Identifiable, Codable, Hashable, Sendable 
         self.category = category
         self.title = title
         self.allocatedBytes = allocatedBytes
+        self.physicalAllocatedBytes = physicalAllocatedBytes ?? allocatedBytes
+        self.databaseAttributedBytes = databaseAttributedBytes
         self.logicalBytes = logicalBytes
         self.artifactCount = artifactCount
         self.path = path
@@ -280,6 +405,7 @@ public struct AgentStorageProviderSummary: Identifiable, Codable, Hashable, Send
     public let mainThreadBytes: UInt64
     public let subagentBytes: UInt64
     public let familyOtherBytes: UInt64
+    public let databaseAttributedBytes: UInt64
     public let threadCount: Int
     public let subagentCount: Int
     public let sourceCount: Int
@@ -298,6 +424,7 @@ public struct AgentStorageProviderSummary: Identifiable, Codable, Hashable, Send
         mainThreadBytes: UInt64,
         subagentBytes: UInt64,
         familyOtherBytes: UInt64,
+        databaseAttributedBytes: UInt64 = 0,
         threadCount: Int,
         subagentCount: Int,
         sourceCount: Int,
@@ -315,6 +442,7 @@ public struct AgentStorageProviderSummary: Identifiable, Codable, Hashable, Send
         self.mainThreadBytes = mainThreadBytes
         self.subagentBytes = subagentBytes
         self.familyOtherBytes = familyOtherBytes
+        self.databaseAttributedBytes = databaseAttributedBytes
         self.threadCount = threadCount
         self.subagentCount = subagentCount
         self.sourceCount = sourceCount
@@ -364,16 +492,26 @@ public struct AgentStorageChatRangeProjection: Equatable, Sendable {
     public let mainThreadBytes: UInt64
     public let subagentBytes: UInt64
     public let familyOtherBytes: UInt64
+    public let databaseAttributedBytes: UInt64
     public let mainThreadCount: Int
     public let subagentCount: Int
 
     public init(families: [AgentStorageThreadFamily]) {
         self.families = families
-        chatBytes = families.reduce(0) { $0.addingClamped($1.allocatedBytes) }
-        mainThreadBytes = families.reduce(0) { $0.addingClamped($1.mainAllocatedBytes) }
-        subagentBytes = families.reduce(0) { $0.addingClamped($1.subagentAllocatedBytes) }
+        chatBytes = families.reduce(0) { $0.addingClamped($1.attributedBytes) }
+        mainThreadBytes = families.reduce(0) {
+            $0.addingClamped($1.mainAllocatedBytes)
+                .addingClamped($1.mainDatabaseAttributedBytes)
+        }
+        subagentBytes = families.reduce(0) {
+            $0.addingClamped($1.subagentAllocatedBytes)
+                .addingClamped($1.subagentDatabaseAttributedBytes)
+        }
         familyOtherBytes = families.reduce(0) {
             $0.addingClamped($1.familyOtherAllocatedBytes)
+        }
+        databaseAttributedBytes = families.reduce(0) {
+            $0.addingClamped($1.databaseAttributedBytes)
         }
         mainThreadCount = families.count
         subagentCount = families.reduce(0) { $0 + $1.subagentCount }
@@ -390,6 +528,7 @@ public struct AgentStorageSnapshot: Codable, Equatable, Sendable {
     public let coverage: AgentStorageCoverage
     public let crossAgentSharedBytes: UInt64
     public let providerDatasets: [AgentStorageProviderDataset]
+    public let databaseAttributions: [AgentStorageDatabaseAttributionSummary]
     public let chatBytes: UInt64
     public let globalBytes: UInt64
     public let unattributedBytes: UInt64
@@ -404,7 +543,8 @@ public struct AgentStorageSnapshot: Codable, Equatable, Sendable {
         sources: [AgentStorageSource],
         coverage: AgentStorageCoverage,
         crossAgentSharedBytes: UInt64,
-        providerDatasets: [AgentStorageProviderDataset]? = nil
+        providerDatasets: [AgentStorageProviderDataset]? = nil,
+        databaseAttributions: [AgentStorageDatabaseAttributionSummary] = []
     ) {
         self.scannedAt = scannedAt
         self.families = families
@@ -422,7 +562,8 @@ public struct AgentStorageSnapshot: Codable, Equatable, Sendable {
                 unattributedItems: unattributedItems.filter { $0.provider == provider }
             )
         }
-        chatBytes = families.reduce(0) { $0.addingClamped($1.allocatedBytes) }
+        self.databaseAttributions = databaseAttributions
+        chatBytes = families.reduce(0) { $0.addingClamped($1.attributedBytes) }
         globalBytes = globalItems.reduce(0) { $0.addingClamped($1.allocatedBytes) }
         unattributedBytes = unattributedItems.reduce(0) { $0.addingClamped($1.allocatedBytes) }
         totalBytes = chatBytes.addingClamped(globalBytes).addingClamped(unattributedBytes)

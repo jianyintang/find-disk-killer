@@ -40,6 +40,94 @@ import Testing
     #expect(claudeSummary.supportStatus == .partial)
 }
 
+@Test func agentStorageScannerOnlyOffersStableSingleLinkThreadFilesForCleanup() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let project = root.appending(
+        path: ".claude/projects/-tmp-cleanup",
+        directoryHint: .isDirectory
+    )
+    try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+    let sessionID = "30000000-0000-0000-0000-000000000001"
+    let transcript = project.appending(path: "\(sessionID).jsonl")
+    try """
+    {"type":"user","sessionId":"\(sessionID)","cwd":"/tmp/cleanup"}
+    """.data(using: .utf8)!.write(to: transcript)
+    let history = root.appending(
+        path: ".claude/file-history/\(sessionID)/history.txt"
+    )
+    try FileManager.default.createDirectory(
+        at: history.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try Data(repeating: 0x41, count: 4_096).write(to: history)
+    let hardLink = history.deletingLastPathComponent().appending(path: "history-link.txt")
+    try FileManager.default.linkItem(at: history, to: hardLink)
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan()
+
+    let family = try #require(snapshot.families.first { $0.nativeThreadID == sessionID })
+    #expect(family.cleanupArtifacts.map(cleanupIdentity) == [cleanupIdentity(transcript)])
+    #expect(!family.cleanupArtifacts.contains {
+        cleanupIdentity($0) == cleanupIdentity(history)
+            || cleanupIdentity($0) == cleanupIdentity(hardLink)
+    })
+    #expect(family.reclaimableBytes == family.cleanupArtifacts.reduce(0) { $0 + $1.allocatedBytes })
+}
+
+@Test func agentStorageScannerAttributesVerifiedClaudeDesktopSessionsToTheirThread() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let sessionID = "31000000-0000-0000-0000-000000000001"
+    let project = root.appending(
+        path: ".claude/projects/-tmp-desktop",
+        directoryHint: .isDirectory
+    )
+    try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+    try """
+    {"type":"custom-title","sessionId":"\(sessionID)","customTitle":"Desktop fixture"}
+    {"type":"user","sessionId":"\(sessionID)","cwd":"/tmp/desktop"}
+    """.data(using: .utf8)!.write(
+        to: project.appending(path: "\(sessionID).jsonl")
+    )
+
+    let desktop = root.appending(
+        path: "Library/Application Support/Claude",
+        directoryHint: .isDirectory
+    )
+    let manifests = desktop.appending(
+        path: "local-agent-mode-sessions",
+        directoryHint: .isDirectory
+    )
+    try FileManager.default.createDirectory(at: manifests, withIntermediateDirectories: true)
+    let manifest = manifests.appending(path: "local_fixture.json")
+    try JSONSerialization.data(withJSONObject: ["cliSessionId": sessionID]).write(to: manifest)
+    let payloadDirectory = manifests.appending(path: "local_fixture", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: payloadDirectory, withIntermediateDirectories: true)
+    let payload = payloadDirectory.appending(path: "events.bin")
+    try Data(repeating: 0x44, count: 8_192).write(to: payload)
+    let unmapped = manifests.appending(path: "local_unmapped.json")
+    try JSONSerialization.data(withJSONObject: [
+        "cliSessionId": "31000000-0000-0000-0000-000000000099"
+    ]).write(to: unmapped)
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: true
+    )).scan()
+
+    let family = try #require(snapshot.families.first { $0.nativeThreadID == sessionID })
+    #expect(family.allocatedBytes >= allocatedBytes(of: manifest) + allocatedBytes(of: payload))
+    #expect(family.cleanupArtifacts.map(cleanupIdentity).contains(cleanupIdentity(manifest)))
+    let claudeGlobals = snapshot.globalItems.filter { $0.provider == .claude }
+    #expect(claudeGlobals.reduce(0) { $0 + $1.allocatedBytes } >= allocatedBytes(of: unmapped))
+    #expect(snapshot.coverage.measuredBytes == snapshot.coverage.classifiedBytes)
+    #expect(snapshot.coverage.reconciliationDelta == 0)
+}
+
 @Test func agentStorageScannerDoesNotMutateSQLiteOrActiveWALSidecars() async throws {
     let root = makeTemporaryRoot()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -100,6 +188,431 @@ import Testing
 
     #expect(!FileManager.default.fileExists(atPath: walPath))
     #expect(!FileManager.default.fileExists(atPath: shmPath))
+}
+
+@Test func agentStorageScannerDoesNotCreateCodexLogSidecars() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let codex = root.appending(path: ".codex", directoryHint: .isDirectory)
+    let sessions = codex.appending(path: "sessions", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    let threadID = "10000000-0000-0000-0000-000000000098"
+    let rollout = sessions.appending(path: "\(threadID).jsonl")
+    try Data("{}\n".utf8).write(to: rollout)
+    try createCodexCLITitleDatabase(
+        at: codex.appending(path: "state_5.sqlite"),
+        rows: [(threadID, rollout.path, "Fixture", "", "", "/tmp")]
+    )
+    let logsURL = codex.appending(path: "logs_2.sqlite")
+    try createCodexLogsDatabase(at: logsURL, rows: [(threadID, 4_096)])
+    let walPath = logsURL.path + "-wal"
+    let shmPath = logsURL.path + "-shm"
+    try? FileManager.default.removeItem(atPath: walPath)
+    try? FileManager.default.removeItem(atPath: shmPath)
+    #expect(!FileManager.default.fileExists(atPath: walPath))
+    #expect(!FileManager.default.fileExists(atPath: shmPath))
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan()
+
+    let attribution = try #require(snapshot.databaseAttributions.first)
+    #expect(attribution.status == .unavailable)
+    #expect(attribution.attributedBytes == 0)
+    #expect(attribution.residualBytes == attribution.physicalBundleBytes)
+    #expect(!FileManager.default.fileExists(atPath: walPath))
+    #expect(!FileManager.default.fileExists(atPath: shmPath))
+}
+
+@Test func agentStorageScannerAttributesCodexLogDatabaseAndPreservesPhysicalTotal() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let codex = root.appending(path: ".codex", directoryHint: .isDirectory)
+    let sessions = codex.appending(path: "sessions/2026/07/28", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    let mainID = "11000000-0000-0000-0000-000000000001"
+    let childID = "11000000-0000-0000-0000-000000000002"
+    let unknownID = "11000000-0000-0000-0000-000000000003"
+    let mainRollout = sessions.appending(path: "rollout-main-\(mainID).jsonl")
+    let childRollout = sessions.appending(path: "rollout-child-\(childID).jsonl")
+    try Data("{}\n".utf8).write(to: mainRollout)
+    try Data("{}\n".utf8).write(to: childRollout)
+    try createCodexStateDatabase(
+        at: codex.appending(path: "state_5.sqlite"),
+        mainID: mainID,
+        childID: childID,
+        mainRollout: mainRollout.path,
+        childRollout: childRollout.path
+    )
+    let logsURL = codex.appending(path: "logs_2.sqlite")
+    try createCodexLogsDatabase(
+        at: logsURL,
+        rows: [
+            (mainID, 4_096),
+            (childID, 8_192),
+            (unknownID, 4_096),
+            (nil, 4_096)
+        ]
+    )
+    let logsWALPath = logsURL.path + "-wal"
+    let logsSHMPath = logsURL.path + "-shm"
+    let databaseSignaturesBeforeScan = try [
+        logsURL,
+        URL(fileURLWithPath: logsWALPath)
+    ].map(fileSystemSignature)
+    let sharedMemorySignatureBeforeScan = try fileSystemSignature(
+        URL(fileURLWithPath: logsSHMPath)
+    )
+    try FileManager.default.createSymbolicLink(
+        at: root.appending(path: ".codex-cc"),
+        withDestinationURL: codex
+    )
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan()
+
+    #expect(snapshot.databaseAttributions.count == 1)
+    let attribution = try #require(snapshot.databaseAttributions.first)
+    #expect(attribution.status == .completed)
+    #expect(attribution.processedRowCount == 4)
+    #expect(attribution.totalRowCount == 4)
+    #expect(attribution.mappedEstimatedBytes == 12_288)
+    #expect(attribution.unmappedEstimatedBytes == 8_192)
+    #expect(attribution.attributedBytes == 12_288)
+    #expect(attribution.attributedBytes + attribution.residualBytes
+        == attribution.physicalBundleBytes)
+
+    let family = try #require(snapshot.families.first { $0.nativeThreadID == mainID })
+    let child = try #require(family.subagents.first { $0.nativeID == childID })
+    #expect(family.mainDatabaseAttributedBytes == 4_096)
+    #expect(family.subagentDatabaseAttributedBytes == 8_192)
+    #expect(child.databaseAttributedBytes == 8_192)
+    #expect(family.attributedBytes == family.allocatedBytes + 12_288)
+
+    let databaseItem = try #require(snapshot.globalItems.first {
+        $0.provider == .codex && $0.category == .sharedDatabase
+    })
+    #expect(databaseItem.databaseAttributedBytes == 12_288)
+    #expect(databaseItem.allocatedBytes + databaseItem.databaseAttributedBytes
+        == databaseItem.physicalAllocatedBytes)
+    #expect(snapshot.sources.filter { $0.provider == .codex }.count == 1)
+    #expect(snapshot.totalBytes == snapshot.coverage.measuredBytes)
+    #expect(snapshot.coverage.measuredBytes == snapshot.coverage.classifiedBytes)
+    let databaseSignaturesAfterScan = try [
+        logsURL,
+        URL(fileURLWithPath: logsWALPath)
+    ].map(fileSystemSignature)
+    let sharedMemorySignatureAfterScan = try fileSystemSignature(
+        URL(fileURLWithPath: logsSHMPath)
+    )
+    #expect(databaseSignaturesAfterScan == databaseSignaturesBeforeScan)
+    #expect(sharedMemorySignatureAfterScan.prefix(4) == sharedMemorySignatureBeforeScan.prefix(4))
+}
+
+@Test func agentStorageScannerKeepsUnsupportedCodexLogSchemaInSharedStorage() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let codex = root.appending(path: ".codex", directoryHint: .isDirectory)
+    let sessions = codex.appending(path: "sessions", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    let threadID = "12000000-0000-0000-0000-000000000001"
+    let rollout = sessions.appending(path: "\(threadID).jsonl")
+    try Data("{}\n".utf8).write(to: rollout)
+    try createCodexCLITitleDatabase(
+        at: codex.appending(path: "state_5.sqlite"),
+        rows: [(threadID, rollout.path, "Fixture", "", "", "/tmp")]
+    )
+    try createUnsupportedCodexLogsDatabase(at: codex.appending(path: "logs_2.sqlite"))
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan()
+
+    #expect(snapshot.databaseAttributions.count == 1)
+    let attribution = try #require(snapshot.databaseAttributions.first)
+    #expect(attribution.status == .unsupportedFormat)
+    #expect(attribution.attributedBytes == 0)
+    #expect(attribution.residualBytes == attribution.physicalBundleBytes)
+    #expect(snapshot.families.allSatisfy { $0.databaseAttributedBytes == 0 })
+    let databaseItem = try #require(snapshot.globalItems.first {
+        $0.provider == .codex && $0.category == .sharedDatabase
+    })
+    #expect(databaseItem.databaseAttributedBytes == 0)
+    #expect(databaseItem.allocatedBytes == databaseItem.physicalAllocatedBytes)
+    let summary = try #require(snapshot.providers.first { $0.provider == .codex })
+    #expect(summary.supportStatus == .partial)
+    #expect(snapshot.coverage.measuredBytes == snapshot.coverage.classifiedBytes)
+}
+
+@Test func agentStorageDatabaseProgressStaysMonotonicAcrossMultipleCodexHomes() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    var additionalRoots: [URL] = []
+    for index in 1...2 {
+        let codex = root.appending(path: "codex-\(index)", directoryHint: .isDirectory)
+        let sessions = codex.appending(path: "sessions", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        let threadID = "13000000-0000-0000-0000-00000000000\(index)"
+        let rollout = sessions.appending(path: "\(threadID).jsonl")
+        try Data("{}\n".utf8).write(to: rollout)
+        try createCodexCLITitleDatabase(
+            at: codex.appending(path: "state_5.sqlite"),
+            rows: [(threadID, rollout.path, "Fixture \(index)", "", "", "/tmp")]
+        )
+        try createCodexLogsDatabase(
+            at: codex.appending(path: "logs_2.sqlite"),
+            rows: [(threadID, UInt64(index * 4_096))]
+        )
+        additionalRoots.append(codex)
+    }
+    let recorder = AgentStorageProgressRecorder()
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        additionalRoots: additionalRoots,
+        includesDesktopData: false
+    )).scan { recorder.append($0) }
+
+    let progress = recorder.values.filter { $0.phase == .attributingDatabase }
+    #expect(snapshot.databaseAttributions.count == 2)
+    #expect(progress.count >= 3)
+    #expect(progress.contains { $0.databaseStage == .preparing })
+    #expect(progress.contains {
+        $0.databaseStage == .readingRecords && $0.totalCount == nil
+    })
+    #expect(progress.contains { $0.databaseStage == .mappingRecords })
+    #expect(zip(progress, progress.dropFirst()).allSatisfy {
+        $0.0.completedCount <= $0.1.completedCount
+    })
+    let finalProgress = try #require(progress.last)
+    #expect(finalProgress.completedCount == 2)
+    #expect(finalProgress.totalCount == 2)
+    #expect(finalProgress.processedBytes == 12_288)
+    #expect(finalProgress.databaseIndex == 2)
+    #expect(finalProgress.databaseCount == 2)
+}
+
+@Test func agentStorageScannerRejectsDatabaseAttributionWhenThreadGraphChanges() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let codex = root.appending(path: ".codex", directoryHint: .isDirectory)
+    let sessions = codex.appending(path: "sessions", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    let threadID = "14000000-0000-0000-0000-000000000001"
+    let rollout = sessions.appending(path: "\(threadID).jsonl")
+    try Data("{}\n".utf8).write(to: rollout)
+    let stateURL = codex.appending(path: "state_5.sqlite")
+    try createCodexCLITitleDatabase(
+        at: stateURL,
+        rows: [(threadID, rollout.path, "Fixture", "", "", "/tmp")]
+    )
+    try createCodexLogsDatabase(
+        at: codex.appending(path: "logs_2.sqlite"),
+        rows: [(threadID, 4_096)]
+    )
+    let replacer = OneShotFileReplacer(url: stateURL)
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan { progress in
+        if progress.phase == .attributingDatabase,
+           progress.databaseStage == .readingRecords,
+           progress.completedCount == 0 {
+            replacer.replace()
+        }
+    }
+
+    #expect(replacer.didReplace)
+    let attribution = try #require(snapshot.databaseAttributions.first)
+    #expect(attribution.status == .unavailable)
+    #expect(attribution.attributedBytes == 0)
+    #expect(attribution.residualBytes == attribution.physicalBundleBytes)
+    #expect(snapshot.families.allSatisfy { $0.databaseAttributedBytes == 0 })
+    let databaseItem = try #require(snapshot.globalItems.first {
+        $0.provider == .codex && $0.category == .sharedDatabase
+    })
+    #expect(databaseItem.databaseAttributedBytes == 0)
+    #expect(databaseItem.allocatedBytes == databaseItem.physicalAllocatedBytes)
+    #expect(snapshot.coverage.measuredBytes == snapshot.coverage.classifiedBytes)
+}
+
+@Test func agentStorageScannerDoesNotBlockAConcurrentCodexLogWriter() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let codex = root.appending(path: ".codex", directoryHint: .isDirectory)
+    let sessions = codex.appending(path: "sessions", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    let threadID = "15000000-0000-0000-0000-000000000001"
+    let rollout = sessions.appending(path: "\(threadID).jsonl")
+    try Data("{}\n".utf8).write(to: rollout)
+    try createCodexCLITitleDatabase(
+        at: codex.appending(path: "state_5.sqlite"),
+        rows: [(threadID, rollout.path, "Fixture", "", "", "/tmp")]
+    )
+    let logsURL = codex.appending(path: "logs_2.sqlite")
+    try createCodexLogsDatabase(
+        at: logsURL,
+        rows: (1...8_192).map { _ in (threadID, UInt64(64)) },
+        feedbackBodyBytes: 0
+    )
+    let writer = ConcurrentCodexLogWriter(url: logsURL, threadID: threadID)
+    let recorder = AgentStorageProgressRecorder()
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan { progress in
+        recorder.append(progress)
+        if progress.phase == .attributingDatabase,
+           progress.databaseStage == .readingRecords,
+           progress.completedCount == 0 {
+            writer.start()
+            writer.waitForCompletionDuringReadSnapshot(timeoutMilliseconds: 2_000)
+        }
+    }
+
+    #expect(writer.waitForCompletion())
+    #expect(writer.didCompleteDuringReadSnapshot)
+    #expect(writer.didCommit)
+    #expect(writer.sqliteResult == SQLITE_OK)
+    #expect(recorder.values.contains {
+        $0.phase == .attributingDatabase
+            && $0.databaseStage == .readingRecords
+            && $0.totalCount == nil
+            && $0.completedCount > 0
+            && ($0.processedBytes ?? 0) > 0
+    })
+    let attribution = try #require(snapshot.databaseAttributions.first)
+    #expect(attribution.status == .completed)
+    #expect(attribution.processedRowCount == 8_192)
+    #expect(attribution.attributedBytes > 0)
+    #expect(attribution.attributedBytes + attribution.residualBytes
+        == attribution.physicalBundleBytes)
+    #expect(snapshot.coverage.measuredBytes == snapshot.coverage.classifiedBytes)
+}
+
+@Test func agentStorageScannerReadsOneCodexLogDatabaseInParallel() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let codex = root.appending(path: ".codex", directoryHint: .isDirectory)
+    let sessions = codex.appending(path: "sessions", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    let threadID = "16000000-0000-0000-0000-000000000001"
+    let rollout = sessions.appending(path: "\(threadID).jsonl")
+    try Data("{}\n".utf8).write(to: rollout)
+    try createCodexCLITitleDatabase(
+        at: codex.appending(path: "state_5.sqlite"),
+        rows: [(threadID, rollout.path, "Fixture", "", "", "/tmp")]
+    )
+    try createCodexLogsDatabase(
+        at: codex.appending(path: "logs_2.sqlite"),
+        rows: (1...8_192).map { _ in (threadID, UInt64(64)) },
+        feedbackBodyBytes: 0
+    )
+    let probe = AgentStorageDatabaseShardConcurrencyProbe()
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false,
+        databaseReadConcurrency: 2,
+        databaseShardDidStart: { _ in probe.enterShard() }
+    )).scan()
+
+    #expect(probe.didOverlap)
+    #expect(probe.maximumConcurrentShardStarts == 2)
+    let attribution = try #require(snapshot.databaseAttributions.first)
+    #expect(attribution.status == .completed)
+    #expect(attribution.processedRowCount == 8_192)
+}
+
+@Test func agentStorageParallelReadersDoNotMutateCodexLogDatabaseOrWALSidecars() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let codex = root.appending(path: ".codex", directoryHint: .isDirectory)
+    let sessions = codex.appending(path: "sessions", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    let threadID = "17000000-0000-0000-0000-000000000001"
+    let rollout = sessions.appending(path: "\(threadID).jsonl")
+    try Data("{}\n".utf8).write(to: rollout)
+    try createCodexCLITitleDatabase(
+        at: codex.appending(path: "state_5.sqlite"),
+        rows: [(threadID, rollout.path, "Fixture", "", "", "/tmp")]
+    )
+    let logsURL = codex.appending(path: "logs_2.sqlite")
+    try createCodexLogsDatabase(
+        at: logsURL,
+        rows: (1...8_192).map { _ in (threadID, UInt64(64)) },
+        feedbackBodyBytes: 0
+    )
+    var writer: OpaquePointer?
+    #expect(sqlite3_open_v2(
+        logsURL.path,
+        &writer,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+        nil
+    ) == SQLITE_OK)
+    let writerHandle = try #require(writer)
+    defer { sqlite3_close_v2(writerHandle) }
+    try executeSQL(writerHandle, "PRAGMA wal_autocheckpoint = 0")
+    try executeSQL(writerHandle, """
+        INSERT INTO logs (thread_id, estimated_bytes, feedback_log_body)
+        VALUES ('\(threadID)', 64, NULL)
+        """)
+
+    let walURL = URL(fileURLWithPath: logsURL.path + "-wal")
+    let shmURL = URL(fileURLWithPath: logsURL.path + "-shm")
+    let before = try [logsURL, walURL, shmURL].map(fileSystemSignature)
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan()
+    let after = try [logsURL, walURL, shmURL].map(fileSystemSignature)
+
+    #expect(after == before)
+    let attribution = try #require(snapshot.databaseAttributions.first)
+    #expect(attribution.status == .completed)
+    #expect(attribution.processedRowCount == 8_193)
+}
+
+@Test func agentStorageCancellationStopsAllParallelCodexLogReaders() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let codex = root.appending(path: ".codex", directoryHint: .isDirectory)
+    let sessions = codex.appending(path: "sessions", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    let threadID = "18000000-0000-0000-0000-000000000001"
+    let rollout = sessions.appending(path: "\(threadID).jsonl")
+    try Data("{}\n".utf8).write(to: rollout)
+    try createCodexCLITitleDatabase(
+        at: codex.appending(path: "state_5.sqlite"),
+        rows: [(threadID, rollout.path, "Fixture", "", "", "/tmp")]
+    )
+    try createCodexLogsDatabase(
+        at: codex.appending(path: "logs_2.sqlite"),
+        rows: (1...8_192).map { _ in (threadID, UInt64(64)) },
+        feedbackBodyBytes: 0
+    )
+    let probe = AgentStorageDatabaseShardCancellationProbe()
+    let scanner = AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false,
+        databaseReadConcurrency: 2,
+        databaseShardDidStart: { _ in probe.holdReader() }
+    ))
+    let scanTask = Task { try await scanner.scan() }
+
+    #expect(probe.waitForReaders(2, timeout: 2))
+    scanTask.cancel()
+    probe.releaseReaders()
+
+    await #expect(throws: CancellationError.self) {
+        try await scanTask.value
+    }
 }
 
 @Test func agentStorageScannerAggregatesSubagentsAndReconcilesPhysicalBytes() async throws {
@@ -335,6 +848,161 @@ import Testing
     #expect(summary.supportStatus == .supported)
 }
 
+@Test func agentStorageScannerGroupsCodexWorktreesByRepositoryOrigin() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let codex = root.appending(path: ".codex", directoryHint: .isDirectory)
+    let sessions = codex.appending(path: "sessions", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    let firstID = "52000000-0000-0000-0000-000000000001"
+    let secondID = "52000000-0000-0000-0000-000000000002"
+    let firstRollout = sessions.appending(path: "\(firstID).jsonl")
+    let secondRollout = sessions.appending(path: "\(secondID).jsonl")
+    try Data("{}\n".utf8).write(to: firstRollout)
+    try Data("{}\n".utf8).write(to: secondRollout)
+    try createCodexCLITitleDatabase(
+        at: codex.appending(path: "state_5.sqlite"),
+        rows: [
+            (firstID, firstRollout.path, "First", "", "", "/code/redeven-feat-a"),
+            (secondID, secondRollout.path, "Second", "", "", "/tmp/branch-b")
+        ],
+        gitOriginURL: "git@github.com:floegence/redeven.git"
+    )
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan()
+
+    #expect(snapshot.families.count == 2)
+    #expect(Set(snapshot.families.map(\.project)) == ["redeven"])
+}
+
+@Test func agentStorageScannerLearnsMissingOriginsAndGroupsNonRepositoriesSeparately() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let codex = root.appending(path: ".codex", directoryHint: .isDirectory)
+    let sessions = codex.appending(path: "sessions", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    let learnedID = "52100000-0000-0000-0000-000000000001"
+    let originID = "52100000-0000-0000-0000-000000000002"
+    let temporaryID = "52100000-0000-0000-0000-000000000003"
+    let learnedRollout = sessions.appending(path: "\(learnedID).jsonl")
+    let originRollout = sessions.appending(path: "\(originID).jsonl")
+    let temporaryRollout = sessions.appending(path: "\(temporaryID).jsonl")
+    for rollout in [learnedRollout, originRollout, temporaryRollout] {
+        try Data("{}\n".utf8).write(to: rollout)
+    }
+    let removedWorktree = "/private/tmp/removed-redeven-worktree"
+    let databaseURL = codex.appending(path: "state_5.sqlite")
+    try createCodexCLITitleDatabase(
+        at: databaseURL,
+        rows: [
+            (learnedID, learnedRollout.path, "Learned", "", "", removedWorktree),
+            (originID, originRollout.path, "Origin", "", "", removedWorktree),
+            (temporaryID, temporaryRollout.path, "Temporary", "", "", "/private/tmp/redeven-demo")
+        ]
+    )
+    var database: OpaquePointer?
+    #expect(sqlite3_open(databaseURL.path, &database) == SQLITE_OK)
+    let databaseHandle = try #require(database)
+    try executeSQL(
+        databaseHandle,
+        "UPDATE threads SET git_origin_url = 'git@github.com:floegence/redeven.git' WHERE id = '\(originID)'"
+    )
+    sqlite3_close_v2(databaseHandle)
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan()
+    let projectsByID = Dictionary(uniqueKeysWithValues: snapshot.families.map {
+        ($0.nativeThreadID, $0.project)
+    })
+
+    #expect(projectsByID[learnedID] == "redeven")
+    #expect(projectsByID[originID] == "redeven")
+    #expect(projectsByID[temporaryID] == "Non-project directory")
+}
+
+@Test func agentStorageScannerResolvesCodexLinkedWorktreeToMainRepository() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let repository = root.appending(path: "redeven", directoryHint: .isDirectory)
+    let gitWorktree = repository.appending(path: ".git/worktrees/feature", directoryHint: .isDirectory)
+    let linkedWorktree = root.appending(path: "redeven-feature", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: gitWorktree, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: linkedWorktree, withIntermediateDirectories: true)
+    try Data("gitdir: \(gitWorktree.path)\n".utf8).write(
+        to: linkedWorktree.appending(path: ".git")
+    )
+
+    let codex = root.appending(path: ".codex", directoryHint: .isDirectory)
+    let sessions = codex.appending(path: "sessions", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    let threadID = "52200000-0000-0000-0000-000000000001"
+    let rollout = sessions.appending(path: "\(threadID).jsonl")
+    try Data("{}\n".utf8).write(to: rollout)
+    try createCodexCLITitleDatabase(
+        at: codex.appending(path: "state_5.sqlite"),
+        rows: [
+            (threadID, rollout.path, "Linked worktree", "", "", linkedWorktree.path)
+        ]
+    )
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan()
+
+    #expect(snapshot.families.map(\.project) == ["redeven"])
+}
+
+@Test func agentStorageScannerGroupsClaudeManagedWorktreesWithTheirMainRepository() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let repository = root.appending(path: "redeven", directoryHint: .isDirectory)
+    let gitWorktrees = repository.appending(path: ".git/worktrees", directoryHint: .isDirectory)
+    let existingWorktree = repository.appending(
+        path: ".claude/worktrees/feat-plugin-ui-redesign",
+        directoryHint: .isDirectory
+    )
+    try FileManager.default.createDirectory(
+        at: gitWorktrees.appending(path: "feat-plugin-ui-redesign"),
+        withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(at: existingWorktree, withIntermediateDirectories: true)
+    try Data("gitdir: \(gitWorktrees.path)/feat-plugin-ui-redesign\n".utf8).write(
+        to: existingWorktree.appending(path: ".git")
+    )
+
+    let claudeProject = root.appending(
+        path: ".claude/projects/-fixture",
+        directoryHint: .isDirectory
+    )
+    try FileManager.default.createDirectory(at: claudeProject, withIntermediateDirectories: true)
+    let existingID = "53000000-0000-0000-0000-000000000001"
+    let removedID = "53000000-0000-0000-0000-000000000002"
+    let removedWorktree = repository.appending(
+        path: ".claude/worktrees/feat-plugin-ui-redesign-v2",
+        directoryHint: .isDirectory
+    )
+    try """
+    {"type":"user","sessionId":"\(existingID)","cwd":"\(existingWorktree.path)","message":{"role":"user","content":"Existing"}}
+    """.data(using: .utf8)!.write(to: claudeProject.appending(path: "\(existingID).jsonl"))
+    try """
+    {"type":"user","sessionId":"\(removedID)","cwd":"\(removedWorktree.path)","message":{"role":"user","content":"Removed"}}
+    """.data(using: .utf8)!.write(to: claudeProject.appending(path: "\(removedID).jsonl"))
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan()
+
+    #expect(snapshot.families.count == 2)
+    #expect(Set(snapshot.families.map(\.project)) == ["redeven"])
+}
+
 @Test func agentStorageScannerReportsUnsupportedCodexSchemaWithoutFailingSnapshot() async throws {
     let root = makeTemporaryRoot()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -533,15 +1201,31 @@ import Testing
 @Test func liveAgentStorageScannerReconcilesWhenExplicitlyEnabled() async throws {
     guard ProcessInfo.processInfo.environment["RUN_AGENT_STORAGE_LIVE_SCAN"] == "1" else { return }
     let snapshot = try await AgentStorageScanner().scan()
+    let databasePhysicalBytes = snapshot.databaseAttributions.reduce(UInt64(0)) {
+        $0.addingReportingOverflow($1.physicalBundleBytes).partialValue
+    }
+    let databaseAttributedBytes = snapshot.databaseAttributions.reduce(UInt64(0)) {
+        $0.addingReportingOverflow($1.attributedBytes).partialValue
+    }
+    let databaseResidualBytes = snapshot.databaseAttributions.reduce(UInt64(0)) {
+        $0.addingReportingOverflow($1.residualBytes).partialValue
+    }
     print(
         "agent-storage-live total=\(snapshot.totalBytes) "
             + "families=\(snapshot.families.count) "
             + "subagents=\(snapshot.families.reduce(0) { $0 + $1.subagentCount }) "
             + "measured=\(snapshot.coverage.measuredBytes) "
-            + "classified=\(snapshot.coverage.classifiedBytes)"
+            + "classified=\(snapshot.coverage.classifiedBytes) "
+            + "databaseBundles=\(snapshot.databaseAttributions.count) "
+            + "databasePhysical=\(databasePhysicalBytes) "
+            + "databaseAttributed=\(databaseAttributedBytes) "
+            + "databaseResidual=\(databaseResidualBytes)"
     )
     #expect(snapshot.totalBytes == snapshot.coverage.classifiedBytes)
     #expect(snapshot.coverage.measuredBytes == snapshot.coverage.classifiedBytes)
+    #expect(snapshot.databaseAttributions.allSatisfy {
+        $0.attributedBytes + $0.residualBytes == $0.physicalBundleBytes
+    })
 }
 
 @Test func agentStorageScannerReportsMeasuredProgressFromRealEntries() async throws {
@@ -576,6 +1260,28 @@ import Testing
     #expect(updates.last?.completedCount == updates.last?.totalCount)
 }
 
+@Test func agentStorageProviderPipelinesAdvanceInParallel() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(
+        at: root.appending(path: ".codex/sessions", directoryHint: .isDirectory),
+        withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+        at: root.appending(path: ".claude/projects", directoryHint: .isDirectory),
+        withIntermediateDirectories: true
+    )
+    let probe = AgentStorageProviderConcurrencyProbe()
+
+    _ = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan { probe.observe($0) }
+
+    #expect(probe.didOverlap)
+    #expect(probe.providers == Set(AgentStorageProvider.allCases))
+}
+
 private final class AgentStorageProgressRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [AgentStorageScanProgress] = []
@@ -589,6 +1295,236 @@ private final class AgentStorageProgressRecorder: @unchecked Sendable {
     func append(_ progress: AgentStorageScanProgress) {
         lock.lock()
         storage.append(progress)
+        lock.unlock()
+    }
+}
+
+private final class AgentStorageProviderConcurrencyProbe: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var observedProviders: Set<AgentStorageProvider> = []
+    private var firstProviderIsWaiting = false
+    private var overlap = false
+
+    var didOverlap: Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return overlap
+    }
+
+    var providers: Set<AgentStorageProvider> {
+        condition.lock()
+        defer { condition.unlock() }
+        return observedProviders
+    }
+
+    func observe(_ progress: AgentStorageScanProgress) {
+        guard progress.phase == .measuringEntries,
+              progress.completedCount == 0,
+              let provider = progress.provider else { return }
+        condition.lock()
+        guard observedProviders.insert(provider).inserted else {
+            condition.unlock()
+            return
+        }
+        if observedProviders.count == 1 {
+            firstProviderIsWaiting = true
+            _ = condition.wait(until: Date().addingTimeInterval(0.5))
+            firstProviderIsWaiting = false
+        } else if firstProviderIsWaiting {
+            overlap = true
+            condition.broadcast()
+        }
+        condition.unlock()
+    }
+}
+
+private final class AgentStorageDatabaseShardConcurrencyProbe: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var activeShardStarts = 0
+    private var maximumActiveShardStarts = 0
+
+    var didOverlap: Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return maximumActiveShardStarts > 1
+    }
+
+    var maximumConcurrentShardStarts: Int {
+        condition.lock()
+        defer { condition.unlock() }
+        return maximumActiveShardStarts
+    }
+
+    func enterShard() {
+        condition.lock()
+        activeShardStarts += 1
+        maximumActiveShardStarts = max(maximumActiveShardStarts, activeShardStarts)
+        if activeShardStarts == 1 {
+            _ = condition.wait(until: Date().addingTimeInterval(1))
+        } else {
+            condition.broadcast()
+        }
+        activeShardStarts -= 1
+        condition.unlock()
+    }
+}
+
+private final class AgentStorageDatabaseShardCancellationProbe: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var readerCount = 0
+    private var readersAreReleased = false
+
+    func holdReader() {
+        condition.lock()
+        readerCount += 1
+        condition.broadcast()
+        while !readersAreReleased {
+            condition.wait()
+        }
+        condition.unlock()
+    }
+
+    func waitForReaders(_ expectedCount: Int, timeout: TimeInterval) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while readerCount < expectedCount {
+            guard condition.wait(until: deadline) else { return false }
+        }
+        return true
+    }
+
+    func releaseReaders() {
+        condition.lock()
+        readersAreReleased = true
+        condition.broadcast()
+        condition.unlock()
+    }
+}
+
+private final class OneShotFileReplacer: @unchecked Sendable {
+    private let lock = NSLock()
+    private let url: URL
+    private var attempted = false
+    private var replaced = false
+
+    init(url: URL) {
+        self.url = url
+    }
+
+    var didReplace: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return replaced
+    }
+
+    func replace() {
+        lock.lock()
+        guard !attempted else {
+            lock.unlock()
+            return
+        }
+        attempted = true
+        lock.unlock()
+        let original = url.appendingPathExtension("original")
+        do {
+            try FileManager.default.moveItem(at: url, to: original)
+            try FileManager.default.copyItem(at: original, to: url)
+            lock.lock()
+            replaced = true
+            lock.unlock()
+        } catch {
+            try? FileManager.default.moveItem(at: original, to: url)
+        }
+    }
+}
+
+private final class ConcurrentCodexLogWriter: @unchecked Sendable {
+    private let lock = NSLock()
+    private let group = DispatchGroup()
+    private let url: URL
+    private let threadID: String
+    private var started = false
+    private var committed = false
+    private var completedDuringReadSnapshot = false
+    private var result = SQLITE_ERROR
+
+    init(url: URL, threadID: String) {
+        self.url = url
+        self.threadID = threadID
+    }
+
+    var didCommit: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return committed
+    }
+
+    var sqliteResult: Int32 {
+        lock.lock()
+        defer { lock.unlock() }
+        return result
+    }
+
+    var didCompleteDuringReadSnapshot: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return completedDuringReadSnapshot
+    }
+
+    func start() {
+        lock.lock()
+        guard !started else {
+            lock.unlock()
+            return
+        }
+        started = true
+        lock.unlock()
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            defer { group.leave() }
+            var database: OpaquePointer?
+            let openResult = sqlite3_open_v2(
+                url.path,
+                &database,
+                SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+                nil
+            )
+            guard openResult == SQLITE_OK, let database else {
+                finish(result: openResult, committed: false)
+                return
+            }
+            defer { sqlite3_close_v2(database) }
+            sqlite3_busy_timeout(database, 0)
+            let sql = """
+            SELECT COUNT(*) FROM logs;
+            BEGIN IMMEDIATE;
+            INSERT INTO logs (thread_id, estimated_bytes, feedback_log_body)
+            VALUES ('\(threadID)', 64, NULL);
+            COMMIT;
+            """
+            let writeResult = sqlite3_exec(database, sql, nil, nil, nil)
+            finish(result: writeResult, committed: writeResult == SQLITE_OK)
+        }
+    }
+
+    func waitForCompletion() -> Bool {
+        group.wait(timeout: .now() + 5) == .success
+    }
+
+    func waitForCompletionDuringReadSnapshot(timeoutMilliseconds: Int) {
+        let completed = group.wait(
+            timeout: .now() + .milliseconds(timeoutMilliseconds)
+        ) == .success
+        lock.lock()
+        completedDuringReadSnapshot = completed
+        lock.unlock()
+    }
+
+    private func finish(result: Int32, committed: Bool) {
+        lock.lock()
+        self.result = result
+        self.committed = committed
         lock.unlock()
     }
 }
@@ -636,6 +1572,71 @@ private func createCodexStateDatabase(
             throw FixtureDatabaseError.sqliteFailure
         }
     }
+}
+
+private func createCodexLogsDatabase(
+    at url: URL,
+    rows: [(threadID: String?, estimatedBytes: UInt64)],
+    feedbackBodyBytes: Int = 16_384
+) throws {
+    var database: OpaquePointer?
+    #expect(sqlite3_open(url.path, &database) == SQLITE_OK)
+    let handle = try #require(database)
+    defer { sqlite3_close_v2(handle) }
+    try executeSQL(handle, "PRAGMA journal_mode = WAL")
+    try executeSQL(handle, "PRAGMA wal_autocheckpoint = 0")
+    try executeSQL(handle, """
+        CREATE TABLE logs (
+          id INTEGER PRIMARY KEY,
+          thread_id TEXT,
+          estimated_bytes INTEGER NOT NULL,
+          feedback_log_body BLOB
+        )
+        """)
+    let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    for (index, row) in rows.enumerated() {
+        guard row.estimatedBytes <= UInt64(Int64.max) else {
+            throw FixtureDatabaseError.sqliteFailure
+        }
+        var statement: OpaquePointer?
+        let sql = "INSERT INTO logs (id, thread_id, estimated_bytes, feedback_log_body) VALUES (?, ?, ?, ?)"
+        guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { throw FixtureDatabaseError.sqliteFailure }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_bind_int64(statement, 1, Int64(index + 1)) == SQLITE_OK,
+              sqlite3_bind_int64(statement, 3, Int64(row.estimatedBytes)) == SQLITE_OK
+        else { throw FixtureDatabaseError.sqliteFailure }
+        if let threadID = row.threadID {
+            guard sqlite3_bind_text(statement, 2, threadID, -1, transient) == SQLITE_OK else {
+                throw FixtureDatabaseError.sqliteFailure
+            }
+        } else {
+            guard sqlite3_bind_null(statement, 2) == SQLITE_OK else {
+                throw FixtureDatabaseError.sqliteFailure
+            }
+        }
+        let privateBody = Data(
+            repeating: UInt8(truncatingIfNeeded: index),
+            count: feedbackBodyBytes
+        )
+        let bodyResult = privateBody.withUnsafeBytes { bytes in
+            sqlite3_bind_blob(statement, 4, bytes.baseAddress, Int32(bytes.count), transient)
+        }
+        guard bodyResult == SQLITE_OK, sqlite3_step(statement) == SQLITE_DONE else {
+            throw FixtureDatabaseError.sqliteFailure
+        }
+    }
+    try executeSQL(handle, "PRAGMA wal_checkpoint(TRUNCATE)")
+}
+
+private func createUnsupportedCodexLogsDatabase(at url: URL) throws {
+    var database: OpaquePointer?
+    #expect(sqlite3_open(url.path, &database) == SQLITE_OK)
+    let handle = try #require(database)
+    defer { sqlite3_close_v2(handle) }
+    try executeSQL(handle, "PRAGMA journal_mode = WAL")
+    try executeSQL(handle, "CREATE TABLE logs (id INTEGER PRIMARY KEY, thread_id TEXT)")
+    try executeSQL(handle, "INSERT INTO logs VALUES (1, 'unsupported')")
 }
 
 private func createCodexRelationshipDatabase(
@@ -689,7 +1690,8 @@ private func createCodexRelationshipDatabase(
 
 private func createCodexCLITitleDatabase(
     at url: URL,
-    rows: [(id: String, rollout: String, title: String, firstUser: String, preview: String, cwd: String)]
+    rows: [(id: String, rollout: String, title: String, firstUser: String, preview: String, cwd: String)],
+    gitOriginURL: String? = nil
 ) throws {
     var database: OpaquePointer?
     #expect(sqlite3_open(url.path, &database) == SQLITE_OK)
@@ -706,6 +1708,7 @@ private func createCodexCLITitleDatabase(
           title TEXT,
           first_user_message TEXT,
           preview TEXT,
+          git_origin_url TEXT,
           archived INTEGER DEFAULT 0
         )
         """)
@@ -713,8 +1716,8 @@ private func createCodexCLITitleDatabase(
         var statement: OpaquePointer?
         let sql = """
         INSERT INTO threads
-          (id, rollout_path, updated_at, updated_at_ms, cwd, title, first_user_message, preview, archived)
-        VALUES (?, ?, 1785225600, 1785225600123, ?, ?, ?, ?, 0)
+          (id, rollout_path, updated_at, updated_at_ms, cwd, title, first_user_message, preview, git_origin_url, archived)
+        VALUES (?, ?, 1785225600, 1785225600123, ?, ?, ?, ?, ?, 0)
         """
         guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK,
               let statement else { throw FixtureDatabaseError.sqliteFailure }
@@ -723,6 +1726,15 @@ private func createCodexCLITitleDatabase(
             .enumerated() {
             guard sqlite3_bind_text(statement, Int32(index + 1), value, -1, transient) == SQLITE_OK
             else { throw FixtureDatabaseError.sqliteFailure }
+        }
+        if let gitOriginURL {
+            guard sqlite3_bind_text(statement, 7, gitOriginURL, -1, transient) == SQLITE_OK else {
+                throw FixtureDatabaseError.sqliteFailure
+            }
+        } else {
+            guard sqlite3_bind_null(statement, 7) == SQLITE_OK else {
+                throw FixtureDatabaseError.sqliteFailure
+            }
         }
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw FixtureDatabaseError.sqliteFailure
@@ -792,6 +1804,16 @@ private func fileSystemSignature(_ url: URL) throws -> [Int64] {
         Int64(value.st_dev), Int64(value.st_ino), Int64(value.st_size), Int64(value.st_blocks),
         Int64(value.st_mtimespec.tv_sec), Int64(value.st_mtimespec.tv_nsec)
     ]
+}
+
+private func cleanupIdentity(_ artifact: AgentStorageCleanupArtifact) -> [UInt64] {
+    [artifact.device, artifact.inode]
+}
+
+private func cleanupIdentity(_ url: URL) -> [UInt64] {
+    var value = stat()
+    guard lstat(url.path, &value) == 0 else { return [] }
+    return [UInt64(value.st_dev), UInt64(value.st_ino)]
 }
 
 private enum FixtureDatabaseError: Error {

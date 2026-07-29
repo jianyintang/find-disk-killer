@@ -54,13 +54,26 @@ struct ProcessNetworkCounter: Equatable, Sendable {
 }
 
 struct ProcessNetworkSample: Sendable {
+    enum Kind: Sendable {
+        case cumulative
+        case interval(duration: TimeInterval)
+    }
+
     let totals: [Int32: ProcessNetworkCounter]?
     let isAvailable: Bool
+    let kind: Kind
 
-    static let unavailable = Self(totals: nil, isAvailable: false)
+    static let unavailable = Self(totals: nil, isAvailable: false, kind: .cumulative)
 
     static func available(_ totals: [Int32: ProcessNetworkCounter]) -> Self {
-        Self(totals: totals, isAvailable: true)
+        Self(totals: totals, isAvailable: true, kind: .cumulative)
+    }
+
+    static func interval(
+        _ totals: [Int32: ProcessNetworkCounter],
+        duration: TimeInterval
+    ) -> Self {
+        Self(totals: totals, isAvailable: true, kind: .interval(duration: duration))
     }
 }
 
@@ -72,6 +85,7 @@ private struct ProcessNetworkIdentity: Hashable, Sendable {
 private struct ProcessNetworkObservation: Sendable {
     let sampledAt: TimeInterval
     let totals: [ProcessNetworkIdentity: ProcessNetworkCounter]
+    let kind: ProcessNetworkSample.Kind
 }
 
 private struct PendingProcessNetworkDelta: Sendable {
@@ -304,12 +318,14 @@ public actor SystemSampler {
     }
 
     nonisolated private static func collectProcessNetworkTotals() -> ProcessNetworkSample {
+        let interval = minimumProcessNetworkRefreshInterval
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
         process.arguments = [
-            "-e", "alarm 2; exec @ARGV",
-            "/usr/bin/nettop", "-P", "-L", "1", "-n", "-x", "-J", "bytes_in,bytes_out"
+            "-e", "alarm 13; exec @ARGV",
+            "/usr/bin/nettop", "-P", "-d", "-L", "2", "-s", String(Int(interval)),
+            "-n", "-x", "-t", "external", "-J", "bytes_in,bytes_out"
         ]
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
@@ -324,9 +340,10 @@ public actor SystemSampler {
         process.waitUntilExit()
         guard process.terminationReason == .exit,
               process.terminationStatus == 0,
-              let text = String(data: data, encoding: .utf8)
+              let text = String(data: data, encoding: .utf8),
+              let totals = ProcessNetworkParser.parse(text, minimumSampleCount: 2)
         else { return .unavailable }
-        return .available(ProcessNetworkParser.parse(text))
+        return .interval(totals, duration: interval)
     }
 
     private func currentProcessNetworkState(
@@ -431,9 +448,29 @@ public actor SystemSampler {
             sampledAt: refresh.sampledAt,
             totals: Dictionary(uniqueKeysWithValues: totals.compactMap { pid, counter in
                 refresh.identitiesByPID[pid].map { ($0, counter) }
-            })
+            }),
+            kind: refresh.sample.kind
         )
-        if let previousProcessNetworkObservation {
+
+        if case .interval(let duration) = refresh.sample.kind {
+            let observedDuration = max(0.1, duration)
+            for (identity, delta) in observation.totals {
+                var published = publishedProcessNetworkCounters[identity]
+                    ?? PublishedProcessNetworkCounter(
+                        received: 0,
+                        sent: 0,
+                        lastAdvancedAt: uptime
+                    )
+                published.pending.append(PendingProcessNetworkDelta(
+                    received: delta.received,
+                    sent: delta.sent,
+                    duration: observedDuration
+                ))
+                published.isReady = true
+                publishedProcessNetworkCounters[identity] = published
+            }
+        } else if let previousProcessNetworkObservation,
+                  case .cumulative = previousProcessNetworkObservation.kind {
             let observedDuration = max(
                 0.1,
                 observation.sampledAt - previousProcessNetworkObservation.sampledAt
@@ -513,11 +550,28 @@ public actor SystemSampler {
         sampledAt: TimeInterval,
         identitiesByPID: [Int32: ProcessNetworkIdentity]
     ) {
-        guard generation == processNetworkRefreshGeneration else { return }
+        guard generation == processNetworkRefreshGeneration,
+              processNetworkRefreshTask != nil
+        else { return }
+        let completedIdentities = processCounterProvider().reduce(into: identitiesByPID) {
+            resolved, process in
+            let identity = ProcessNetworkIdentity(
+                pid: process.pid,
+                startAbstime: process.startAbstime
+            )
+            if let identityAtStart = identitiesByPID[process.pid],
+               identityAtStart != identity {
+                // The PID changed owners during the network window. Dropping the ambiguous
+                // row is safer than attributing another process's traffic to the new owner.
+                resolved.removeValue(forKey: process.pid)
+            } else {
+                resolved[process.pid] = identity
+            }
+        }
         completedProcessNetworkRefresh = CompletedProcessNetworkRefresh(
             sample: sample,
             sampledAt: sampledAt,
-            identitiesByPID: identitiesByPID
+            identitiesByPID: completedIdentities
         )
         processNetworkRefreshTask = nil
     }
@@ -676,14 +730,30 @@ public actor SystemSampler {
 
 enum ProcessNetworkParser {
     static func parse(_ text: String) -> [Int32: ProcessNetworkCounter] {
+        parse(text, minimumSampleCount: 1) ?? [:]
+    }
+
+    static func parse(
+        _ text: String,
+        minimumSampleCount: Int
+    ) -> [Int32: ProcessNetworkCounter]? {
         var totals: [Int32: ProcessNetworkCounter] = [:]
-        for line in text.split(whereSeparator: \Character.isNewline).dropFirst() {
+        var sampleCount = 0
+        for line in text.split(whereSeparator: \Character.isNewline) {
             let columns = line.split(separator: ",", omittingEmptySubsequences: false)
             guard columns.count >= 4 else { continue }
             let valueOffset = columns.last?.isEmpty == true ? 1 : 0
             let sentIndex = columns.count - 1 - valueOffset
             let receivedIndex = sentIndex - 1
             let identityEnd = receivedIndex
+            if columns[..<identityEnd].allSatisfy(\.isEmpty),
+               columns[receivedIndex] == "bytes_in",
+               columns[sentIndex] == "bytes_out" {
+                sampleCount += 1
+                totals.removeAll(keepingCapacity: true)
+                continue
+            }
+            guard sampleCount > 0 else { continue }
             let identity = columns[..<identityEnd].joined(separator: ",")
             guard let separator = identity.lastIndex(of: "."),
                   let pid = Int32(identity[identity.index(after: separator)...]),
@@ -692,7 +762,7 @@ enum ProcessNetworkParser {
             else { continue }
             totals[pid] = ProcessNetworkCounter(received: received, sent: sent)
         }
-        return totals
+        return sampleCount >= max(1, minimumSampleCount) ? totals : nil
     }
 }
 
