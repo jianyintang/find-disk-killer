@@ -1,6 +1,6 @@
 .PHONY: project test test-ci test-agent-cleanup-fixtures test-privileged lint release
 
-CI_LONG_RUNNING_TESTS = recorder(RetriesABucketAfterATransactionLockFailure|AcceptsTheNextMinuteWhileThePreviousMinuteAwaitsRetry|BoundsPendingMinutesDuringASustainedWriteFailure)|fileChangeWatcherReportsChangesWithoutProcessAttribution|forceStopPrecedesReply
+CI_LOCAL_ONLY_TESTS = FindDiskKillerCoreTests\.agentStorage|recorder(RetriesABucketAfterATransactionLockFailure|AcceptsTheNextMinuteWhileThePreviousMinuteAwaitsRetry|BoundsPendingMinutesDuringASustainedWriteFailure)|fileChangeWatcherReportsChangesWithoutProcessAttribution|forceStopPrecedesReply
 
 project:
 	SWIFT_DETERMINISTIC_HASHING=1 xcodegen generate
@@ -10,8 +10,8 @@ test:
 	swift test --no-parallel
 
 test-ci:
-	@echo "Running the fast CI suite. Full timing and filesystem-event tests run locally via make test."
-	swift test --no-parallel --skip '$(CI_LONG_RUNNING_TESTS)'
+	@echo "Running the fast CI suite. Scanner integration, timing, and filesystem-event tests run locally via make test."
+	swift test --no-parallel --skip '$(CI_LOCAL_ONLY_TESTS)'
 
 test-agent-cleanup-fixtures:
 	/bin/zsh scripts/verify-agent-cleanup-fixtures.sh
