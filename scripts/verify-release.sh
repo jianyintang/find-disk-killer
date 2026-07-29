@@ -206,9 +206,24 @@ plutil -remove 'com\.apple\.application-identifier' "$helper_entitlements"
     plutil -p "$helper_entitlements" >&2
     exit 1
 }
-require_empty_entitlements \
-    "$claude_cleanup_helper" \
-    "$temporary_directory/claude-cleanup-helper-entitlements.plist"
+claude_cleanup_helper_entitlements="$temporary_directory/claude-cleanup-helper-entitlements.plist"
+read_entitlements "$claude_cleanup_helper" "$claude_cleanup_helper_entitlements"
+claude_cleanup_helper_application_identifier=$(plutil \
+    -extract 'com\.apple\.application-identifier' raw \
+    "$claude_cleanup_helper_entitlements")
+[[ "$claude_cleanup_helper_application_identifier" == \
+    "Y3A8BJ4475.com.jianyintang.FindDiskKiller.ClaudeCleanupHelper" ]] || {
+    echo "Claude cleanup helper has an unexpected application identifier" >&2
+    plutil -p "$claude_cleanup_helper_entitlements" >&2
+    exit 1
+}
+plutil -remove 'com\.apple\.application-identifier' \
+    "$claude_cleanup_helper_entitlements"
+[[ "$(plutil -convert json -o - "$claude_cleanup_helper_entitlements")" == "{}" ]] || {
+    echo "Claude cleanup helper has unexpected release entitlements" >&2
+    plutil -p "$claude_cleanup_helper_entitlements" >&2
+    exit 1
+}
 require_empty_entitlements \
     "$claude_cleanup_node" \
     "$temporary_directory/claude-cleanup-node-entitlements.plist"
