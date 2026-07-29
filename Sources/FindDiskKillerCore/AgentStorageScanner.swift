@@ -4484,8 +4484,9 @@ private struct AgentStorageProjectResolver: Sendable {
     }
 
     private static func rootGitProject(from path: String) -> String? {
-        var candidate = URL(fileURLWithPath: path).standardizedFileURL
+        var candidatePath = URL(fileURLWithPath: path).standardizedFileURL.path
         while true {
+            let candidate = URL(fileURLWithPath: candidatePath, isDirectory: true)
             let dotGit = candidate.appending(path: ".git")
             var value = stat()
             if lstat(dotGit.path, &value) == 0 {
@@ -4505,10 +4506,9 @@ private struct AgentStorageProjectResolver: Sendable {
                     return candidate.path
                 }
             }
-            if candidate.path == "/" { return nil }
-            let parent = candidate.deletingLastPathComponent()
-            if parent.path == candidate.path { return nil }
-            candidate = parent
+            let parentPath = (candidatePath as NSString).deletingLastPathComponent
+            guard !parentPath.isEmpty, parentPath != candidatePath else { return nil }
+            candidatePath = parentPath
         }
     }
 
