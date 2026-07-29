@@ -19,7 +19,30 @@ jobs:
           xcodebuild -version
           swift --version
       - name: Test
-        run: make test
+        run: |
+          set +e
+          make test &
+          test_pid=$!
+          (
+            sleep 180
+            if kill -0 "$test_pid" 2>/dev/null; then
+              echo "::group::Hung test process tree"
+              ps -axo pid,ppid,state,etime,command
+              echo "::endgroup::"
+              for pid in $(pgrep -f 'swiftpm-testing|FindDiskKillerPackageTests' || true); do
+                echo "::group::Sample test process $pid"
+                sample "$pid" 5 1 || true
+                echo "::endgroup::"
+              done
+              kill -TERM "$test_pid" 2>/dev/null || true
+            fi
+          ) &
+          watchdog_pid=$!
+          wait "$test_pid"
+          status=$?
+          kill "$watchdog_pid" 2>/dev/null || true
+          wait "$watchdog_pid" 2>/dev/null || true
+          exit "$status"
       - name: Install pinned XcodeGen
         env:
           XCODEGEN_VERSION: 2.42.0
