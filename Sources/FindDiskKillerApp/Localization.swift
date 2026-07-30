@@ -289,8 +289,8 @@ enum L10n {
         "正在检查或安装更新，请稍后再开始追踪": "An update is in progress. Start tracing after it finishes.",
         "正在停止追踪": "Stopping Trace",
         "正在确认追踪已结束": "Confirming Trace Has Stopped",
-        "停止完成后即可检查或安装更新。": "Updates will be available after tracing has fully stopped.",
-        "追踪组件暂未响应；确认后台追踪结束前不会开始更新。": "The trace component is not responding yet. Updates stay blocked until background tracing is confirmed stopped."
+        "仍可检查更新；如需安装，将在追踪完全停止后自动继续。": "You can still check for updates. Installation will continue automatically after tracing fully stops.",
+        "仍可检查更新；确认后台追踪结束前不会开始安装。": "You can still check for updates. Installation will not start until background tracing is confirmed stopped."
     ]
 }
 

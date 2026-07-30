@@ -431,6 +431,8 @@
 "正在确认追踪已结束" = "Confirming Trace Has Stopped";
 "停止完成后即可检查或安装更新。" = "Updates can be checked or installed after tracing has fully stopped.";
 "追踪组件暂未响应；确认后台追踪结束前不会开始更新。" = "The trace component is not responding yet. Updates remain blocked until background tracing has stopped.";
+"仍可检查更新；如需安装，将在追踪完全停止后自动继续。" = "You can still check for updates. Installation will continue automatically after tracing fully stops.";
+"仍可检查更新；确认后台追踪结束前不会开始安装。" = "You can still check for updates. Installation will not start until background tracing is confirmed stopped.";
 "软件更新" = "Software Update";
 "自动检查更新" = "Automatically Check for Updates";
 "每天最多检查一次；不会上传监测数据。" = "Automatically checks at most once per day; monitoring data is never uploaded.";

@@ -116,8 +116,14 @@ final class AppRuntime {
     }
 
     private func startNow() async {
+        // Appcast checks are read-only. Start Sparkle immediately, while the
+        // installation gate remains closed until helper reconciliation finishes.
+        traceActivityRegistry.markHelperBusyWithoutLocalLease()
+        updates.start()
         await reconcileTraceActivity()
-        startUpdaterWhenInterlockIsReady()
+        if traceActivityRegistry.needsHelperReconciliation {
+            scheduleInterlockReconciliation(immediate: false)
+        }
         await history.start(with: store)
         guard !Task.isCancelled, !isTerminating else {
             startTask = nil
@@ -136,11 +142,12 @@ final class AppRuntime {
         let helper = TraceHelperController()
         helper.refreshStatus()
         switch helper.state {
-        case .notRegistered, .notFound, .installationRequired:
+        case .notRegistered, .requiresApproval, .notFound, .installationRequired:
             traceActivityRegistry.markHelperReadyWithoutLocalLease()
-        case .requiresApproval, .repairing, .repairAvailable,
-                .protocolMismatch, .connectionUnavailable, .operationFailed:
+        case .repairing, .repairAvailable, .connectionUnavailable, .operationFailed:
             traceActivityRegistry.markHelperBusyWithoutLocalLease()
+        case .protocolMismatch:
+            await repairOutdatedHelperForInterlock(helper)
         case .enabled, .connecting, .ready:
             do {
                 let status = try await helper.activityStatus()
@@ -161,14 +168,6 @@ final class AppRuntime {
         scheduleInterlockReconciliation(immediate: true)
     }
 
-    private func startUpdaterWhenInterlockIsReady() {
-        if traceActivityRegistry.needsHelperReconciliation {
-            scheduleInterlockReconciliation(immediate: false)
-        } else {
-            updates.start()
-        }
-    }
-
     private func scheduleInterlockReconciliation(immediate: Bool) {
         reconciliationTask?.cancel()
         reconciliationTask = Task { [weak self] in
@@ -179,7 +178,6 @@ final class AppRuntime {
                 guard let self else { return }
                 await self.reconcileTraceActivity()
                 if !self.traceActivityRegistry.needsHelperReconciliation {
-                    self.updates.start()
                     self.reconciliationTask = nil
                     return
                 }
