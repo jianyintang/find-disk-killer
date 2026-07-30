@@ -21,3 +21,10 @@
 
 - Do not treat barely functional behavior as complete. Workflows, state feedback, copy, keyboard interaction, accessibility, and visual hierarchy must meet the standard of a polished, restrained, professional macOS SaaS product.
 - Do not create `backup/*` or any other backup branch unless the user explicitly requests one.
+
+## Test App Registration Hygiene
+
+- Test, debug, archive, and release-validation builds must never leave duplicate FindDiskKiller entries in Launchpad, Spotlight, Launch Services, or other macOS application indexes.
+- Run temporary apps only from isolated DerivedData paths. Before completing the task, terminate those app instances, eject every disk image mounted for testing or release validation, unregister every non-installed app bundle, remove temporary app bundles and disposable DerivedData created by the task, and refresh the relevant macOS application index when needed.
+- Preserve the real installed app in `/Applications` and preserve intentional release artifacts. Never delete or replace either while cleaning test registrations unless the user explicitly requests it.
+- Final verification must confirm that macOS application search resolves only the real installed FindDiskKiller app. Do not consider testing or release work complete while duplicate indexed app entries remain.

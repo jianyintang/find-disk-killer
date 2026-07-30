@@ -204,21 +204,45 @@ enclosure_length=$(xmllint --xpath \
 enclosure_signature=$(xmllint --xpath \
     'string((//*[local-name()="item"]/*[local-name()="enclosure"]/@*[local-name()="edSignature"])[1])' \
     "$appcast_path")
+release_notes_url=$(xmllint --xpath \
+    'string((//*[local-name()="item"]/*[local-name()="releaseNotesLink"])[1])' \
+    "$appcast_path")
+release_notes_length=$(xmllint --xpath \
+    'string((//*[local-name()="item"]/*[local-name()="releaseNotesLink"]/@*[local-name()="length"])[1])' \
+    "$appcast_path")
+release_notes_signature=$(xmllint --xpath \
+    'string((//*[local-name()="item"]/*[local-name()="releaseNotesLink"]/@*[local-name()="edSignature"])[1])' \
+    "$appcast_path")
 expected_enclosure_url="https://github.com/jianyintang/find-disk-killer/releases/download/v$version/$(basename "$dmg_path")"
 expected_enclosure_length=$(stat -f '%z' "$dmg_path")
+signed_release_notes="$appcast_source/FindDiskKiller-$version.md"
+expected_release_notes_url="https://github.com/jianyintang/find-disk-killer/releases/download/v$version/FindDiskKiller-$version.md"
+latest_release_notes_url="https://github.com/jianyintang/find-disk-killer/releases/latest/download/FindDiskKiller-$version.md"
+expected_release_notes_length=$(stat -f '%z' "$signed_release_notes")
 [[ "$appcast_build" == "$build_number" \
     && "$appcast_version" == "$version" \
     && "$enclosure_url" == "$expected_enclosure_url" \
     && "$enclosure_length" == "$expected_enclosure_length" \
-    && -n "$enclosure_signature" ]] || {
-    echo "Generated appcast does not match the release DMG, version, build, or URL" >&2
+    && -n "$enclosure_signature" \
+    && ( "$release_notes_url" == "$expected_release_notes_url" \
+        || "$release_notes_url" == "$latest_release_notes_url" ) \
+    && "$release_notes_length" == "$expected_release_notes_length" \
+    && -n "$release_notes_signature" ]] || {
+    echo "Generated appcast does not match the release DMG, release notes, version, build, or URL" >&2
     exit 1
 }
+"$sign_update" --account "$sparkle_key_account" --verify \
+    "$signed_release_notes" \
+    "$release_notes_signature"
 cp "$appcast_path" "$release_directory/appcast.xml"
+cp "$signed_release_notes" "$release_directory/FindDiskKiller-$version.md"
 
 (
     cd "$release_directory"
-    shasum -a 256 "$(basename "$dmg_path")" appcast.xml > SHA256SUMS
+    shasum -a 256 \
+        "$(basename "$dmg_path")" \
+        "FindDiskKiller-$version.md" \
+        appcast.xml > SHA256SUMS
 )
 
 echo "Release artifacts: $release_directory"

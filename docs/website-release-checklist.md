@@ -58,8 +58,9 @@ item is backed by an artifact or a test record.
   `ALLOW_DIRTY=1`.
 - Confirm the release build number is greater than `111` (the last public build
   before Sparkle was added).
-- Retain the `.xcarchive`, DMG, signed `appcast.xml`, `SHA256SUMS`, source commit, and App/DMG
-  notarization submission identifiers for the release record.
+- Retain the `.xcarchive`, DMG, signed release-notes Markdown, signed
+  `appcast.xml`, `SHA256SUMS`, source commit, and App/DMG notarization
+  submission identifiers for the release record.
 
 ## Clean-Mac Acceptance
 
@@ -85,9 +86,14 @@ item is backed by an artifact or a test record.
 - Serve the DMG over HTTPS with the correct content type and no HTML rewriting.
 - Download the public file once and verify its checksum, stapled ticket, and
   Gatekeeper assessment again.
-- Upload the DMG, `appcast.xml`, and `SHA256SUMS` to the same GitHub Release.
-  Confirm the permanent enclosure URL and
-  `releases/latest/download/appcast.xml` both return the exact published files.
+- Upload the DMG, signed `FindDiskKiller-VERSION.md`, `appcast.xml`, and
+  `SHA256SUMS` to the same GitHub Release. Confirm the permanent enclosure
+  URL, the release-notes URL from the appcast, and
+  `releases/latest/download/appcast.xml` all return the exact published files.
+- Download the public release-notes asset and verify its byte length and
+  Ed25519 signature against `sparkle:releaseNotesLink` before announcing the
+  release. A successful update discovery is not sufficient because Sparkle
+  fetches release notes separately.
 - Install the previous public build and verify **Check for Updates** discovers,
   downloads, verifies, and installs the new build without opening a browser.
 - Verify automatic checking makes no more than one request per 24 hours while
