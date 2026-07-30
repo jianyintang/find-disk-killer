@@ -1,4 +1,5 @@
 import Testing
+import FindDiskKillerCore
 @testable import FindDiskKillerApp
 
 @Test func processTableKeepsBaseWidthsWhenTheContainerIsNarrow() {
@@ -35,6 +36,12 @@ import Testing
 }
 
 @MainActor
+@Test func activeAppsDefaultSortIsCurrentWriteDescending() {
+    #expect(ProcessTable.defaultSortKey == .writeCurrent)
+    #expect(!ProcessTable.defaultSortAscending)
+}
+
+@MainActor
 @Test func processSearchMatchesLocalizedNameAndExecutablePathWithoutChangingLayoutState() {
     #expect(ProcessesView.matches(
         name: "Codex",
@@ -51,4 +58,96 @@ import Testing
         executablePath: "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder",
         query: "Codex"
     ))
+}
+
+@MainActor
+@Test func activeAppsTopTwelveAlwaysIncludesTheSystemLayer() {
+    var rows: [ActiveAppRow] = []
+    for index in 0..<15 {
+        let metric = Double(100 - index)
+        let activity = SystemLayerActivity(
+            id: "ordinary-\(index)",
+            currentCPUPercent: metric,
+            totalWriteBytes: UInt64(100 - index),
+            currentWriteBytesPerSecond: metric,
+            peakWriteBytesPerSecond: metric,
+            averageNetworkReceiveBytesPerSecond: metric,
+            averageNetworkSendBytesPerSecond: metric
+        )
+        rows.append(.systemLayer(activity))
+    }
+    rows.append(.systemLayer(SystemLayerActivity(
+        currentCPUPercent: 0,
+        totalWriteBytes: 0,
+        currentWriteBytesPerSecond: 0,
+        peakWriteBytesPerSecond: 0,
+        averageNetworkReceiveBytesPerSecond: 0,
+        averageNetworkSendBytesPerSecond: 0
+    )))
+
+    let visible = ProcessTable.visibleRows(
+        rows, limit: 12, sortKey: .cpuCurrent, ascending: false
+    )
+
+    #expect(visible.count == 12)
+    #expect(visible.contains { $0.id == SystemLayerActivity.stableID })
+}
+
+@MainActor
+@Test func activeAppsSortsKnownMetricsBeforeGaps() {
+    let known = ActiveAppRow.systemLayer(SystemLayerActivity(
+        id: "known",
+        currentCPUPercent: 1,
+        totalWriteBytes: 1,
+        currentWriteBytesPerSecond: 1,
+        peakWriteBytesPerSecond: 1,
+        averageNetworkReceiveBytesPerSecond: 1,
+        averageNetworkSendBytesPerSecond: 1
+    ))
+    let gap = ActiveAppRow.systemLayer(SystemLayerActivity(
+        id: "gap",
+        currentCPUPercent: nil,
+        totalWriteBytes: nil,
+        currentWriteBytesPerSecond: nil,
+        peakWriteBytesPerSecond: nil,
+        averageNetworkReceiveBytesPerSecond: nil,
+        averageNetworkSendBytesPerSecond: nil
+    ))
+
+    let visible = ProcessTable.visibleRows(
+        [gap, known], limit: nil, sortKey: .writeCurrent, ascending: true
+    )
+
+    #expect(visible.map(\.id) == ["known", "gap"])
+}
+
+@MainActor
+@Test func activeAppsHoverFreezesProcessesAndSystemLayerTogether() {
+    let coordinator = ProcessHoverCoordinator()
+    let initial = SystemLayerActivity(
+        currentCPUPercent: 10,
+        totalWriteBytes: 20,
+        currentWriteBytesPerSecond: 30,
+        peakWriteBytesPerSecond: 40,
+        averageNetworkReceiveBytesPerSecond: 50,
+        averageNetworkSendBytesPerSecond: 60
+    )
+    let updated = SystemLayerActivity(
+        currentCPUPercent: 100,
+        totalWriteBytes: 200,
+        currentWriteBytesPerSecond: 300,
+        peakWriteBytesPerSecond: 400,
+        averageNetworkReceiveBytesPerSecond: 500,
+        averageNetworkSendBytesPerSecond: 600
+    )
+
+    coordinator.tableHoverChanged(true, processes: [], systemLayerActivity: initial)
+    coordinator.tableHoverChanged(true, processes: [], systemLayerActivity: updated)
+
+    #expect(coordinator.frozenSystemLayerActivity?.currentWriteBytesPerSecond == 30)
+
+    coordinator.tableHoverChanged(false, processes: [], systemLayerActivity: updated)
+
+    #expect(coordinator.frozenProcesses == nil)
+    #expect(coordinator.frozenSystemLayerActivity == nil)
 }

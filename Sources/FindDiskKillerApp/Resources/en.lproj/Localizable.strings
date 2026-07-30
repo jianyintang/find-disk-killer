@@ -32,6 +32,12 @@
 "应用 I/O 当前为全盘合计" = "App I/O currently covers all disks";
 "正在活动的应用" = "Active Apps";
 "一个应用的磁盘、CPU 与网络行为汇总在同一处" = "Disk, CPU, and network activity is grouped by app";
+"应用与系统层的磁盘、CPU 与网络活动汇总在同一处" = "App and system-layer disk, CPU, and network activity in one place";
+"macOS 与存储层" = "macOS & Storage Layer";
+"系统服务、文件系统及无法进一步拆分的活动" = "System services, file system, and activity that cannot be split further";
+"汇总整机与可见应用之间的采样差值，包括受保护的系统服务、文件系统写回及存储层活动。" = "The measured difference between system-wide and visible app activity, including protected system services, file-system writeback, and storage-layer activity.";
+"只有可比较的采样才显示数值；缺口不会被当作 0。" = "Values appear only for comparable samples; gaps are never treated as zero.";
+"按下查看统计口径" = "Press to view measurement details";
 "点击表头排序 · 显示前 12 个" = "Click a column to sort · Top 12 shown";
 "发现持续磁盘活动" = "Sustained disk activity detected";
 "采集已停止" = "Monitoring stopped";
