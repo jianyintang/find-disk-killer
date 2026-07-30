@@ -30,19 +30,22 @@ final class TraceActivityRegistry {
     private(set) var status: TraceUpdateInterlockStatus = .idle
     private var traceLease: TraceActivityLease?
     private var updateLease: UpdateActivityLease?
+    private var helperStateNeedsReconciliation = false
 
     var canStartTrace: Bool {
         updateLease == nil && traceLease == nil && status == .idle
     }
 
     // Reading the signed appcast is non-destructive and may run alongside a trace.
-    // This gate is reserved for the installation/relaunch phase only.
+    // Installation must wait for a trace owned by this app, but an orphaned
+    // helper state cannot stall a verified update forever. Reconciliation still
+    // blocks new traces until the helper is known to be idle.
     var canBeginUpdateInstallation: Bool {
-        traceLease == nil && updateLease == nil && status == .idle
+        traceLease == nil && updateLease == nil
     }
 
     var needsHelperReconciliation: Bool {
-        traceLease == nil && updateLease == nil && status == .stopUnconfirmed
+        helperStateNeedsReconciliation
     }
 
     func acquireTrace() -> TraceActivityLease? {
@@ -71,7 +74,9 @@ final class TraceActivityRegistry {
     func releaseTrace(_ lease: TraceActivityLease) {
         guard traceLease == lease else { return }
         traceLease = nil
-        status = updateLease == nil ? .idle : .updatePendingOrRunning
+        status = updateLease == nil
+            ? (helperStateNeedsReconciliation ? .stopUnconfirmed : .idle)
+            : .updatePendingOrRunning
     }
 
     func reserveUpdateInstallation() -> UpdateActivityLease? {
@@ -85,15 +90,19 @@ final class TraceActivityRegistry {
     func releaseUpdate(_ lease: UpdateActivityLease) {
         guard updateLease == lease else { return }
         updateLease = nil
-        status = traceLease == nil ? .idle : status
+        if traceLease == nil {
+            status = helperStateNeedsReconciliation ? .stopUnconfirmed : .idle
+        }
     }
 
     func markHelperBusyWithoutLocalLease() {
         guard traceLease == nil, updateLease == nil else { return }
+        helperStateNeedsReconciliation = true
         status = .stopUnconfirmed
     }
 
     func markHelperReadyWithoutLocalLease() {
+        helperStateNeedsReconciliation = false
         guard traceLease == nil, updateLease == nil else { return }
         status = .idle
     }

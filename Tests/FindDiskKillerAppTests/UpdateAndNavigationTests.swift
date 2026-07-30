@@ -83,12 +83,52 @@ func orphanedHelperStateRequiresReconciliation() {
 
     #expect(registry.needsHelperReconciliation)
     #expect(registry.acquireTrace() == nil)
-    #expect(registry.reserveUpdateInstallation() == nil)
+    let updateLease = registry.reserveUpdateInstallation()
+    #expect(updateLease != nil)
+    if let updateLease {
+        registry.releaseUpdate(updateLease)
+    }
+    #expect(registry.needsHelperReconciliation)
+    #expect(registry.acquireTrace() == nil)
 
     registry.markHelperReadyWithoutLocalLease()
     #expect(!registry.needsHelperReconciliation)
     #expect(registry.canStartTrace)
     #expect(registry.canBeginUpdateInstallation)
+}
+
+@Test @MainActor
+func orphanedHelperStateDoesNotPostponeAUserApprovedInstall() {
+    let registry = TraceActivityRegistry()
+    registry.markHelperBusyWithoutLocalLease()
+    let interlock = UpdateInstallationInterlock(activityRegistry: registry)
+    var continued = false
+
+    #expect(!interlock.postponeIfNeeded { continued = true })
+    #expect(!continued)
+    #expect(interlock.isActive)
+    #expect(registry.status == .updatePendingOrRunning)
+
+    interlock.release()
+    #expect(registry.status == .stopUnconfirmed)
+    #expect(registry.needsHelperReconciliation)
+    #expect(registry.acquireTrace() == nil)
+}
+
+@Test @MainActor
+func helperReconciliationCanCompleteWhileAnInstallLeaseIsActive() throws {
+    let registry = TraceActivityRegistry()
+    registry.markHelperBusyWithoutLocalLease()
+    let updateLease = try #require(registry.reserveUpdateInstallation())
+
+    registry.markHelperReadyWithoutLocalLease()
+    #expect(!registry.needsHelperReconciliation)
+    #expect(registry.status == .updatePendingOrRunning)
+    #expect(registry.acquireTrace() == nil)
+
+    registry.releaseUpdate(updateLease)
+    #expect(registry.status == .idle)
+    #expect(registry.canStartTrace)
 }
 
 @Test @MainActor
