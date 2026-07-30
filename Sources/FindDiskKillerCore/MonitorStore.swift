@@ -641,10 +641,6 @@ public final class MonitorStore {
         var liveKeys: Set<ProcessKey> = []
         var livePIDsByGroup: [String: Set<Int32>] = [:]
         var liveSessionsByGroup: [String: Set<ProcessSession>] = [:]
-        var hasComparableCPU = hasBaseline
-        var hasComparableWrite = hasBaseline
-        var hasComparableNetwork = hasBaseline && isProcessNetworkAvailable
-
         for counter in counters {
             let key = ProcessKey(pid: counter.pid, startAbstime: counter.startAbstime)
             liveKeys.insert(key)
@@ -684,15 +680,6 @@ public final class MonitorStore {
             guard let prior else {
                 // A newly observed process has no delta yet. Its activity remains in the
                 // system-layer residual until the next sample establishes attribution.
-                // Only malformed supplied counters make the source incomparable.
-                if current.cpuTimeNanoseconds == nil { hasComparableCPU = false }
-                if current.written == nil { hasComparableWrite = false }
-                if counter.networkBytesReceived != nil, current.networkReceived == nil {
-                    hasComparableNetwork = false
-                }
-                if counter.networkBytesSent != nil, current.networkSent == nil {
-                    hasComparableNetwork = false
-                }
                 continue
             }
             let readDeltaValue = Self.validProcessDelta(current.read, prior.read)
@@ -717,8 +704,6 @@ public final class MonitorStore {
             if readDeltaValue == nil { unavailableMetrics.insert(.read) }
             if writeDeltaValue == nil { unavailableMetrics.insert(.write) }
             if cpuDeltaValue == nil { unavailableMetrics.insert(.cpu) }
-            if writeDeltaValue == nil { hasComparableWrite = false }
-            if cpuDeltaValue == nil { hasComparableCPU = false }
             if Self.networkCounterHasGap(
                 rawCurrent: counter.networkBytesReceived,
                 current: current.networkReceived,
@@ -726,7 +711,6 @@ public final class MonitorStore {
                 delta: receivedDeltaValue
             ) {
                 unavailableMetrics.insert(.networkReceive)
-                hasComparableNetwork = false
             }
             if Self.networkCounterHasGap(
                 rawCurrent: counter.networkBytesSent,
@@ -735,7 +719,6 @@ public final class MonitorStore {
                 delta: sentDeltaValue
             ) {
                 unavailableMetrics.insert(.networkSend)
-                hasComparableNetwork = false
             }
             let hasActivity = readDelta > 0 || writeDelta > 0 || cpuDelta > 0
                 || receivedDelta > 0 || sentDelta > 0
@@ -847,10 +830,18 @@ public final class MonitorStore {
         }
         return ProcessIngestResult(
             applications: applications,
-            cpuTimeNanoseconds: hasComparableCPU ? totals.cpu : nil,
-            bytesWritten: hasComparableWrite ? totals.write : nil,
-            networkBytesReceived: hasComparableNetwork ? totals.received : nil,
-            networkBytesSent: hasComparableNetwork ? totals.sent : nil
+            // Per-process counters are a best-effort attribution source. A missing, reset,
+            // or protected process is deliberately omitted from the attributed subtotal so
+            // its activity remains in the host/device residual. Only a source-wide network
+            // failure makes the corresponding residual unavailable.
+            cpuTimeNanoseconds: hasBaseline ? totals.cpu : nil,
+            bytesWritten: hasBaseline ? totals.write : nil,
+            networkBytesReceived: hasBaseline && isProcessNetworkAvailable
+                ? totals.received
+                : nil,
+            networkBytesSent: hasBaseline && isProcessNetworkAvailable
+                ? totals.sent
+                : nil
         )
     }
 

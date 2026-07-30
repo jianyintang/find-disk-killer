@@ -1022,6 +1022,68 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
 }
 
 @MainActor
+@Test func systemLayerRetainsActivityFromAnUnattributableProcess() async throws {
+    let store = MonitorStore(
+        sampleProvider: { preconditionFailure("Unused test sample provider") },
+        logicalProcessorCount: 4
+    )
+    let baseDate = Date(timeIntervalSinceReferenceDate: 2_423)
+
+    for index in 0..<2 {
+        let counter: UInt64 = index == 0 ? 100 : .max
+        store.ingest(SystemSnapshot(
+            date: baseDate.addingTimeInterval(Double(index)),
+            uptime: Double(index + 1),
+            processes: [RawProcessCounter(
+                pid: 51,
+                startAbstime: 21,
+                name: "protected-fixture",
+                path: "/usr/libexec/protected-fixture",
+                cpuTimeNanoseconds: counter,
+                bytesRead: 0,
+                bytesWritten: counter,
+                networkBytesReceived: counter,
+                networkBytesSent: counter
+            )],
+            disks: [RawDiskCounter(
+                registryID: 106,
+                name: "Physical Disk",
+                bytesRead: 0,
+                bytesWritten: UInt64(index) * 10_000,
+                readOperations: 0,
+                writeOperations: UInt64(index),
+                capacity: 1_000_000,
+                bsdName: "disk106",
+                isPhysical: true
+            )],
+            volumes: [],
+            cpuUserTicks: UInt64(index) * 40,
+            cpuSystemTicks: UInt64(index) * 10,
+            cpuNiceTicks: 0,
+            cpuIdleTicks: UInt64(index) * 50,
+            networkInterfaces: [RawNetworkInterfaceCounter(
+                index: 1,
+                name: "en0",
+                bytesReceived: UInt64(index) * 10_000,
+                bytesSent: UInt64(index) * 5_000
+            )],
+            cpuStatsAvailable: true,
+            networkInterfacesAvailable: true,
+            processNetworkAvailable: true
+        ))
+        await store.waitForPendingProcessSummary()
+    }
+
+    let systemLayer = try #require(store.systemLayerActivity)
+    #expect(systemLayer.currentCPUPercent == 200)
+    #expect(systemLayer.totalWriteBytes == 10_000)
+    #expect(systemLayer.currentWriteBytesPerSecond == 10_000)
+    #expect(systemLayer.peakWriteBytesPerSecond == 10_000)
+    #expect(systemLayer.averageNetworkReceiveBytesPerSecond == 10_000)
+    #expect(systemLayer.averageNetworkSendBytesPerSecond == 5_000)
+}
+
+@MainActor
 @Test func systemLayerKeepsUnavailableSourcesAsGaps() async throws {
     let store = MonitorStore()
     let baseDate = Date(timeIntervalSinceReferenceDate: 2_425)
