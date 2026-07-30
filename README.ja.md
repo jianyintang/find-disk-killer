@@ -1,179 +1,154 @@
 <div align="center">
-  <img src="docs/assets/find-disk-killer-icon.png" width="136" height="136" alt="FindDiskKiller アプリアイコン">
+  <img src="docs/assets/find-disk-killer-icon.png" width="128" height="128" alt="FindDiskKiller アプリアイコン">
   <h1>FindDiskKiller</h1>
-  <p><strong>ディスクを使い続けているアプリを、ひと目で。</strong></p>
-  <p>アプリのディスク I/O、CPU、ネットワーク、ファイル活動、ドライブの健全性を、macOS ネイティブのワークスペースに集約します。</p>
+  <p><strong>ディスクを使い続けているものを見つける。</strong></p>
+  <p>アプリのディスク I/O から始め、ファイル活動、AI Agent ストレージ、物理ディスクの証拠を一つの流れで追跡します。</p>
   <p>
-    <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> ·
-    <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ja.md">日本語</a> ·
-    <a href="README.ko.md">한국어</a> · <a href="README.de.md">Deutsch</a> ·
-    <a href="README.fr.md">Français</a> · <a href="README.es.md">Español</a> ·
-    <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.ru.md">Русский</a>
+    <a href="README.md">English</a> ·
+    <a href="README.zh-CN.md">简体中文</a> ·
+    <a href="README.zh-TW.md">繁體中文</a> ·
+    <a href="README.ja.md">日本語</a> ·
+    <a href="README.ko.md">한국어</a> ·
+    <a href="README.de.md">Deutsch</a> ·
+    <a href="README.fr.md">Français</a> ·
+    <a href="README.es.md">Español</a> ·
+    <a href="README.pt-BR.md">Português (Brasil)</a> ·
+    <a href="README.ru.md">Русский</a>
   </p>
-  <p><strong>macOS 14 以降 · Apple シリコン / Intel · ローカル処理 · 10 言語対応</strong></p>
-  <p><a href="https://finddiskkiller.com/ja/download/">ダウンロード</a> · <a href="https://finddiskkiller.com/ja/">公式サイト</a> · <a href="docs/find-disk-killer-product-and-technical-plan.md">製品モデル</a> · <a href="SUPPORT.md">サポート</a> · <a href="PRIVACY.md">プライバシー</a></p>
+  <p><strong>macOS 14+ · Apple silicon / Intel · 100% ローカル処理</strong></p>
+  <p>
+    <a href="https://finddiskkiller.com/ja/download/"><strong>macOS 版をダウンロード</strong></a> ·
+    <a href="https://finddiskkiller.com/ja/">公式サイト</a> ·
+    <a href="https://finddiskkiller.com/ja/how-it-works/">仕組み</a> ·
+    <a href="PRIVACY.md">プライバシー</a> ·
+    <a href="SUPPORT.md">サポート</a>
+  </p>
 </div>
 
 ---
 
-<p align="center">
-  <img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="持続的なディスク活動、リソース推移、主なアプリを表示する FindDiskKiller の現在ワークスペース。">
-</p>
-<p align="center"><sub>持続的なディスク活動を見つけ、その原因となるアプリを特定します。</sub></p>
+<a href="docs/assets/screenshots/overview-sustained-activity.webp">
+  <img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="持続的なディスク活動、リソース推移、主なアプリを完全に表示する FindDiskKiller の現在ワークスペース。">
+</a>
 
-Mac が熱を持ち、ディスクが動き続けているのに、プロセス一覧だけでは理由が分からない。
-FindDiskKiller は、そんな調査をアプリ中心に整理します。継続的な負荷を見つけ、対象アプリの
-CPU、ディスク、ネットワーク、ファイル、ストレージの状況を、一つの流れで確認できます。
+<p align="center"><sub>持続的なディスク活動を見つけ、その原因となるアプリを特定します。クリックすると元画像を表示します。</sub></p>
 
-## AI Agent が使うストレージも可視化
-
-AI Storage は、明示的に分析を開始したときだけ Codex と Claude のデータを測定し、識別できる使用量を thread/session、メインチャット、再帰的なサブエージェントに割り当てます。実測ファイルとデータベース推定値は分けて表示し、根拠が不足する値を正確な値として扱いません。
-
-<p align="center"><img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="Codex と Claude のチャット、グローバル、未割り当て領域を分けて示す AI Storage の概要。"></p>
-
-<p align="center"><img src="docs/assets/screenshots/ai-storage-thread-details.webp" width="100%" alt="thread ごとの最近の活動とサブエージェントを一覧表示し、選択した thread の完全なストレージ内訳を右側に示す Codex AI Storage。"></p>
-
-期間、プロジェクト、個別チャットを選び、完全削除の前に即時解放見込みを確認できます。Codex は公式 thread/delete、単独の Claude Code session は公式 Agent SDK を使用します。使用中、identity が変化した項目、非対応項目はスキップし、SQLite の直接更新や transcript の手動削除にはフォールバックしません。Claude Desktop/Cowork は現在 Claude Desktop 内で削除します。
-
-<p align="center"><img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="82%" alt="完全削除前に対象と即時解放見込みを確認する AI Agent 一括クリーンアップ。"></p>
-
-## ひとつの画面で分かること
-
-| ワークスペース | 確認できる内容 |
-| --- | --- |
-| **アプリの活動** | 直近 5 秒の CPU、読み込み、書き込み、ダウンロード、アップロード。並べ替えと列幅変更に対応 |
-| **タイムライン** | 1 分、15 分、1 時間の折れ線。ホバーで正確な時刻と値を表示 |
-| **プロセス詳細** | 独立したウインドウで CPU、ディスク、ネットワーク、ファイルの情報を比較 |
-| **ファイル活動** | 現在開いている場所と、直近 5 分間に変更が観測されたディレクトリ |
-| **ファイルアクセス追跡** | オンデマンドの要求読み書き量、直近 5 秒の速度、セッション最大値、活発なファイルと検証済みプロセス |
-| **ディスク** | マウント済みボリューム名と物理デバイスのスループット。外付けストレージにも対応 |
-| **ドライブの健全性** | macOS が提供する場合に、温度、ホスト書き込み量、消耗度、予備領域、電源履歴、エラーを表示 |
-| **メニューバー** | 通知を繰り返さず、現在の状態を静かに確認 |
-
-## アプリからディスクまでを一つの流れで
-
-### まず対象アプリを確認
+FindDiskKiller は一つの目的に特化したネイティブ macOS ツールです。持続的なディスク活動の兆候から、その原因となるアプリ、ファイル、物理デバイスまでを追跡します。CPU、ディスク、ネットワークの証拠をアプリ中心にまとめ、複数のシステムツールを行き来する必要をなくします。
 
 <p align="center">
-  <img src="docs/assets/screenshots/app-codex-overview.webp" width="100%" alt="CPU、ディスク I/O、ネットワークの時間推移を分けて表示する Codex アプリ詳細。">
+  <strong>100%</strong> ローカル処理　·　<strong>0</strong> データ送信　·　<strong>10</strong> 言語　·　<strong>macOS 14+</strong>
 </p>
 
-### 次にファイルの場所と範囲を限定したアクセス情報を確認
+## すべての情報を一つのワークスペースに
+
+### AI Agent ストレージ
+
+Codex と Claude は、会話、サブエージェントセッション、スナップショット、可視化、共有データベースを蓄積します。AI Storage は明示的な操作後にだけローカル分析を開始し、thread または session ごとに容量を割り当て、完全削除前に確認できます。
+
+<a href="docs/assets/screenshots/ai-storage-overview.webp">
+  <img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="Codex と Claude のチャット、グローバル、未割り当て領域を分けて示す AI Storage の概要。">
+</a>
+
+<p align="center"><sub>提供元全体の容量を測定し、チャット、グローバルデータ、未割り当て領域を分離します。</sub></p>
 
 <p align="center">
-  <img src="docs/assets/screenshots/app-codex-file-activity.webp" width="100%" alt="関連する場所、書き込み可能なフォルダ、最近の変更を表示する Codex のファイル活動ビュー。">
+  <a href="docs/assets/screenshots/ai-storage-thread-details.webp"><img src="docs/assets/screenshots/ai-storage-thread-details.webp" width="57%" alt="活動時刻、サブエージェント数、選択した thread の完全な構成を示す Codex AI Storage。"></a>
+  <a href="docs/assets/screenshots/ai-storage-batch-cleanup.webp"><img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="41%" alt="完全削除前に選択範囲と即時解放見込みを示す AI Agent 一括クリーンアップ。"></a>
 </p>
+
+<p align="center"><sub>左：容量を個別の会話に割り当て　·　右：期間、プロジェクト、会話を完全削除前に確認</sub></p>
+
+分析は自動で始まりません。活動中または識別情報が変わったセッションはスキップし、未対応の提供元でデータベースの直接書き込みや transcript の手動削除へ切り替えることもありません。Claude Desktop と Cowork のセッションは現在も Claude Desktop 内で削除します。
+
+### アプリ活動とファイルの証拠
+
+アプリの CPU、ディスク I/O、ネットワーク推移を比較し、開いている場所と最近変更されたディレクトリへ進みます。より明確な証拠が必要な場合だけ、時間制限付きのファイルまたはフォルダ追跡を開始します。
 
 <p align="center">
-  <img src="docs/assets/screenshots/folder-access-trace.webp" width="100%" alt="要求された読み書き速度、活発なファイル、アクセス元プロセスを表示する時間制限付きフォルダ追跡。">
+  <a href="docs/assets/screenshots/app-codex-overview.webp"><img src="docs/assets/screenshots/app-codex-overview.webp" width="49%" alt="CPU、ディスク I/O、ネットワークのタイムラインを分けて表示する Codex アプリ詳細。"></a>
+  <a href="docs/assets/screenshots/app-codex-file-activity.webp"><img src="docs/assets/screenshots/app-codex-file-activity.webp" width="49%" alt="関連する場所、書き込み可能なフォルダ、最近の変更を表示する Codex のファイル活動。"></a>
 </p>
 
-### 最後にストレージと健全性を確認
+<p align="center"><sub>左：活動が持続しているか判断　·　右：アプリが関係する場所へ移動</sub></p>
 
 <p align="center">
-  <img src="docs/assets/screenshots/disk-live-activity.webp" width="100%" alt="物理デバイスのスループット、マウント済みボリューム、ハードウェア診断を表示するディスクワークスペース。">
+  <a href="docs/assets/screenshots/folder-access-trace.webp"><img src="docs/assets/screenshots/folder-access-trace.webp" width="86%" alt="要求された読み書き速度、活発なファイル、アクセス元プロセスを示す時間制限付きフォルダ追跡。"></a>
 </p>
+
+<p align="center"><sub>追跡は明示的に開始した後だけ動作し、要求 I/O、活発なファイル、検証済みプロセスセッションを表示します。</sub></p>
+
+### 物理ディスクと健全性
+
+Macintosh HD や外付けドライブなどの分かりやすいボリューム名を物理デバイスのスループットに対応付け、macOS とハードウェアが実際に公開する SMART/NVMe 項目を確認します。
 
 <p align="center">
-  <img src="docs/assets/screenshots/disk-health.webp" width="100%" alt="SMART 状態、消耗、温度、ホスト書き込み、電源履歴、メディアエラーを表示するドライブ健全性ビュー。">
+  <a href="docs/assets/screenshots/disk-live-activity.webp"><img src="docs/assets/screenshots/disk-live-activity.webp" width="49%" alt="物理デバイスのスループット、マウント済みボリューム、ハードウェア診断を表示するディスク画面。"></a>
+  <a href="docs/assets/screenshots/disk-health.webp"><img src="docs/assets/screenshots/disk-health.webp" width="49%" alt="SMART 状態、消耗、温度、ホスト書き込み、電源履歴、メディアエラーを表示するディスク健全性画面。"></a>
 </p>
 
-## 調査を途切れさせない設計
-
-```text
-継続的な負荷を検出
-        |
-        v
-主なアプリを特定  -->  CPU / ディスク / ダウンロード / アップロード
-        |
-        v
-開いているファイルと最近の変更を確認
-        |
-        v
-必要なときだけ、時間制限付きのファイル／フォルダ追跡を開始
-        |
-        v
-物理デバイスのスループットと健全性情報を確認
-```
-
-CPU は常に先頭に表示し、読み込みと書き込み、ダウンロードとアップロードを分離します。
-現在値は直近 5 秒から計算。行を確認している間は表示順の更新だけを止め、クリック操作は妨げません。
-プロセス詳細は独立したウインドウで開きます。
+<p align="center"><sub>左：どの物理デバイスが動作中か確認　·　右：デバイスが報告する健全性情報を確認</sub></p>
 
 ## 見せかけの精度を作らない
 
-- **アプリのディスク I/O** はプロセスのカウンタで、すべてのストレージを含む合計です。
-- **デバイスのスループット** は物理デバイスのカウンタで、`Macintosh HD` や `ExternalSSD` など分かりやすい名前で表示します。
-- **最近の変更** は、その場所の変更を macOS が観測した事実であり、変更したプロセスを単独では特定しません。
-- **ファイルアクセス追跡** は、成功したシステムコールで要求されたバイト数です。キャッシュ、APFS の遅延書き込み、圧縮、コピーオンライト、メモリマップ、観測漏れにより、物理ディスクや NAND の書き込み量とは異なります。
-- **ドライブの健全性** は macOS が実際に返した項目だけを表示し、取得できない値をゼロに置き換えません。
+FindDiskKiller は関連する証拠をまとめて示しますが、意味の異なる測定を一つの数値に強制しません：
 
-任意のプロセスが特定の物理ディスクへ書き込んだ全バイトを正確に特定できる、とは主張しません。
+- **アプリ I/O** は全ストレージへのプロセス要求であり、物理 NAND の読み書きではありません。
+- **物理デバイスのスループット** を単一プロセスへ正確に割り当てることはできず、アプリ値とデバイス値が一致する必要もありません。
+- **最近変更された場所** は macOS が変更を観測したことを示しますが、それだけで書き込み元は特定できません。
+- **AI データベースの割り当て** は明示された論理推定値であり、即時に解放できる物理容量ではありません。
+
+欠落、部分的、未対応の証拠はゼロではなく利用不可として表示します。
 
 ## プライバシーと権限
 
-監視と解析は Mac 上で完結します。現行版には広告、テレメトリ、行動解析、第三者の追跡 SDK はなく、
-プロセス活動、ファイルパス、監視履歴、ディスクのシリアル番号をアップロードしません。
+監視、分析、表示はすべて Mac 内で完結します。現在のリリースはプロセス名、ファイルパス、ディスクシリアル番号、監視履歴を送信せず、広告、テレメトリ、分析、第三者追跡 SDK も含みません。
 
-基本監視に管理者の承認は不要です。ファイルまたはフォルダの追跡を明示的に開始した場合だけ、
-macOS が署名済みバックグラウンドコンポーネントの承認を求めることがあります。このコンポーネントは、
-固定された引数と時間制限を持つ `/usr/bin/fs_usage` セッションだけを監督し、シェルや任意のコマンドは実行できません。
+基本的な CPU、ディスク、ネットワーク、ボリューム、プロセス監視に管理者承認は不要です。ファイルまたはディレクトリ追跡を明示的に開始したときだけ、macOS が署名済みの固定目的バックグラウンドコンポーネントの承認を求める場合があります。保護された場所にはフルディスクアクセスが必要なこともあります。追跡の開始と停止は常にユーザーが制御します。
 
-詳しくは [プライバシーポリシー](PRIVACY.md) と [セキュリティポリシー](SECURITY.md) をご覧ください。
+詳細は [プライバシーポリシー](PRIVACY.md) · [セキュリティポリシー](SECURITY.md).
 
-## 動作環境とインストール
+## インストール
 
-- macOS 14 以降
-- Apple シリコンまたは Intel Mac
-- 管理者アカウントが必要なのは、オンデマンドのファイルアクセス追跡を有効にするときだけです
+1. [公式サイト](https://finddiskkiller.com/ja/download/)から最新の署名・公証済み DMG をダウンロードします。
+2. DMG を開き、FindDiskKiller をアプリケーションフォルダへドラッグします。
+3. アプリケーションから FindDiskKiller を起動します。
 
-正式版は公開後、Developer ID 署名と Apple の公証を受けた universal2 DMG として提供されます。
+正式版は Apple silicon と Intel Mac に対応し、SHA-256 チェックサムを提供します。署名または公証の検証に失敗した場合は Gatekeeper を回避しないでください。
 
-1. [公式サイト](https://finddiskkiller.com/ja/download/)から最新版をダウンロードします。
-2. DMG を開き、FindDiskKiller を「アプリケーション」へドラッグします。
-3. 「アプリケーション」から FindDiskKiller を起動します。
+## 開発とドキュメント
 
-各正式版には SHA-256 を公開します。Gatekeeper の検証に失敗するパッケージでは、システムの保護機能を回避しないでください。
+<details>
+<summary><strong>ソースからビルドしてテストを実行</strong></summary>
 
-## ビルドとテスト
-
-開発には Xcode 16 以降と XcodeGen 2.42.0 以降が必要です。
+開発には Xcode 16+ と XcodeGen 2.42.0+ が必要です。
 
 ```bash
 git clone https://github.com/jianyintang/find-disk-killer.git
 cd find-disk-killer
 xcodegen generate
-xcodebuild -project FindDiskKiller.xcodeproj \
-  -scheme FindDiskKillerApp -configuration Release \
+xcodebuild \
+  -project FindDiskKiller.xcodeproj \
+  -scheme FindDiskKillerApp \
+  -configuration Release \
   -destination 'generic/platform=macOS' \
-  CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=NO build
-swift test
+  CODE_SIGNING_ALLOWED=NO \
+  ONLY_ACTIVE_ARCH=NO \
+  build
+make test
 ```
 
-未署名の開発ビルドでは基本監視を検証できますが、権限が必要なファイルまたはフォルダの
-追跡は実行できません。アプリと helper はメンテナーの Team ID で相互認証するため、
-この機能は正式に署名されたビルドで検証する必要があります。バックグラウンドコンポーネントの
-承認と、保護された場所に対するフルディスクアクセスは、macOS 上の別々の権限です。
+未署名ビルドでは基本監視を検証できますが、正式に署名された App と helper の識別情報が必要な特権ファイル追跡は実行できません。
 
-クリーンなコミットから署名・公証済みの配布物を作成します。
-
-```bash
-make lint test
-make release VERSION=1.0.0 BUILD_NUMBER=100
-```
-
-`SKIP_NOTARIZATION=1` の成果物はローカル検証専用で、公開できません。
-
-## ドキュメントとサポート
+</details>
 
 - [製品・技術計画](docs/find-disk-killer-product-and-technical-plan.md)
 - [詳細ファイル追跡と SSD 健全性計画](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.md)
 - [Web 配布チェックリスト](docs/website-release-checklist.md)
 - [コントリビューション](CONTRIBUTING.md)
-- [サポート](SUPPORT.md) · [プライバシー](PRIVACY.md) · [セキュリティ](SECURITY.md) · [第三者に関する表示](THIRD_PARTY_NOTICES.md)
+- [第三者通知](THIRD_PARTY_NOTICES.md)
 
-一般的な問い合わせは [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues) へ、
-脆弱性は [GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new) から非公開で報告してください。
+## サポートとライセンス
 
-FindDiskKiller は [MIT License](LICENSE) のもとでオープンソースとして公開されています。
-第三者のアプリマークは観測したソフトウェアの識別にのみ使用し、提携や推奨を示すものではありません。
+質問、バグ、機能要望には [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues) を利用してください。脆弱性は [GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new) から非公開で報告し、診断やスクリーンショットから機密パス、ユーザー名、ディスクシリアル番号を除いてください。
+
+FindDiskKiller は [MIT License](LICENSE) の下でオープンソースです。
