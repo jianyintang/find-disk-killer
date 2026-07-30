@@ -31,7 +31,7 @@ AI Storage는 사용자가 명시적으로 분석을 시작한 경우에만 Code
 
 <p align="center"><img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="Codex와 Claude의 대화, 전역, 미귀속 공간을 구분한 AI Storage 개요."></p>
 
-<p align="center"><img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="thread별 최근 활동과 하위 에이전트를 나열하고 선택한 thread의 전체 저장 공간 구성을 오른쪽에 보여 주는 Codex AI Storage."></p>
+<p align="center"><img src="docs/assets/screenshots/ai-storage-thread-details.webp" width="100%" alt="thread별 최근 활동과 하위 에이전트를 나열하고 선택한 thread의 전체 저장 공간 구성을 오른쪽에 보여 주는 Codex AI Storage."></p>
 
 기간, 프로젝트 또는 개별 대화를 선택하고 영구 삭제 전에 예상 즉시 확보 공간을 검토할 수 있습니다. Codex는 공식 thread/delete, 독립 Claude Code session은 공식 Agent SDK를 사용합니다. 활성 상태, identity 변경 또는 미지원 항목은 건너뛰며 SQLite 직접 수정이나 transcript 수동 삭제로 대체하지 않습니다. Claude Desktop/Cowork는 현재 Claude Desktop에서 삭제해야 합니다.
 

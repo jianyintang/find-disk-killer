@@ -58,7 +58,7 @@ chat attribution have independent quality states, so incomplete or unsupported
 evidence is disclosed instead of being presented as exact.
 
 <p align="center">
-  <img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="Codex AI Storage view listing thread-level usage, recent activity, subagents, and the selected thread's complete storage breakdown.">
+  <img src="docs/assets/screenshots/ai-storage-thread-details.webp" width="100%" alt="Codex AI Storage view listing thread-level usage, recent activity, subagents, and the selected thread's complete storage breakdown.">
 </p>
 
 ### Review first, then clean up through official provider capabilities

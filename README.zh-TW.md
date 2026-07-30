@@ -31,7 +31,7 @@ AI Storage 只在你明確按下分析後，才會測量 Codex 與 Claude 的資
 
 <p align="center"><img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="AI Storage 總覽，分別顯示 Codex 與 Claude 的聊天、全域與未歸因空間。"></p>
 
-<p align="center"><img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="Codex AI Storage 清單依 thread 顯示近期活動與子代理，並在右側完整呈現所選 thread 的空間構成。"></p>
+<p align="center"><img src="docs/assets/screenshots/ai-storage-thread-details.webp" width="100%" alt="Codex AI Storage 清單依 thread 顯示近期活動與子代理，並在右側完整呈現所選 thread 的空間構成。"></p>
 
 選擇時間範圍、專案或個別對話後，可在永久刪除前檢查預計立即釋放空間。Codex 使用官方 thread/delete，獨立 Claude Code session 使用官方 Agent SDK；活動中、identity 改變或不受支援的項目會跳過，且絕不改寫 SQLite 或手動刪除 transcript。Claude Desktop/Cowork 目前必須在 Claude Desktop 內刪除。
 

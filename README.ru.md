@@ -30,7 +30,7 @@ AI Storage измеряет данные Codex и Claude только после
 
 <p align="center"><img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="Обзор AI Storage с раздельным пространством чатов, общими и неатрибутированными данными Codex и Claude."></p>
 
-<p align="center"><img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="Codex AI Storage с активностью и субагентами по thread, а также полным составом хранилища выбранного thread справа."></p>
+<p align="center"><img src="docs/assets/screenshots/ai-storage-thread-details.webp" width="100%" alt="Codex AI Storage с активностью и субагентами по thread, а также полным составом хранилища выбранного thread справа."></p>
 
 Выберите возраст, проект или отдельные чаты и проверьте ожидаемое немедленное освобождение до безвозвратного удаления. Codex использует официальный thread/delete, автономные сессии Claude Code — официальный Agent SDK. Активные, изменённые или неподдерживаемые элементы пропускаются без прямой записи в SQLite и ручного удаления transcript. Claude Desktop/Cowork сейчас удаляются в Claude Desktop.
 
