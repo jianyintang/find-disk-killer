@@ -16,7 +16,10 @@ guard FileManager.default.isExecutableFile(atPath: node.path),
 
 let process = Process()
 process.executableURL = node
-process.arguments = [script.path]
+// The helper performs short-lived SDK file operations and does not benefit from
+// JIT compilation. Disabling it avoids reserving V8's large executable code
+// range on memory-constrained Macs.
+process.arguments = ["--jitless", script.path]
 process.standardInput = FileHandle.standardInput
 process.standardOutput = FileHandle.standardOutput
 process.standardError = FileHandle.standardError

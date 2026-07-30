@@ -98,8 +98,9 @@ item is backed by an artifact or a test record.
   downloads, verifies, and installs the new build without opening a browser.
 - Verify automatic checking makes no more than one request per 24 hours while
   enabled, and that disabling it in Settings persists after relaunch.
-- Start a deep trace, confirm update checks are disabled with a useful reason,
-  stop the trace, and confirm updates become available only after helper ACK.
+- Start a deep trace and confirm the signed appcast can still be checked. Choose
+  Install and verify relaunch waits for the trace helper's stop acknowledgement;
+  after the acknowledgement, installation must continue without another click.
 - Keep the previous known-good release available for recovery, but never offer
   an automatic downgrade over a newer installed helper.
 - Monitor support reports during the initial rollout. Pause distribution for

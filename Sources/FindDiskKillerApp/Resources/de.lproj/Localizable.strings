@@ -431,6 +431,8 @@
 "正在确认追踪已结束" = "Ende der Aufzeichnung wird bestätigt";
 "停止完成后即可检查或安装更新。" = "Nach dem vollständigen Ende der Aufzeichnung können Updates geprüft oder installiert werden.";
 "追踪组件暂未响应；确认后台追踪结束前不会开始更新。" = "Die Aufzeichnungskomponente antwortet noch nicht. Updates bleiben gesperrt, bis die Hintergrundaufzeichnung beendet ist.";
+"仍可检查更新；如需安装，将在追踪完全停止后自动继续。" = "Sie können weiterhin nach Updates suchen. Die Installation wird automatisch fortgesetzt, sobald die Aufzeichnung vollständig beendet ist.";
+"仍可检查更新；确认后台追踪结束前不会开始安装。" = "Sie können weiterhin nach Updates suchen. Die Installation beginnt erst, wenn das Ende der Hintergrundaufzeichnung bestätigt wurde.";
 "软件更新" = "Softwareupdate";
 "自动检查更新" = "Automatisch nach Updates suchen";
 "每天最多检查一次；不会上传监测数据。" = "Die automatische Suche erfolgt höchstens einmal täglich; Überwachungsdaten werden nicht übertragen.";

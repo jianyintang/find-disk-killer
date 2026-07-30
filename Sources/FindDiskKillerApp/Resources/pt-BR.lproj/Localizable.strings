@@ -431,6 +431,8 @@
 "正在确认追踪已结束" = "Confirmando o fim do rastreamento";
 "停止完成后即可检查或安装更新。" = "Você poderá buscar ou instalar atualizações quando o rastreamento terminar completamente.";
 "追踪组件暂未响应；确认后台追踪结束前不会开始更新。" = "O componente de rastreamento ainda não responde. As atualizações permanecem bloqueadas até confirmar que o rastreamento em segundo plano terminou.";
+"仍可检查更新；如需安装，将在追踪完全停止后自动继续。" = "Você ainda pode verificar atualizações. A instalação continuará automaticamente quando o rastreamento parar por completo.";
+"仍可检查更新；确认后台追踪结束前不会开始安装。" = "Você ainda pode verificar atualizações. A instalação não começará até a parada do rastreamento em segundo plano ser confirmada.";
 "软件更新" = "Atualização de Software";
 "自动检查更新" = "Buscar atualizações automaticamente";
 "每天最多检查一次；不会上传监测数据。" = "A busca automática ocorre no máximo uma vez por dia; os dados de monitoramento nunca são enviados.";

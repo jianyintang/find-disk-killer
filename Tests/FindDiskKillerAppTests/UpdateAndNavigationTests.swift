@@ -57,20 +57,20 @@ func agentStorageCompatibilityLinkDoesNotIncludePrivateDiagnosticInput() throws 
 }
 
 @Test @MainActor
-func traceAndUpdateReservationsAreMutuallyExclusive() throws {
+func traceAndUpdateInstallationReservationsAreMutuallyExclusive() throws {
     let registry = TraceActivityRegistry()
     let traceLease = try #require(registry.acquireTrace())
 
-    #expect(registry.reserveUpdate() == nil)
+    #expect(registry.reserveUpdateInstallation() == nil)
     registry.markTraceStopping(traceLease)
     #expect(registry.status == .traceStopping)
-    #expect(registry.reserveUpdate() == nil)
+    #expect(registry.reserveUpdateInstallation() == nil)
     registry.markTraceStopUnconfirmed(traceLease)
     #expect(registry.status == .stopUnconfirmed)
     #expect(registry.acquireTrace() == nil)
 
     registry.releaseTrace(traceLease)
-    let updateLease = try #require(registry.reserveUpdate())
+    let updateLease = try #require(registry.reserveUpdateInstallation())
     #expect(registry.acquireTrace() == nil)
     registry.releaseUpdate(updateLease)
     #expect(registry.status == .idle)
@@ -83,12 +83,74 @@ func orphanedHelperStateRequiresReconciliation() {
 
     #expect(registry.needsHelperReconciliation)
     #expect(registry.acquireTrace() == nil)
-    #expect(registry.reserveUpdate() == nil)
+    #expect(registry.reserveUpdateInstallation() == nil)
 
     registry.markHelperReadyWithoutLocalLease()
     #expect(!registry.needsHelperReconciliation)
     #expect(registry.canStartTrace)
-    #expect(registry.canStartUpdate)
+    #expect(registry.canBeginUpdateInstallation)
+}
+
+@Test @MainActor
+func helperApprovalStateDoesNotPretendThatATraceIsStopping() {
+    let registry = TraceActivityRegistry()
+
+    registry.markHelperReadyWithoutLocalLease()
+
+    #expect(registry.status == .idle)
+    #expect(registry.canBeginUpdateInstallation)
+}
+
+@Test
+func appcastChecksRemainAvailableAcrossTraceInterlockStates() {
+    let statuses: [TraceUpdateInterlockStatus] = [
+        .idle,
+        .traceStartingOrRunning,
+        .traceStopping,
+        .stopUnconfirmed,
+        .updatePendingOrRunning
+    ]
+
+    #expect(statuses.allSatisfy(UpdateInterlockPolicy.allowsAppcastCheck))
+}
+
+@Test @MainActor
+func postponedInstallationContinuesOnceAndKeepsTracingBlocked() async throws {
+    let registry = TraceActivityRegistry()
+    let traceLease = try #require(registry.acquireTrace())
+    let interlock = UpdateInstallationInterlock(activityRegistry: registry)
+    var continuationCount = 0
+
+    #expect(interlock.postponeIfNeeded { continuationCount += 1 })
+    registry.releaseTrace(traceLease)
+
+    for _ in 0..<20 where continuationCount == 0 {
+        try await Task.sleep(for: .milliseconds(25))
+    }
+    #expect(continuationCount == 1)
+    #expect(interlock.isActive)
+    #expect(registry.acquireTrace() == nil)
+
+    interlock.release()
+    #expect(!interlock.isActive)
+    #expect(registry.canStartTrace)
+}
+
+@Test @MainActor
+func cancelingPostponedInstallationDoesNotInvokeItsHandler() async throws {
+    let registry = TraceActivityRegistry()
+    let traceLease = try #require(registry.acquireTrace())
+    let interlock = UpdateInstallationInterlock(activityRegistry: registry)
+    var continued = false
+
+    #expect(interlock.postponeIfNeeded { continued = true })
+    interlock.release()
+    registry.releaseTrace(traceLease)
+    try await Task.sleep(for: .milliseconds(300))
+
+    #expect(!continued)
+    #expect(!interlock.isActive)
+    #expect(registry.canStartTrace)
 }
 
 @Test

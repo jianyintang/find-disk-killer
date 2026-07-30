@@ -361,9 +361,9 @@ struct FileAccessTraceView: View {
         case .repairAvailable:
             L10n.text("组件已启用但未能启动。请直接修复，无需重复切换系统设置；已有结果会保留。")
         case .stopping:
-            L10n.text("停止完成后即可检查或安装更新。")
+            L10n.text("仍可检查更新；如需安装，将在追踪完全停止后自动继续。")
         case .stopUnconfirmed:
-            L10n.text("追踪组件暂未响应；确认后台追踪结束前不会开始更新。")
+            L10n.text("仍可检查更新；确认后台追踪结束前不会开始安装。")
         case .installationRequired(let isDiskImage):
             isDiskImage
                 ? L10n.text("请在安装窗口中将 FindDiskKiller 拖入“应用程序”，然后重新打开。")
