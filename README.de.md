@@ -24,6 +24,18 @@ Prozessliste oft nicht die Ursache. FindDiskKiller ordnet die Untersuchung nach
 Apps: anhaltende Last erkennen, die verantwortliche App finden und anschließend
 CPU, Festplatten-I/O, Netzwerk, Dateien und Speichergerät im selben Kontext prüfen.
 
+## Auch AI Agents belegen Speicherplatz
+
+AI Storage misst Codex- und Claude-Daten nur nach einem ausdrücklichen Start und ordnet erkennbare Belegung einzelnen Threads/Sitzungen, Hauptchats und rekursiven Subagents zu. Gemessene Dateien und Datenbankschätzungen bleiben getrennt; unvollständige Belege werden nicht als exakt ausgegeben.
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="AI-Storage-Übersicht mit getrenntem Chat-, globalem und nicht zugeordnetem Speicher für Codex und Claude."></p>
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="Codex AI Storage mit Belegung, Aktivität und Subagents pro Thread."></p>
+
+Vor dem dauerhaften Löschen lassen sich Zeitraum, Projekt oder einzelne Chats auswählen und der voraussichtlich sofort freigegebene Speicher prüfen. Codex nutzt das offizielle thread/delete, eigenständige Claude-Code-Sitzungen das offizielle Agent SDK. Aktive, geänderte oder nicht unterstützte Einträge werden übersprungen; direkte SQLite-Schreibvorgänge oder manuelles Löschen von Transkripten sind kein Fallback. Claude Desktop/Cowork wird derzeit in Claude Desktop gelöscht.
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="82%" alt="Stapelbereinigung für AI-Agent-Chats mit Prüfung des sofort freigebbaren Speichers vor dem dauerhaften Löschen."></p>
+
 ## Alles Wichtige auf einen Blick
 
 | Bereich | Was Sie sehen |

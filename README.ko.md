@@ -25,6 +25,18 @@ Mac이 뜨거워지고 디스크가 계속 바쁜데 프로세스 목록만으�
 FindDiskKiller는 조사를 앱 중심의 흐름으로 정리합니다. 지속되는 부하를 찾고 해당 앱의 CPU,
 디스크, 네트워크, 파일, 저장 장치 정보를 한곳에서 확인할 수 있습니다.
 
+## AI Agent 저장 공간까지 분석
+
+AI Storage는 사용자가 명시적으로 분석을 시작한 경우에만 Codex와 Claude 데이터를 측정하고, 식별 가능한 사용량을 thread/session, 기본 대화 및 재귀 하위 에이전트에 귀속합니다. 측정된 파일과 데이터베이스 추정치는 분리하며 근거가 부족한 값을 정확한 수치처럼 표시하지 않습니다.
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="Codex와 Claude의 대화, 전역, 미귀속 공간을 구분한 AI Storage 개요."></p>
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="thread별 최근 활동, 하위 에이전트 및 저장 공간 귀속을 보여 주는 Codex AI Storage."></p>
+
+기간, 프로젝트 또는 개별 대화를 선택하고 영구 삭제 전에 예상 즉시 확보 공간을 검토할 수 있습니다. Codex는 공식 thread/delete, 독립 Claude Code session은 공식 Agent SDK를 사용합니다. 활성 상태, identity 변경 또는 미지원 항목은 건너뛰며 SQLite 직접 수정이나 transcript 수동 삭제로 대체하지 않습니다. Claude Desktop/Cowork는 현재 Claude Desktop에서 삭제해야 합니다.
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="82%" alt="영구 삭제 전에 범위와 예상 즉시 확보 공간을 검토하는 AI Agent 일괄 정리."></p>
+
 ## 한 화면에서 확인하는 정보
 
 | 작업 공간 | 제공하는 정보 |

@@ -25,6 +25,18 @@
 會把調查重新整理成以 App 為中心的流程：先找出持續負載，再查看相關 App 的 CPU、
 磁碟、網路、檔案與儲存裝置資訊，不必在多個工具之間拼湊線索。
 
+## AI Agents 也會占用大量磁碟空間
+
+AI Storage 只在你明確按下分析後，才會測量 Codex 與 Claude 的資料，並將可識別的占用歸因到具體 thread/session、主對話與遞迴子代理。物理檔案與資料庫估算會分開標示，缺少證據時不會假裝精確。
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="AI Storage 總覽，分別顯示 Codex 與 Claude 的聊天、全域與未歸因空間。"></p>
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="依 thread 顯示近期活動、子代理與空間歸因的 Codex AI Storage 列表。"></p>
+
+選擇時間範圍、專案或個別對話後，可在永久刪除前檢查預計立即釋放空間。Codex 使用官方 thread/delete，獨立 Claude Code session 使用官方 Agent SDK；活動中、identity 改變或不受支援的項目會跳過，且絕不改寫 SQLite 或手動刪除 transcript。Claude Desktop/Cowork 目前必須在 Claude Desktop 內刪除。
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="82%" alt="AI Agent 批次清理複核，在永久刪除前顯示選取範圍與預計立即釋放空間。"></p>
+
 ## 一眼掌握
 
 | 工作區 | 提供的資訊 |

@@ -25,6 +25,18 @@ Mac が熱を持ち、ディスクが動き続けているのに、プロセス�
 FindDiskKiller は、そんな調査をアプリ中心に整理します。継続的な負荷を見つけ、対象アプリの
 CPU、ディスク、ネットワーク、ファイル、ストレージの状況を、一つの流れで確認できます。
 
+## AI Agent が使うストレージも可視化
+
+AI Storage は、明示的に分析を開始したときだけ Codex と Claude のデータを測定し、識別できる使用量を thread/session、メインチャット、再帰的なサブエージェントに割り当てます。実測ファイルとデータベース推定値は分けて表示し、根拠が不足する値を正確な値として扱いません。
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="Codex と Claude のチャット、グローバル、未割り当て領域を分けて示す AI Storage の概要。"></p>
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="thread ごとの最近の活動、サブエージェント、ストレージ割り当てを示す Codex AI Storage。"></p>
+
+期間、プロジェクト、個別チャットを選び、完全削除の前に即時解放見込みを確認できます。Codex は公式 thread/delete、単独の Claude Code session は公式 Agent SDK を使用します。使用中、identity が変化した項目、非対応項目はスキップし、SQLite の直接更新や transcript の手動削除にはフォールバックしません。Claude Desktop/Cowork は現在 Claude Desktop 内で削除します。
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="82%" alt="完全削除前に対象と即時解放見込みを確認する AI Agent 一括クリーンアップ。"></p>
+
 ## ひとつの画面で分かること
 
 | ワークスペース | 確認できる内容 |

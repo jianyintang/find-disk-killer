@@ -2,7 +2,7 @@
   <img src="docs/assets/find-disk-killer-icon.png" width="136" height="136" alt="FindDiskKiller app icon">
   <h1>FindDiskKiller</h1>
   <p><strong>See what keeps using your disk.</strong></p>
-  <p>A native macOS workspace for application disk I/O, CPU, network, file activity, and drive-health evidence.</p>
+  <p>A native macOS workspace for application disk I/O, AI Agent storage, file activity, and drive-health evidence.</p>
   <p>
     <a href="README.md">English</a> ·
     <a href="README.zh-CN.md">简体中文</a> ·
@@ -38,6 +38,49 @@ application-centered: identify sustained activity, inspect the responsible
 application, then move into its CPU, disk, network, files, and storage context
 without assembling the story across several tools.
 
+## AI Agents Use Disk Space Too
+
+Codex and Claude can accumulate gigabytes of transcripts, subagent sessions,
+snapshots, visualizations, and shared databases. **AI Storage** turns that
+footprint into an explicit, user-started workflow: measure each supported
+provider, attribute storage to individual threads or sessions, inspect the
+breakdown, then review old conversations before permanent deletion.
+
+<p align="center">
+  <img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="AI Storage overview measuring Codex and Claude storage with separate chat, global, and unattributed totals.">
+</p>
+
+### Attribute storage to the conversation that owns it
+
+Thread and session rows combine exclusive transcript files, recursive
+subagents, and clearly labelled database estimates. Physical measurement and
+chat attribution have independent quality states, so incomplete or unsupported
+evidence is disclosed instead of being presented as exact.
+
+<p align="center">
+  <img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="Codex AI Storage view listing thread-level usage, recent activity, subagents, and storage attribution.">
+</p>
+
+### Review first, then clean up through official provider capabilities
+
+Choose an age boundary, project, or individual conversations; compare selected
+threads, exclusive files, and estimated immediate reclaim before committing.
+Supported Codex threads are submitted to the official `thread/delete` capability,
+and standalone Claude Code sessions use the official Agent SDK. Active or
+changed sessions are skipped immediately. If a compatible official capability
+is unavailable, FindDiskKiller does not fall back to editing databases or
+deleting transcript files by hand.
+
+<p align="center">
+  <img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="82%" alt="Batch cleanup review for selecting older AI Agent chats and seeing estimated immediate reclaim before permanent deletion.">
+</p>
+
+Analysis never starts automatically. Entering AI Storage only shows the last
+valid result; scanning begins only after an explicit **Start Analysis** or
+**Analyze Again** action. Claude Desktop and Cowork storage can be measured,
+but those sessions must currently be deleted inside Claude Desktop because no
+stable public third-party deletion interface is available.
+
 ## What You Can See
 
 | Workspace | What it gives you |
@@ -51,6 +94,7 @@ without assembling the story across several tools.
 | **Drive health** | Native NVMe/SMART evidence such as temperature, host writes, wear, spare capacity, power history, and errors when macOS exposes it |
 | **Menu bar** | A quiet, lightweight view of current activity without notification noise |
 | **Period reports** | Optional local aggregate history with 7-day, 30-day, and one-year trends, coverage, comparisons, and leading applications |
+| **AI Storage** | Explicit one-click analysis for Codex and Claude, thread/session-level attribution, and capability-gated batch cleanup through supported official interfaces |
 
 ## A Complete Investigation, Visually
 
@@ -107,6 +151,9 @@ FindDiskKiller keeps macOS evidence sources separate:
   coverage gaps mean those values are not physical NAND writes.
 - **Drive health** contains only fields macOS actually reports. Missing values
   remain unavailable instead of becoming zero.
+- **AI storage** separates measured exclusive files from attributed database
+  estimates, shared provider data, and unsupported sources. Estimated logical
+  database cleanup is never presented as immediate physical disk reclaim.
 
 The app does **not** claim exact process-to-physical-device byte attribution.
 Related measurements are presented together without forcing them to add up.
@@ -116,6 +163,12 @@ Related measurements are presented together without forcing them to add up.
 Monitoring and analysis happen locally. The current release contains no ads,
 telemetry, analytics, or third-party tracking SDKs, and it does not upload
 process activity, file paths, monitoring history, or disk serial numbers.
+
+AI Storage is also local and opt-in. Opening the workspace never starts a scan;
+the app reads supported Agent data only after an explicit action. Cleanup is
+permanent, uses compatible official provider capabilities, skips active or
+identity-changed sessions, and never falls back to direct SQLite writes or
+manual transcript deletion.
 
 Long-term history is off by default. When enabled, per-second samples are first
 aggregated in memory and saved in at most one SQLite transaction per minute.

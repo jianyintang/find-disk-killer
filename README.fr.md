@@ -25,6 +25,18 @@ l’enquête autour des apps : repérez une charge persistante, identifiez l’a
 principale, puis examinez son processeur, ses E/S disque, son réseau, ses fichiers
 et son contexte de stockage au même endroit.
 
+## Mesurer aussi l’espace des agents IA
+
+AI Storage ne mesure les données Codex et Claude qu’après une action explicite, puis attribue l’espace identifiable à chaque thread/session, conversation principale et sous-agent récursif. Les fichiers mesurés et les estimations de base de données restent séparés ; une preuve incomplète n’est jamais présentée comme exacte.
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="Vue d’ensemble AI Storage séparant les espaces de conversation, globaux et non attribués de Codex et Claude."></p>
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="AI Storage de Codex avec activité, sous-agents et attribution par thread."></p>
+
+Choisissez une période, un projet ou des conversations, puis vérifiez l’espace immédiatement récupérable avant la suppression définitive. Codex utilise thread/delete officiel et les sessions Claude Code autonomes le SDK Agent officiel. Les éléments actifs, modifiés ou non pris en charge sont ignorés, sans écriture SQLite directe ni suppression manuelle de transcript. Claude Desktop/Cowork doit actuellement être supprimé depuis Claude Desktop.
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="82%" alt="Nettoyage groupé des conversations d’agents IA avec estimation de l’espace récupérable avant suppression définitive."></p>
+
 ## L’essentiel en un coup d’œil
 
 | Espace | Ce qu’il affiche |

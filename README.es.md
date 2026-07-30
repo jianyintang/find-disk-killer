@@ -24,6 +24,18 @@ no siempre explica la causa. FindDiskKiller organiza la investigación alrededor
 de las apps: detecta una carga sostenida, identifica la app principal y reúne su
 CPU, E/S de disco, red, archivos y contexto de almacenamiento.
 
+## También mide el espacio de los agentes de IA
+
+AI Storage solo mide los datos de Codex y Claude después de una acción explícita, y atribuye el espacio identificable a cada thread/session, conversación principal y subagente recursivo. Los archivos medidos y las estimaciones de base de datos se mantienen separados; la evidencia incompleta nunca se presenta como exacta.
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="Resumen de AI Storage con espacio de chats, global y no atribuido para Codex y Claude."></p>
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="AI Storage de Codex con actividad, subagentes y atribución de espacio por thread."></p>
+
+Selecciona una antigüedad, proyecto o conversaciones y revisa el espacio de liberación inmediata estimado antes del borrado permanente. Codex usa el thread/delete oficial y las sesiones independientes de Claude Code usan el Agent SDK oficial. Se omiten elementos activos, modificados o no compatibles, sin escribir SQLite directamente ni borrar transcripts a mano. Claude Desktop/Cowork se elimina actualmente desde Claude Desktop.
+
+<p align="center"><img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="82%" alt="Limpieza por lotes de chats de agentes de IA con revisión del espacio estimado antes del borrado permanente."></p>
+
 ## Todo lo importante de un vistazo
 
 | Espacio | Qué muestra |

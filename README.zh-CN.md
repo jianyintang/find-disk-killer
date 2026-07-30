@@ -2,7 +2,7 @@
   <img src="docs/assets/find-disk-killer-icon.png" width="136" height="136" alt="FindDiskKiller 应用图标">
   <h1>FindDiskKiller</h1>
   <p><strong>看见是谁在持续使用你的磁盘。</strong></p>
-  <p>将应用磁盘 I/O、CPU、网络、文件活动和磁盘健康证据集中在一个原生 macOS 工作区中。</p>
+  <p>将应用磁盘 I/O、AI Agent 空间、文件活动和磁盘健康证据集中在一个原生 macOS 工作区中。</p>
   <p>
     <a href="README.md">English</a> ·
     <a href="README.zh-CN.md">简体中文</a> ·
@@ -36,6 +36,41 @@
 FindDiskKiller 会把排查过程重新组织成以应用为中心的工作流：先识别持续负载，
 再查看相关应用的 CPU、磁盘、网络、文件和存储上下文，不必在多个工具之间拼凑线索。
 
+## AI Agents 也会持续占用磁盘空间
+
+Codex 和 Claude 会逐渐积累大量对话记录、子代理会话、快照、可视化文件与共享数据库。
+**AI Storage** 将这些空间变成一个必须由用户明确启动的分析流程：分别测量支持的
+provider，将占用归因到具体 thread/session，查看构成，再复核并永久删除不再需要的对话。
+
+<p align="center">
+  <img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="AI Storage 总览，分别展示 Codex 与 Claude 的聊天、全局和未归因空间。">
+</p>
+
+### 把空间归因到真正占用它的对话
+
+thread/session 列表会合并主对话独占文件、递归子代理文件和明确标注的数据库估算。
+物理空间统计与聊天归因使用两套独立质量状态；证据不完整或版本不支持时会明确披露，
+不会把估算或未知值包装成精确结果。
+
+<p align="center">
+  <img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="Codex AI Storage 列表，按 thread 展示近期活动、子代理数量和空间归因。">
+</p>
+
+### 先复核，再通过官方能力安全清理
+
+可以按时间边界、项目或单个对话选择范围，在提交前核对选中 thread、独占文件和预计
+立即释放空间。支持的 Codex thread 通过官方 `thread/delete` 提交，独立 Claude Code
+session 使用官方 Agent SDK；活动中或 identity 已变化的会话会立即跳过。如果没有兼容的
+官方能力，FindDiskKiller 不会降级为直接改写数据库或手工删除 transcript 文件。
+
+<p align="center">
+  <img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="82%" alt="AI Agent 批量清理复核界面，可选择较旧对话并在永久删除前查看预计立即释放空间。">
+</p>
+
+AI Storage 永远不会自动扫描。进入页面只展示最近一次有效结果，只有明确点击“开始分析”
+或“重新分析”才会读取数据。Claude Desktop 与 Cowork 的空间可以统计，但由于当前没有稳定的
+公开第三方删除接口，这些会话必须在 Claude Desktop 内删除。
+
 ## 一眼看清
 
 | 工作区 | 能够看到什么 |
@@ -49,6 +84,7 @@ FindDiskKiller 会把排查过程重新组织成以应用为中心的工作流�
 | **磁盘健康** | 在 macOS 提供时展示温度、累计主机写入、磨损、备用空间、通电记录和错误 |
 | **菜单栏** | 安静查看当前状态，不使用反复通知打扰用户 |
 | **历史分析** | 可选保存本机聚合历史，查看 7 天、30 天和 1 年趋势、覆盖率、周期对比与主要应用 |
+| **AI Storage** | 明确点击后分析 Codex 与 Claude 空间，归因到 thread/session，并通过支持的官方接口批量清理 |
 
 ## 从应用到磁盘的完整视图
 
@@ -109,6 +145,8 @@ FindDiskKiller 始终区分 macOS 提供的不同证据：
 - **文件访问追踪** 统计成功系统调用向系统请求的字节。缓存、APFS 写回、压缩、
   写时复制、内存映射和覆盖缺口都会让它不同于物理磁盘或 NAND 写入。
 - **磁盘健康** 只展示 macOS 实际提供的字段；缺失值显示为不可用，而不是零。
+- **AI Agent 空间** 区分已测量的独占文件、数据库归因估算、共享数据和不支持的数据源；
+  数据库逻辑清理不会被描述成物理磁盘立即释放。
 
 产品不会声称能够精确计算任意进程向某块物理磁盘写入的每一个字节。
 
@@ -116,6 +154,10 @@ FindDiskKiller 始终区分 macOS 提供的不同证据：
 
 监控和分析全部在本机完成。当前版本不包含广告、遥测、行为分析或第三方追踪 SDK，
 也不会上传进程活动、文件路径、监控历史或磁盘序列号。
+
+AI Storage 同样完全在本机运行并且必须由用户明确启动。打开页面不会开始扫描；清理操作
+不可撤销，只使用兼容的官方 provider 能力，会跳过活动中或 identity 已变化的会话，绝不
+降级为直接写 SQLite 或手工删除 transcript。
 
 长期历史默认关闭。开启后，逐秒采样先在内存聚合，每分钟最多用一个 SQLite 事务保存；
 分钟明细只保留 24 小时，历史分析使用 15 分钟和小时聚合。用户可严格选择 7 天、30 天
