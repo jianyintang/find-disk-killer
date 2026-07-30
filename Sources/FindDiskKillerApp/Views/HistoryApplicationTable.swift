@@ -241,14 +241,16 @@ struct HistoryApplicationTable: View {
             applicationIdentity(application)
             writeShareBar(application)
             metricText(
-                compact ? sortMetric.formattedValue(for: application) : ByteRateFormatter.bytes(application.writeBytes),
+                compact
+                    ? sortMetric.formattedValue(for: application)
+                    : formattedMetric(.write, for: application),
                 width: 92
             )
 
             if !compact {
-                metricText(ByteRateFormatter.bytes(application.readBytes), width: 92)
-                metricText(cpuDuration(for: application), width: 86)
-                metricText(ByteRateFormatter.bytes(networkBytes(for: application)), width: 96)
+                metricText(formattedMetric(.read, for: application), width: 92)
+                metricText(formattedMetric(.cpu, for: application), width: 86)
+                metricText(formattedNetwork(for: application), width: 96)
             }
         }
         .padding(.horizontal, 8)
@@ -308,25 +310,41 @@ struct HistoryApplicationTable: View {
         .help(displayName(for: application))
     }
 
+    @ViewBuilder
     private func writeShareBar(_ application: HistoryApplicationReport) -> some View {
-        let share = writeShare(for: application)
-        return HStack(spacing: 7) {
-            ZStack(alignment: .leading) {
+        if application.unavailableMetrics.contains(.write) {
+            HStack(spacing: 7) {
                 Capsule().fill(Color.secondary.opacity(0.14))
-                Capsule().fill(identityColor(for: application).opacity(0.82))
-                    .frame(width: max(2, 50 * share))
+                    .frame(width: 50, height: 4)
+                Text(L10n.text("不可用"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 38, alignment: .trailing)
             }
-            .frame(width: 50, height: 4)
+            .frame(width: 105, alignment: .leading)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(L10n.text("写入占比"))
+            .accessibilityValue(L10n.text("不可用"))
+        } else {
+            let share = writeShare(for: application)
+            HStack(spacing: 7) {
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.secondary.opacity(0.14))
+                    Capsule().fill(identityColor(for: application).opacity(0.82))
+                        .frame(width: max(2, 50 * share))
+                }
+                .frame(width: 50, height: 4)
 
-            Text(share, format: .percent.precision(.fractionLength(0)))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 38, alignment: .trailing)
+                Text(share, format: .percent.precision(.fractionLength(0)))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 38, alignment: .trailing)
+            }
+            .frame(width: 105, alignment: .leading)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(L10n.text("写入占比"))
+            .accessibilityValue(share.formatted(.percent.precision(.fractionLength(0))))
         }
-        .frame(width: 105, alignment: .leading)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(L10n.text("写入占比"))
-        .accessibilityValue(share.formatted(.percent.precision(.fractionLength(0))))
     }
 
     private func metricText(_ text: String, width: CGFloat) -> some View {
@@ -362,20 +380,12 @@ struct HistoryApplicationTable: View {
 
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 24) {
-                        detailMetric(L10n.text("写入"), ByteRateFormatter.bytes(selectedApplication.writeBytes), "square.and.arrow.down")
-                        detailMetric(L10n.text("读取"), ByteRateFormatter.bytes(selectedApplication.readBytes), "square.and.arrow.up")
-                        detailMetric("CPU", cpuDuration(for: selectedApplication), "cpu")
-                        detailMetric(L10n.text("网络"), ByteRateFormatter.bytes(networkBytes(for: selectedApplication)), "network")
-                        detailMetric(L10n.text("写入占比"), writeShare(for: selectedApplication).formatted(.percent.precision(.fractionLength(0))), "chart.bar.fill")
+                        applicationDetailMetrics(selectedApplication)
                     }
                     .frame(minWidth: 620, alignment: .leading)
 
                     VStack(alignment: .leading, spacing: 8) {
-                        detailMetric(L10n.text("写入"), ByteRateFormatter.bytes(selectedApplication.writeBytes), "square.and.arrow.down")
-                        detailMetric(L10n.text("读取"), ByteRateFormatter.bytes(selectedApplication.readBytes), "square.and.arrow.up")
-                        detailMetric("CPU", cpuDuration(for: selectedApplication), "cpu")
-                        detailMetric(L10n.text("网络"), ByteRateFormatter.bytes(networkBytes(for: selectedApplication)), "network")
-                        detailMetric(L10n.text("写入占比"), writeShare(for: selectedApplication).formatted(.percent.precision(.fractionLength(0))), "chart.bar.fill")
+                        applicationDetailMetrics(selectedApplication)
                     }
                 }
             }
@@ -441,8 +451,26 @@ struct HistoryApplicationTable: View {
         .accessibilityElement(children: .combine)
     }
 
+    @ViewBuilder
+    private func applicationDetailMetrics(_ application: HistoryApplicationReport) -> some View {
+        detailMetric(L10n.text("写入"), formattedMetric(.write, for: application), "square.and.arrow.down")
+        detailMetric(L10n.text("读取"), formattedMetric(.read, for: application), "square.and.arrow.up")
+        detailMetric("CPU", formattedMetric(.cpu, for: application), "cpu")
+        detailMetric(L10n.text("网络"), formattedNetwork(for: application), "network")
+        detailMetric(
+            L10n.text("写入占比"),
+            application.unavailableMetrics.contains(.write)
+                ? L10n.text("不可用")
+                : writeShare(for: application).formatted(.percent.precision(.fractionLength(0))),
+            "chart.bar.fill"
+        )
+    }
+
     private var sortedApplications: [HistoryApplicationReport] {
         Array(applications.sorted { lhs, rhs in
+            let lhsAvailable = sortMetric.isAvailable(for: lhs)
+            let rhsAvailable = sortMetric.isAvailable(for: rhs)
+            if lhsAvailable != rhsAvailable { return lhsAvailable }
             let lhsValue = sortMetric.value(for: lhs)
             let rhsValue = sortMetric.value(for: rhs)
             if lhsValue != rhsValue {
@@ -475,6 +503,26 @@ struct HistoryApplicationTable: View {
 
     private func networkBytes(for application: HistoryApplicationReport) -> UInt64 {
         application.networkReceiveBytes.addingClamped(application.networkSendBytes)
+    }
+
+    private func formattedMetric(
+        _ metric: HistoryApplicationMetricSet,
+        for application: HistoryApplicationReport
+    ) -> String {
+        guard !application.unavailableMetrics.contains(metric) else {
+            return L10n.text("不可用")
+        }
+        if metric == .write { return ByteRateFormatter.bytes(application.writeBytes) }
+        if metric == .read { return ByteRateFormatter.bytes(application.readBytes) }
+        return cpuDuration(for: application)
+    }
+
+    private func formattedNetwork(for application: HistoryApplicationReport) -> String {
+        let unavailable = application.unavailableMetrics
+        guard !unavailable.contains(.networkReceive), !unavailable.contains(.networkSend) else {
+            return L10n.text("不可用")
+        }
+        return ByteRateFormatter.bytes(networkBytes(for: application))
     }
 
     private func cpuDuration(for application: HistoryApplicationReport) -> String {
@@ -525,13 +573,18 @@ struct HistoryApplicationTable: View {
         for application: HistoryApplicationReport,
         rank: Int
     ) -> String {
-        [
+        let writeShare = application.unavailableMetrics.contains(.write)
+            ? L10n.text("不可用")
+            : writeShare(for: application).formatted(
+                .percent.precision(.fractionLength(0))
+            )
+        return [
             "#\(rank)",
-            "\(L10n.text("写入")) \(ByteRateFormatter.bytes(application.writeBytes))",
-            "\(L10n.text("读取")) \(ByteRateFormatter.bytes(application.readBytes))",
-            "CPU \(cpuDuration(for: application))",
-            "\(L10n.text("网络")) \(ByteRateFormatter.bytes(networkBytes(for: application)))",
-            "\(L10n.text("写入占比")) \(writeShare(for: application).formatted(.percent.precision(.fractionLength(0))))"
+            "\(L10n.text("写入")) \(formattedMetric(.write, for: application))",
+            "\(L10n.text("读取")) \(formattedMetric(.read, for: application))",
+            "CPU \(formattedMetric(.cpu, for: application))",
+            "\(L10n.text("网络")) \(formattedNetwork(for: application))",
+            "\(L10n.text("写入占比")) \(writeShare)"
         ].joined(separator: ", ")
     }
 }
@@ -613,17 +666,32 @@ private enum ApplicationHistorySortMetric: String, CaseIterable, Identifiable {
         }
     }
 
-    func formattedValue(for application: HistoryApplicationReport) -> String {
+    func isAvailable(for application: HistoryApplicationReport) -> Bool {
         switch self {
         case .write:
-            ByteRateFormatter.bytes(application.writeBytes)
+            !application.unavailableMetrics.contains(.write)
         case .read:
-            ByteRateFormatter.bytes(application.readBytes)
+            !application.unavailableMetrics.contains(.read)
         case .cpu:
-            Duration.seconds(Double(application.cpuTimeNanoseconds) / 1_000_000_000)
+            !application.unavailableMetrics.contains(.cpu)
+        case .network:
+            !application.unavailableMetrics.contains(.networkReceive)
+                && !application.unavailableMetrics.contains(.networkSend)
+        }
+    }
+
+    func formattedValue(for application: HistoryApplicationReport) -> String {
+        guard isAvailable(for: application) else { return L10n.text("不可用") }
+        switch self {
+        case .write:
+            return ByteRateFormatter.bytes(application.writeBytes)
+        case .read:
+            return ByteRateFormatter.bytes(application.readBytes)
+        case .cpu:
+            return Duration.seconds(Double(application.cpuTimeNanoseconds) / 1_000_000_000)
                 .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated))
         case .network:
-            ByteRateFormatter.bytes(
+            return ByteRateFormatter.bytes(
                 application.networkReceiveBytes.addingClamped(application.networkSendBytes)
             )
         }

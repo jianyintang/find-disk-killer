@@ -52,9 +52,9 @@ struct ProcessHoverCard: View {
 
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
                     GridRow {
-                        metric("CPU · 5 秒", PercentFormatter.cpu(process.currentCPUPercent), .blue)
-                        metric("读取", ByteRateFormatter.rate(process.currentReadBytesPerSecond), .teal)
-                        metric("写入", ByteRateFormatter.rate(process.currentWriteBytesPerSecond), .orange)
+                        metric("CPU · 5 秒", currentCPUValue, .blue)
+                        metric("读取", currentRate(process.currentReadBytesPerSecond, .read), .teal)
+                        metric("写入", currentRate(process.currentWriteBytesPerSecond, .write), .orange)
                     }
                     GridRow {
                         metric("下载", networkValue(process.currentNetworkReceiveBytesPerSecond), .green)
@@ -91,6 +91,21 @@ struct ProcessHoverCard: View {
 
     private func networkValue(_ value: Double) -> String {
         process.isNetworkAvailable ? ByteRateFormatter.rate(value) : L10n.text("不可用")
+    }
+
+    private var currentCPUValue: String {
+        process.currentUnavailableMetrics.contains(.cpu)
+            ? L10n.text("不可用")
+            : PercentFormatter.cpu(process.currentCPUPercent)
+    }
+
+    private func currentRate(
+        _ value: Double,
+        _ metric: HistoryApplicationMetricSet
+    ) -> String {
+        process.currentUnavailableMetrics.contains(metric)
+            ? L10n.text("不可用")
+            : ByteRateFormatter.rate(value)
     }
 
     private var cardSurface: Color {

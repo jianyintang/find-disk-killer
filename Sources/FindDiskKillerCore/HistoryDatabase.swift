@@ -155,6 +155,7 @@ struct MutableApplicationBucket: Sendable {
     var cpuTimeNanoseconds: UInt64 = 0
     var networkReceiveBytes: UInt64 = 0
     var networkSendBytes: UInt64 = 0
+    var unavailableMetrics: HistoryApplicationMetricSet = []
 
     var activityScore: UInt64 {
         readBytes.addingClamped(writeBytes)
@@ -164,19 +165,66 @@ struct MutableApplicationBucket: Sendable {
 
     mutating func add(_ sample: HistoryApplicationSample) {
         name = sample.name
-        readBytes = readBytes.addingClamped(sample.readBytes)
-        writeBytes = writeBytes.addingClamped(sample.writeBytes)
-        cpuTimeNanoseconds = cpuTimeNanoseconds.addingClamped(sample.cpuTimeNanoseconds)
-        networkReceiveBytes = networkReceiveBytes.addingClamped(sample.networkReceiveBytes)
-        networkSendBytes = networkSendBytes.addingClamped(sample.networkSendBytes)
+        unavailableMetrics.formUnion(sample.unavailableMetrics)
+        (readBytes, unavailableMetrics) = Self.addingMetric(
+            readBytes, sample.readBytes, metric: .read, unavailable: unavailableMetrics
+        )
+        (writeBytes, unavailableMetrics) = Self.addingMetric(
+            writeBytes, sample.writeBytes, metric: .write, unavailable: unavailableMetrics
+        )
+        (cpuTimeNanoseconds, unavailableMetrics) = Self.addingMetric(
+            cpuTimeNanoseconds, sample.cpuTimeNanoseconds, metric: .cpu,
+            unavailable: unavailableMetrics
+        )
+        (networkReceiveBytes, unavailableMetrics) = Self.addingMetric(
+            networkReceiveBytes, sample.networkReceiveBytes, metric: .networkReceive,
+            unavailable: unavailableMetrics
+        )
+        (networkSendBytes, unavailableMetrics) = Self.addingMetric(
+            networkSendBytes, sample.networkSendBytes, metric: .networkSend,
+            unavailable: unavailableMetrics
+        )
     }
 
     mutating func merge(_ other: Self) {
-        readBytes = readBytes.addingClamped(other.readBytes)
-        writeBytes = writeBytes.addingClamped(other.writeBytes)
-        cpuTimeNanoseconds = cpuTimeNanoseconds.addingClamped(other.cpuTimeNanoseconds)
-        networkReceiveBytes = networkReceiveBytes.addingClamped(other.networkReceiveBytes)
-        networkSendBytes = networkSendBytes.addingClamped(other.networkSendBytes)
+        unavailableMetrics.formUnion(other.unavailableMetrics)
+        (readBytes, unavailableMetrics) = Self.addingMetric(
+            readBytes, other.readBytes, metric: .read, unavailable: unavailableMetrics
+        )
+        (writeBytes, unavailableMetrics) = Self.addingMetric(
+            writeBytes, other.writeBytes, metric: .write, unavailable: unavailableMetrics
+        )
+        (cpuTimeNanoseconds, unavailableMetrics) = Self.addingMetric(
+            cpuTimeNanoseconds, other.cpuTimeNanoseconds, metric: .cpu,
+            unavailable: unavailableMetrics
+        )
+        (networkReceiveBytes, unavailableMetrics) = Self.addingMetric(
+            networkReceiveBytes, other.networkReceiveBytes, metric: .networkReceive,
+            unavailable: unavailableMetrics
+        )
+        (networkSendBytes, unavailableMetrics) = Self.addingMetric(
+            networkSendBytes, other.networkSendBytes, metric: .networkSend,
+            unavailable: unavailableMetrics
+        )
+    }
+
+    private static func addingMetric(
+        _ total: UInt64,
+        _ value: UInt64,
+        metric: HistoryApplicationMetricSet,
+        unavailable: HistoryApplicationMetricSet
+    ) -> (UInt64, HistoryApplicationMetricSet) {
+        var unavailable = unavailable
+        guard !unavailable.contains(metric), value < UInt64(Int64.max) else {
+            unavailable.insert(metric)
+            return (0, unavailable)
+        }
+        let result = total.addingReportingOverflow(value)
+        guard !result.overflow, result.partialValue < UInt64(Int64.max) else {
+            unavailable.insert(metric)
+            return (0, unavailable)
+        }
+        return (result.partialValue, unavailable)
     }
 }
 
@@ -284,7 +332,7 @@ public actor HistoryRecorder {
 }
 
 public actor HistoryDatabase {
-    private static let currentSchemaVersion: Int32 = 1
+    private static let currentSchemaVersion: Int32 = 2
     private var connection: SQLiteConnection?
     private let fileURL: URL?
     private let fileOperations: any HistoryFileOperating
@@ -397,11 +445,57 @@ public actor HistoryDatabase {
                 }
             }
             try execute(on: handle, sql: currentSchema)
+            if try tableExists("app_bucket", on: handle),
+               try !columnExists("unavailable_metrics", in: "app_bucket", on: handle) {
+                try execute(
+                    on: handle,
+                    sql: "ALTER TABLE app_bucket ADD COLUMN unavailable_metrics INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+            if try tableExists("app_daily", on: handle),
+               try !columnExists("unavailable_metrics", in: "app_daily", on: handle) {
+                try execute(
+                    on: handle,
+                    sql: "ALTER TABLE app_daily ADD COLUMN unavailable_metrics INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+            try repairSaturatedApplicationMetrics(on: handle)
             try execute(on: handle, sql: "PRAGMA user_version = \(currentSchemaVersion)")
             try execute(on: handle, sql: "COMMIT")
         } catch {
             try? execute(on: handle, sql: "ROLLBACK")
             throw error
+        }
+    }
+
+    private static func repairSaturatedApplicationMetrics(on handle: OpaquePointer) throws {
+        for table in ["app_bucket", "app_daily"] {
+            try execute(
+                on: handle,
+                sql: """
+                UPDATE \(table) SET
+                  unavailable_metrics = unavailable_metrics
+                    | CASE WHEN read_bytes = 9223372036854775807 THEN 1 ELSE 0 END
+                    | CASE WHEN write_bytes = 9223372036854775807 THEN 2 ELSE 0 END
+                    | CASE WHEN cpu_time_ns = 9223372036854775807 THEN 4 ELSE 0 END
+                    | CASE WHEN network_receive_bytes = 9223372036854775807 THEN 8 ELSE 0 END
+                    | CASE WHEN network_send_bytes = 9223372036854775807 THEN 16 ELSE 0 END,
+                  read_bytes = CASE WHEN read_bytes = 9223372036854775807 THEN 0 ELSE read_bytes END,
+                  write_bytes = CASE WHEN write_bytes = 9223372036854775807 THEN 0 ELSE write_bytes END,
+                  cpu_time_ns = CASE WHEN cpu_time_ns = 9223372036854775807 THEN 0 ELSE cpu_time_ns END,
+                  network_receive_bytes = CASE
+                    WHEN network_receive_bytes = 9223372036854775807 THEN 0
+                    ELSE network_receive_bytes END,
+                  network_send_bytes = CASE
+                    WHEN network_send_bytes = 9223372036854775807 THEN 0
+                    ELSE network_send_bytes END
+                WHERE read_bytes = 9223372036854775807
+                   OR write_bytes = 9223372036854775807
+                   OR cpu_time_ns = 9223372036854775807
+                   OR network_receive_bytes = 9223372036854775807
+                   OR network_send_bytes = 9223372036854775807
+                """
+            )
         }
     }
 
@@ -732,15 +826,17 @@ public actor HistoryDatabase {
             """
             INSERT OR REPLACE INTO app_bucket
             (start_epoch, resolution_seconds, app_id, name, read_bytes, write_bytes,
-             cpu_time_ns, network_receive_bytes, network_send_bytes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             cpu_time_ns, network_receive_bytes, network_send_bytes, unavailable_metrics)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             values: [
                 .integer(start), .integer(Int64(resolution)), .text(identity), .text(app.name),
-                .integer(sqliteInteger(app.readBytes)), .integer(sqliteInteger(app.writeBytes)),
-                .integer(sqliteInteger(app.cpuTimeNanoseconds)),
-                .integer(sqliteInteger(app.networkReceiveBytes)),
-                .integer(sqliteInteger(app.networkSendBytes))
+                .integer(try exactSQLiteInteger(app.readBytes)),
+                .integer(try exactSQLiteInteger(app.writeBytes)),
+                .integer(try exactSQLiteInteger(app.cpuTimeNanoseconds)),
+                .integer(try exactSQLiteInteger(app.networkReceiveBytes)),
+                .integer(try exactSQLiteInteger(app.networkSendBytes)),
+                .integer(app.unavailableMetrics.rawValue)
             ]
         )
     }
@@ -762,26 +858,25 @@ public actor HistoryDatabase {
                 : "other"
             var app = originalApp
             if identity == "other" { app.name = "Other" }
+            if var existing = try dailyApplication(day: day, identity: identity) {
+                existing.merge(app)
+                app = existing
+            }
             try run(
                 """
-                INSERT INTO app_daily
+                INSERT OR REPLACE INTO app_daily
                 (day_epoch, app_id, name, read_bytes, write_bytes, cpu_time_ns,
-                 network_receive_bytes, network_send_bytes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(day_epoch, app_id) DO UPDATE SET
-                  name = excluded.name,
-                  read_bytes = MIN(9223372036854775807, read_bytes + excluded.read_bytes),
-                  write_bytes = MIN(9223372036854775807, write_bytes + excluded.write_bytes),
-                  cpu_time_ns = MIN(9223372036854775807, cpu_time_ns + excluded.cpu_time_ns),
-                  network_receive_bytes = MIN(9223372036854775807, network_receive_bytes + excluded.network_receive_bytes),
-                  network_send_bytes = MIN(9223372036854775807, network_send_bytes + excluded.network_send_bytes)
+                 network_receive_bytes, network_send_bytes, unavailable_metrics)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values: [
                     .integer(day), .text(identity), .text(app.name),
-                    .integer(sqliteInteger(app.readBytes)), .integer(sqliteInteger(app.writeBytes)),
-                    .integer(sqliteInteger(app.cpuTimeNanoseconds)),
-                    .integer(sqliteInteger(app.networkReceiveBytes)),
-                    .integer(sqliteInteger(app.networkSendBytes))
+                    .integer(try exactSQLiteInteger(app.readBytes)),
+                    .integer(try exactSQLiteInteger(app.writeBytes)),
+                    .integer(try exactSQLiteInteger(app.cpuTimeNanoseconds)),
+                    .integer(try exactSQLiteInteger(app.networkReceiveBytes)),
+                    .integer(try exactSQLiteInteger(app.networkSendBytes)),
+                    .integer(app.unavailableMetrics.rawValue)
                 ]
             )
             dailyIDs.insert(identity)
@@ -789,6 +884,33 @@ public actor HistoryDatabase {
         }
         dailyIdentityCache[day] = dailyIDs
         globalIdentityCache = globalIDs
+    }
+
+    private func dailyApplication(
+        day: Int64,
+        identity: String
+    ) throws -> MutableApplicationBucket? {
+        let statement = try prepare(
+            """
+            SELECT name, read_bytes, write_bytes, cpu_time_ns,
+                   network_receive_bytes, network_send_bytes, unavailable_metrics
+            FROM app_daily WHERE day_epoch = ? AND app_id = ?
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+        bind([.integer(day), .text(identity)], to: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return MutableApplicationBucket(
+            name: columnText(statement, 0),
+            readBytes: unsigned(sqlite3_column_int64(statement, 1)),
+            writeBytes: unsigned(sqlite3_column_int64(statement, 2)),
+            cpuTimeNanoseconds: unsigned(sqlite3_column_int64(statement, 3)),
+            networkReceiveBytes: unsigned(sqlite3_column_int64(statement, 4)),
+            networkSendBytes: unsigned(sqlite3_column_int64(statement, 5)),
+            unavailableMetrics: HistoryApplicationMetricSet(
+                rawValue: sqlite3_column_int64(statement, 6)
+            )
+        )
     }
 
     private func insertDevices(_ bucket: HistoryMinuteBucket) throws {
@@ -911,27 +1033,37 @@ public actor HistoryDatabase {
     private func aggregateApplications(start: Int64, end: Int64, resolution: Int, source: Int) throws {
         let statement = try prepare(
             """
-            SELECT app_id, MAX(name), SUM(read_bytes), SUM(write_bytes), SUM(cpu_time_ns),
-                   SUM(network_receive_bytes), SUM(network_send_bytes)
+            SELECT app_id, name, read_bytes, write_bytes, cpu_time_ns,
+                   network_receive_bytes, network_send_bytes, unavailable_metrics
             FROM app_bucket
             WHERE resolution_seconds = ? AND start_epoch >= ? AND start_epoch < ?
-            GROUP BY app_id
-            ORDER BY SUM(read_bytes + write_bytes + network_receive_bytes + network_send_bytes) DESC
+            ORDER BY app_id, start_epoch
             """
         )
         bind([.integer(Int64(source)), .integer(start), .integer(end)], to: statement)
-        var rows: [(String, MutableApplicationBucket)] = []
+        var grouped: [String: MutableApplicationBucket] = [:]
         while sqlite3_step(statement) == SQLITE_ROW {
-            rows.append((columnText(statement, 0), MutableApplicationBucket(
+            let identity = columnText(statement, 0)
+            let row = MutableApplicationBucket(
                 name: columnText(statement, 1),
                 readBytes: unsigned(sqlite3_column_int64(statement, 2)),
                 writeBytes: unsigned(sqlite3_column_int64(statement, 3)),
                 cpuTimeNanoseconds: unsigned(sqlite3_column_int64(statement, 4)),
                 networkReceiveBytes: unsigned(sqlite3_column_int64(statement, 5)),
-                networkSendBytes: unsigned(sqlite3_column_int64(statement, 6))
-            )))
+                networkSendBytes: unsigned(sqlite3_column_int64(statement, 6)),
+                unavailableMetrics: HistoryApplicationMetricSet(
+                    rawValue: sqlite3_column_int64(statement, 7)
+                )
+            )
+            if var existing = grouped[identity] {
+                existing.merge(row)
+                grouped[identity] = existing
+            } else {
+                grouped[identity] = row
+            }
         }
         sqlite3_finalize(statement)
+        let rows = grouped.sorted { $0.value.activityScore > $1.value.activityScore }
         try run(
             "DELETE FROM app_bucket WHERE start_epoch = ? AND resolution_seconds = ?",
             values: [.integer(start), .integer(Int64(resolution))]
@@ -1180,26 +1312,50 @@ public actor HistoryDatabase {
         let endDay = localDayEpoch(containing: endEpoch)
         let statement = try prepare(
             """
-            SELECT app_id, MAX(name), SUM(read_bytes), SUM(write_bytes), SUM(cpu_time_ns),
-                   SUM(network_receive_bytes), SUM(network_send_bytes)
+            SELECT app_id, name, read_bytes, write_bytes, cpu_time_ns,
+                   network_receive_bytes, network_send_bytes, unavailable_metrics
             FROM app_daily WHERE day_epoch >= ? AND day_epoch <= ?
-            GROUP BY app_id ORDER BY SUM(write_bytes) DESC LIMIT 50
+            ORDER BY app_id, day_epoch
             """
         )
         defer { sqlite3_finalize(statement) }
         bind([.integer(startDay), .integer(endDay)], to: statement)
-        var result: [HistoryApplicationReport] = []
+        var grouped: [String: MutableApplicationBucket] = [:]
         while sqlite3_step(statement) == SQLITE_ROW {
-            result.append(HistoryApplicationReport(
-                id: columnText(statement, 0), name: columnText(statement, 1),
+            let identity = columnText(statement, 0)
+            let row = MutableApplicationBucket(
+                name: columnText(statement, 1),
                 readBytes: unsigned(sqlite3_column_int64(statement, 2)),
                 writeBytes: unsigned(sqlite3_column_int64(statement, 3)),
+                cpuTimeNanoseconds: unsigned(sqlite3_column_int64(statement, 4)),
                 networkReceiveBytes: unsigned(sqlite3_column_int64(statement, 5)),
                 networkSendBytes: unsigned(sqlite3_column_int64(statement, 6)),
-                cpuTimeNanoseconds: unsigned(sqlite3_column_int64(statement, 4))
-            ))
+                unavailableMetrics: HistoryApplicationMetricSet(
+                    rawValue: sqlite3_column_int64(statement, 7)
+                )
+            )
+            if var existing = grouped[identity] {
+                existing.merge(row)
+                grouped[identity] = existing
+            } else {
+                grouped[identity] = row
+            }
         }
-        return result
+        return grouped.map { identity, app in
+            HistoryApplicationReport(
+                id: identity, name: app.name, readBytes: app.readBytes,
+                writeBytes: app.writeBytes, networkReceiveBytes: app.networkReceiveBytes,
+                networkSendBytes: app.networkSendBytes,
+                cpuTimeNanoseconds: app.cpuTimeNanoseconds,
+                unavailableMetrics: app.unavailableMetrics
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.writeBytes != rhs.writeBytes { return lhs.writeBytes > rhs.writeBytes }
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        }
+        .prefix(50)
+        .map { $0 }
     }
 
     private func previousWriteTotal(startEpoch: Int64, endEpoch: Int64, resolution: Int) throws -> UInt64? {
@@ -1418,6 +1574,13 @@ public actor HistoryDatabase {
         sqlite3_column_text(statement, column).map { String(cString: $0) } ?? ""
     }
 
+    private func exactSQLiteInteger(_ value: UInt64) throws -> Int64 {
+        guard value < UInt64(Int64.max) else {
+            throw HistoryDatabaseError(message: "Monitoring history metric exceeded its supported range")
+        }
+        return Int64(value)
+    }
+
     private func unsigned(_ value: Int64) -> UInt64 { UInt64(max(0, value)) }
     private func sqliteInteger(_ value: UInt64) -> Int64 { Int64(min(value, UInt64(Int64.max))) }
 
@@ -1557,13 +1720,15 @@ public actor HistoryDatabase {
       app_id TEXT NOT NULL, name TEXT NOT NULL, read_bytes INTEGER NOT NULL,
       write_bytes INTEGER NOT NULL, cpu_time_ns INTEGER NOT NULL,
       network_receive_bytes INTEGER NOT NULL, network_send_bytes INTEGER NOT NULL,
+      unavailable_metrics INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (start_epoch, resolution_seconds, app_id)
     ) WITHOUT ROWID;
     CREATE TABLE IF NOT EXISTS app_daily (
       day_epoch INTEGER NOT NULL, app_id TEXT NOT NULL, name TEXT NOT NULL,
       read_bytes INTEGER NOT NULL, write_bytes INTEGER NOT NULL,
       cpu_time_ns INTEGER NOT NULL, network_receive_bytes INTEGER NOT NULL,
-      network_send_bytes INTEGER NOT NULL, PRIMARY KEY (day_epoch, app_id)
+      network_send_bytes INTEGER NOT NULL, unavailable_metrics INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (day_epoch, app_id)
     ) WITHOUT ROWID;
     CREATE TABLE IF NOT EXISTS device_bucket (
       start_epoch INTEGER NOT NULL, resolution_seconds INTEGER NOT NULL,

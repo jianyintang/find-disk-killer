@@ -279,30 +279,36 @@ struct ProcessMetricChart: View {
         Chart(points) { point in
             switch kind {
             case .disk:
-                LineMark(
-                    x: .value(timeLabel, point.timestamp),
-                    y: .value(readLabel, point.readBytesPerSecond),
-                    series: .value(seriesLabel, "read")
-                )
-                .foregroundStyle(Color.teal)
-                .lineStyle(StrokeStyle(lineWidth: 2))
-                .interpolationMethod(.linear)
-                LineMark(
-                    x: .value(timeLabel, point.timestamp),
-                    y: .value(writeLabel, point.writeBytesPerSecond),
-                    series: .value(seriesLabel, "write")
-                )
-                .foregroundStyle(Color.orange)
-                .lineStyle(StrokeStyle(lineWidth: 2, dash: [6, 4]))
-                .interpolationMethod(.linear)
+                if let read = point.readBytesPerSecond {
+                    LineMark(
+                        x: .value(timeLabel, point.timestamp),
+                        y: .value(readLabel, read),
+                        series: .value(seriesLabel, "read")
+                    )
+                    .foregroundStyle(Color.teal)
+                    .lineStyle(StrokeStyle(lineWidth: 2))
+                    .interpolationMethod(.linear)
+                }
+                if let write = point.writeBytesPerSecond {
+                    LineMark(
+                        x: .value(timeLabel, point.timestamp),
+                        y: .value(writeLabel, write),
+                        series: .value(seriesLabel, "write")
+                    )
+                    .foregroundStyle(Color.orange)
+                    .lineStyle(StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    .interpolationMethod(.linear)
+                }
             case .cpu:
-                LineMark(
-                    x: .value(timeLabel, point.timestamp),
-                    y: .value("CPU", point.cpuPercent)
-                )
-                .foregroundStyle(Color.blue)
-                .lineStyle(StrokeStyle(lineWidth: 2))
-                .interpolationMethod(.linear)
+                if let cpu = point.cpuPercent {
+                    LineMark(
+                        x: .value(timeLabel, point.timestamp),
+                        y: .value("CPU", cpu)
+                    )
+                    .foregroundStyle(Color.blue)
+                    .lineStyle(StrokeStyle(lineWidth: 2))
+                    .interpolationMethod(.linear)
+                }
             case .network:
                 if let receive = point.networkReceiveBytesPerSecond {
                     LineMark(
@@ -369,11 +375,11 @@ struct ProcessMetricChart: View {
         switch kind {
         case .disk:
             [
-                (L10n.text("读取"), ByteRateFormatter.rate(point.readBytesPerSecond), .teal),
-                (L10n.text("写入"), ByteRateFormatter.rate(point.writeBytesPerSecond), .orange)
+                (L10n.text("读取"), rateOrUnavailable(point.readBytesPerSecond), .teal),
+                (L10n.text("写入"), rateOrUnavailable(point.writeBytesPerSecond), .orange)
             ]
         case .cpu:
-            [("CPU", PercentFormatter.cpu(point.cpuPercent), .blue)]
+            [("CPU", point.cpuPercent.map(PercentFormatter.cpu) ?? L10n.text("不可用"), .blue)]
         case .network:
             [
                 (L10n.text("下载"), rateOrUnavailable(point.networkReceiveBytesPerSecond), .green),

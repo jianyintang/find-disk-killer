@@ -126,7 +126,7 @@ import Testing
     sqlite3_close(databaseHandle)
 
     let database = try HistoryDatabase(location: .file(url))
-    #expect(try await database.schemaVersionForTesting == 1)
+    #expect(try await database.schemaVersionForTesting == 2)
     let report = try await database.report(
         range: .sevenDays,
         now: Date(timeIntervalSince1970: 1_800_000_060)
@@ -136,7 +136,7 @@ import Testing
     #expect(report.summary.networkObservedSeconds == 60)
 
     let reopened = try HistoryDatabase(location: .file(url))
-    #expect(try await reopened.schemaVersionForTesting == 1)
+    #expect(try await reopened.schemaVersionForTesting == 2)
 }
 
 @Test func failedHistoryMigrationRollsBackSchemaChanges() throws {
@@ -183,6 +183,56 @@ import Testing
     #expect(sqlite3_step(columnStatement) == SQLITE_DONE)
 }
 
+@Test func versionOneHistoryRepairsSaturatedApplicationMetricsWithoutLosingTrustedData() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let url = root.appending(path: "saturated-v1.sqlite3")
+    let now = Date(timeIntervalSince1970: 1_800_000_060)
+    let day = Int64(Calendar.current.startOfDay(for: now).timeIntervalSince1970)
+
+    var handle: OpaquePointer?
+    #expect(sqlite3_open(url.path, &handle) == SQLITE_OK)
+    let databaseHandle = try #require(handle)
+    let versionOneSQL = """
+    PRAGMA user_version = 1;
+    CREATE TABLE app_bucket (
+      start_epoch INTEGER NOT NULL, resolution_seconds INTEGER NOT NULL,
+      app_id TEXT NOT NULL, name TEXT NOT NULL, read_bytes INTEGER NOT NULL,
+      write_bytes INTEGER NOT NULL, cpu_time_ns INTEGER NOT NULL,
+      network_receive_bytes INTEGER NOT NULL, network_send_bytes INTEGER NOT NULL,
+      PRIMARY KEY (start_epoch, resolution_seconds, app_id)
+    ) WITHOUT ROWID;
+    CREATE TABLE app_daily (
+      day_epoch INTEGER NOT NULL, app_id TEXT NOT NULL, name TEXT NOT NULL,
+      read_bytes INTEGER NOT NULL, write_bytes INTEGER NOT NULL,
+      cpu_time_ns INTEGER NOT NULL, network_receive_bytes INTEGER NOT NULL,
+      network_send_bytes INTEGER NOT NULL, PRIMARY KEY (day_epoch, app_id)
+    ) WITHOUT ROWID;
+    INSERT INTO app_bucket VALUES
+      (1800000000, 60, 'fixture', 'ApplicationsStorageExtension',
+       42, 9223372036854775807, 300, 10, 20);
+    INSERT INTO app_daily VALUES
+      (\(day), 'fixture', 'ApplicationsStorageExtension',
+       42, 9223372036854775807, 300, 10, 20);
+    """
+    #expect(sqlite3_exec(databaseHandle, versionOneSQL, nil, nil, nil) == SQLITE_OK)
+    sqlite3_close(databaseHandle)
+
+    let database = try HistoryDatabase(location: .file(url))
+    #expect(try await database.schemaVersionForTesting == 2)
+    let report = try await database.report(range: .sevenDays, now: now)
+    let application = try #require(report.applications.first)
+    #expect(application.name == "ApplicationsStorageExtension")
+    #expect(application.readBytes == 42)
+    #expect(application.writeBytes == 0)
+    #expect(application.cpuTimeNanoseconds == 300)
+    #expect(application.networkReceiveBytes == 10)
+    #expect(application.networkSendBytes == 20)
+    #expect(application.unavailableMetrics == [.write])
+}
+
 @Test func newerHistorySchemaIsRejectedWithoutBeingModified() throws {
     let root = FileManager.default.temporaryDirectory
         .appending(path: UUID().uuidString, directoryHint: .isDirectory)
@@ -192,7 +242,7 @@ import Testing
     var handle: OpaquePointer?
     #expect(sqlite3_open(url.path, &handle) == SQLITE_OK)
     let databaseHandle = try #require(handle)
-    #expect(sqlite3_exec(databaseHandle, "PRAGMA user_version = 2", nil, nil, nil) == SQLITE_OK)
+    #expect(sqlite3_exec(databaseHandle, "PRAGMA user_version = 3", nil, nil, nil) == SQLITE_OK)
     sqlite3_close(databaseHandle)
 
     #expect(throws: (any Error).self) {
@@ -208,7 +258,7 @@ import Testing
     let versionStatement = try #require(statement)
     defer { sqlite3_finalize(versionStatement) }
     #expect(sqlite3_step(versionStatement) == SQLITE_ROW)
-    #expect(sqlite3_column_int(versionStatement, 0) == 2)
+    #expect(sqlite3_column_int(versionStatement, 0) == 3)
 }
 
 @Test func oneSecondSamplesCommitExactlyOncePerMinute() async throws {
@@ -782,6 +832,50 @@ import Testing
 }
 
 @MainActor
+@Test func invalidProcessWriteCounterCreatesAQualityGapAndRecoversAfterRebasing() async throws {
+    let database = try HistoryDatabase(location: .memory)
+    let recorder = HistoryRecorder(database: database)
+    let store = MonitorStore(historyRecorder: recorder)
+    let start = Date(timeIntervalSince1970: 1_800_000_000)
+
+    store.ingest(.processCounterFixture(
+        at: start, uptime: 10, read: 100, write: 100, cpu: 100_000_000
+    ))
+    store.ingest(.processCounterFixture(
+        at: start.addingTimeInterval(1), uptime: 11, read: 110,
+        write: UInt64.max, cpu: 110_000_000
+    ))
+    store.ingest(.processCounterFixture(
+        at: start.addingTimeInterval(2), uptime: 12, read: 120,
+        write: 120, cpu: 120_000_000
+    ))
+    store.ingest(.processCounterFixture(
+        at: start.addingTimeInterval(3), uptime: 13, read: 130,
+        write: 130, cpu: 130_000_000
+    ))
+    await store.waitForPendingProcessSummary()
+
+    let realtime = try #require(store.processes.first)
+    #expect(realtime.currentUnavailableMetrics.isEmpty)
+    #expect(realtime.intervalUnavailableMetrics == [.write])
+    #expect(realtime.metrics.map(\.writeBytesPerSecond) == [nil, nil, 10])
+    #expect(realtime.totalWriteBytes == 10)
+    #expect(realtime.peakWriteBytesPerSecond == 10)
+    await store.flushHistory()
+
+    let report = try await database.report(
+        range: .sevenDays,
+        now: start.addingTimeInterval(60)
+    )
+    let application = try #require(report.applications.first)
+    #expect(application.readBytes == 30)
+    #expect(application.writeBytes == 0)
+    #expect(application.cpuTimeNanoseconds == 30_000_000)
+    #expect(application.unavailableMetrics == [.write])
+    #expect(application.writeBytes < 1_000_000_000_000)
+}
+
+@MainActor
 @Test func restartingMonitoringDoesNotBridgeTheStoppedInterval() async {
     let backgroundFixture = SystemSnapshot.lifecycleFixture(
         at: Date(timeIntervalSince1970: 1_900_000_000),
@@ -840,6 +934,40 @@ private extension HistorySample {
 }
 
 private extension SystemSnapshot {
+    static func processCounterFixture(
+        at date: Date,
+        uptime: TimeInterval,
+        read: UInt64,
+        write: UInt64,
+        cpu: UInt64
+    ) -> Self {
+        Self(
+            date: date,
+            uptime: uptime,
+            processes: [RawProcessCounter(
+                pid: 42,
+                startAbstime: 7,
+                name: "fixture",
+                path: "/usr/bin/fixture",
+                cpuTimeNanoseconds: cpu,
+                bytesRead: read,
+                bytesWritten: write,
+                networkBytesReceived: nil,
+                networkBytesSent: nil
+            )],
+            disks: [],
+            volumes: [],
+            cpuUserTicks: 0,
+            cpuSystemTicks: 0,
+            cpuNiceTicks: 0,
+            cpuIdleTicks: 0,
+            networkInterfaces: [],
+            cpuStatsAvailable: false,
+            networkInterfacesAvailable: false,
+            processNetworkAvailable: false
+        )
+    }
+
     static func lifecycleFixture(
         at date: Date,
         uptime: TimeInterval,

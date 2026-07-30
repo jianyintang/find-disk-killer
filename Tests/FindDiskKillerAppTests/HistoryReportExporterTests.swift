@@ -22,6 +22,17 @@ import Testing
     #expect(data.count > 1_000)
 }
 
+@Test func historyPDFMarksUnavailableApplicationMetricsWithoutRenderingTheSentinel() throws {
+    let report = HistoryReport.exportFixtureWithUnavailableWrite
+    let data = try HistoryReportExporter.pdfData(for: report)
+    let text = HistoryReportExporter.pdfText(for: report)
+
+    #expect(!text.contains(String(Int64.max)))
+    #expect(text.contains("write Unavailable"))
+    #expect(text.contains("read 20 B"))
+    #expect(data.count > 1_000)
+}
+
 private extension HistoryReport {
     static var exportFixture: Self {
         let start = Date(timeIntervalSince1970: 1_800_000_000)
@@ -59,6 +70,28 @@ private extension HistoryReport {
                 cpuTimeNanoseconds: 1_000_000_000
             )],
             previousPeriodDiskWriteBytes: nil
+        )
+    }
+
+    static var exportFixtureWithUnavailableWrite: Self {
+        let fixture = exportFixture
+        return Self(
+            range: fixture.range,
+            start: fixture.start,
+            end: fixture.end,
+            summary: fixture.summary,
+            trend: fixture.trend,
+            applications: [HistoryApplicationReport(
+                id: "unavailable-write",
+                name: "Saturated Writer",
+                readBytes: 20,
+                writeBytes: 0,
+                networkReceiveBytes: 30,
+                networkSendBytes: 40,
+                cpuTimeNanoseconds: 1_000_000_000,
+                unavailableMetrics: [.write]
+            )],
+            previousPeriodDiskWriteBytes: fixture.previousPeriodDiskWriteBytes
         )
     }
 }

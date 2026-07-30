@@ -55,13 +55,17 @@ public final class MonitorStore {
         recentSystemAverage(\.networkSendBytesPerSecond)
     }
     public var topWriter: ProcessActivity? {
-        processes.max { $0.currentWriteBytesPerSecond < $1.currentWriteBytesPerSecond }
+        processes
+            .filter { !$0.currentUnavailableMetrics.contains(.write) }
+            .max { $0.currentWriteBytesPerSecond < $1.currentWriteBytesPerSecond }
     }
     public var topCPUProcess: ProcessActivity? {
-        processes.max { $0.currentCPUPercent < $1.currentCPUPercent }
+        processes
+            .filter { !$0.currentUnavailableMetrics.contains(.cpu) }
+            .max { $0.currentCPUPercent < $1.currentCPUPercent }
     }
     public var topNetworkProcess: ProcessActivity? {
-        processes.max {
+        processes.filter(\.isNetworkAvailable).max {
             ($0.currentNetworkReceiveBytesPerSecond + $0.currentNetworkSendBytesPerSecond)
                 < ($1.currentNetworkReceiveBytesPerSecond + $1.currentNetworkSendBytesPerSecond)
         }
@@ -101,9 +105,9 @@ public final class MonitorStore {
     }
 
     private struct ProcessTotals {
-        let cpuTimeNanoseconds: UInt64
-        let read: UInt64
-        let written: UInt64
+        let cpuTimeNanoseconds: UInt64?
+        let read: UInt64?
+        let written: UInt64?
         let networkReceived: UInt64?
         let networkSent: UInt64?
     }
@@ -157,6 +161,7 @@ public final class MonitorStore {
         let networkBytesReceived: UInt64
         let networkBytesSent: UInt64
         let networkAvailable: Bool
+        let unavailableMetrics: HistoryApplicationMetricSet
     }
 
     private struct GroupRates: Sendable {
@@ -566,7 +571,8 @@ public final class MonitorStore {
             cpu: UInt64,
             networkReceived: UInt64,
             networkSent: UInt64,
-            networkAvailable: Bool
+            networkAvailable: Bool,
+            unavailableMetrics: HistoryApplicationMetricSet
         )] = [:]
         var liveKeys: Set<ProcessKey> = []
         var livePIDsByGroup: [String: Set<Int32>] = [:]
@@ -576,13 +582,14 @@ public final class MonitorStore {
             let key = ProcessKey(pid: counter.pid, startAbstime: counter.startAbstime)
             liveKeys.insert(key)
             let current = ProcessTotals(
-                cpuTimeNanoseconds: counter.cpuTimeNanoseconds,
-                read: counter.bytesRead,
-                written: counter.bytesWritten,
-                networkReceived: counter.networkBytesReceived,
-                networkSent: counter.networkBytesSent
+                cpuTimeNanoseconds: Self.validProcessCounter(counter.cpuTimeNanoseconds),
+                read: Self.validProcessCounter(counter.bytesRead),
+                written: Self.validProcessCounter(counter.bytesWritten),
+                networkReceived: counter.networkBytesReceived.flatMap(Self.validProcessCounter),
+                networkSent: counter.networkBytesSent.flatMap(Self.validProcessCounter)
             )
-            defer { priorProcesses[key] = current }
+            let prior = priorProcesses[key]
+            priorProcesses[key] = current
 
             let classification = ProcessClassifier.classify(
                 name: counter.name,
@@ -607,37 +614,80 @@ public final class MonitorStore {
             )
             groupMetadata[classification.groupID] = metadata
 
-            guard let prior = priorProcesses[key] else { continue }
-            let readDelta = safeDelta(counter.bytesRead, prior.read)
-            let writeDelta = safeDelta(counter.bytesWritten, prior.written)
-            let cpuDelta = safeDelta(counter.cpuTimeNanoseconds, prior.cpuTimeNanoseconds)
-            let receivedDeltaValue = optionalCounterDelta(
-                counter.networkBytesReceived,
-                prior.networkReceived
+            guard let prior else { continue }
+            let readDeltaValue = Self.validProcessDelta(current.read, prior.read)
+            let writeDeltaValue = Self.validProcessDelta(current.written, prior.written)
+            let cpuDeltaValue = Self.validProcessDelta(
+                current.cpuTimeNanoseconds,
+                prior.cpuTimeNanoseconds
             )
-            let sentDeltaValue = optionalCounterDelta(
-                counter.networkBytesSent,
-                prior.networkSent
+            let readDelta = readDeltaValue ?? 0
+            let writeDelta = writeDeltaValue ?? 0
+            let cpuDelta = cpuDeltaValue ?? 0
+            let receivedDeltaValue = Self.validProcessDelta(
+                current.networkReceived, prior.networkReceived
+            )
+            let sentDeltaValue = Self.validProcessDelta(
+                current.networkSent, prior.networkSent
             )
             let networkAvailable = receivedDeltaValue != nil && sentDeltaValue != nil
             let receivedDelta = receivedDeltaValue ?? 0
             let sentDelta = sentDeltaValue ?? 0
+            var unavailableMetrics: HistoryApplicationMetricSet = []
+            if readDeltaValue == nil { unavailableMetrics.insert(.read) }
+            if writeDeltaValue == nil { unavailableMetrics.insert(.write) }
+            if cpuDeltaValue == nil { unavailableMetrics.insert(.cpu) }
+            if Self.networkCounterHasGap(
+                rawCurrent: counter.networkBytesReceived,
+                current: current.networkReceived,
+                previous: prior.networkReceived,
+                delta: receivedDeltaValue
+            ) {
+                unavailableMetrics.insert(.networkReceive)
+            }
+            if Self.networkCounterHasGap(
+                rawCurrent: counter.networkBytesSent,
+                current: current.networkSent,
+                previous: prior.networkSent,
+                delta: sentDeltaValue
+            ) {
+                unavailableMetrics.insert(.networkSend)
+            }
             let hasActivity = readDelta > 0 || writeDelta > 0 || cpuDelta > 0
                 || receivedDelta > 0 || sentDelta > 0
+                || !unavailableMetrics.isEmpty
             guard hasActivity || groupHistory[classification.groupID] != nil else { continue }
 
-            let existing = groupedDeltas[classification.groupID] ?? (0, 0, 0, 0, 0, false)
-            groupedDeltas[classification.groupID] = (
-                existing.read + readDelta,
-                existing.written + writeDelta,
-                existing.cpu + cpuDelta,
-                existing.networkReceived + receivedDelta,
-                existing.networkSent + sentDelta,
+            var existing = groupedDeltas[classification.groupID]
+                ?? (0, 0, 0, 0, 0, false, [])
+            existing.unavailableMetrics.formUnion(unavailableMetrics)
+            existing.read = Self.addProcessMetric(
+                existing.read, readDelta, metric: .read,
+                unavailable: &existing.unavailableMetrics
+            )
+            existing.written = Self.addProcessMetric(
+                existing.written, writeDelta, metric: .write,
+                unavailable: &existing.unavailableMetrics
+            )
+            existing.cpu = Self.addProcessMetric(
+                existing.cpu, cpuDelta, metric: .cpu,
+                unavailable: &existing.unavailableMetrics
+            )
+            existing.networkReceived = Self.addProcessMetric(
+                existing.networkReceived, receivedDelta, metric: .networkReceive,
+                unavailable: &existing.unavailableMetrics
+            )
+            existing.networkSent = Self.addProcessMetric(
+                existing.networkSent, sentDelta, metric: .networkSend,
+                unavailable: &existing.unavailableMetrics
+            )
+            existing.networkAvailable = (
                 // nettop omits helpers with no network observations. An app-level sample is
                 // usable when any grouped member has a valid counter delta; a source-wide
                 // failure is still rejected later through processNetworkAvailable.
                 existing.networkAvailable || networkAvailable
             )
+            groupedDeltas[classification.groupID] = existing
             if hasActivity {
                 metadata.lastActivity = date
                 groupMetadata[classification.groupID] = metadata
@@ -661,6 +711,9 @@ public final class MonitorStore {
                 networkBytesReceived: delta.networkReceived,
                 networkBytesSent: delta.networkSent,
                 networkAvailable: delta.networkAvailable
+                    && !delta.unavailableMetrics.contains(.networkReceive)
+                    && !delta.unavailableMetrics.contains(.networkSend),
+                unavailableMetrics: delta.unavailableMetrics
             ))
         }
 
@@ -676,7 +729,8 @@ public final class MonitorStore {
                 writeBytes: delta.written,
                 cpuTimeNanoseconds: delta.cpu,
                 networkReceiveBytes: delta.networkReceived,
-                networkSendBytes: delta.networkSent
+                networkSendBytes: delta.networkSent,
+                unavailableMetrics: delta.unavailableMetrics
             )
         }
     }
@@ -684,6 +738,45 @@ public final class MonitorStore {
     nonisolated private static func addingClamped(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
         let result = lhs.addingReportingOverflow(rhs)
         return result.overflow ? .max : result.partialValue
+    }
+
+    nonisolated private static func validProcessCounter(_ value: UInt64) -> UInt64? {
+        value < UInt64(Int64.max) ? value : nil
+    }
+
+    nonisolated private static func validProcessDelta(
+        _ current: UInt64?,
+        _ previous: UInt64?
+    ) -> UInt64? {
+        guard let current, let previous, current >= previous else { return nil }
+        return current - previous
+    }
+
+    nonisolated private static func networkCounterHasGap(
+        rawCurrent: UInt64?,
+        current: UInt64?,
+        previous: UInt64?,
+        delta: UInt64?
+    ) -> Bool {
+        // nettop legitimately omits members without observations. Only a supplied
+        // counter that is invalid or cannot be rebased creates a metric gap.
+        guard rawCurrent != nil else { return false }
+        return current == nil || previous == nil || delta == nil
+    }
+
+    nonisolated private static func addProcessMetric(
+        _ total: UInt64,
+        _ value: UInt64,
+        metric: HistoryApplicationMetricSet,
+        unavailable: inout HistoryApplicationMetricSet
+    ) -> UInt64 {
+        guard !unavailable.contains(metric) else { return 0 }
+        let result = total.addingReportingOverflow(value)
+        guard !result.overflow, result.partialValue < UInt64(Int64.max) else {
+            unavailable.insert(metric)
+            return 0
+        }
+        return result.partialValue
     }
 
     private func scheduleProcessSummaryRebuild(
@@ -763,6 +856,7 @@ public final class MonitorStore {
             var sampleCount = 0
             var metricNetworkSegment = 0
             var metricNetworkWasAvailable = false
+            var intervalUnavailableMetrics: HistoryApplicationMetricSet = []
             var metrics: [ProcessMetricPoint] = []
             let metricIndices = Self.downsampledProcessSampleIndices(
                 history,
@@ -774,17 +868,34 @@ public final class MonitorStore {
             for index in startIndex..<history.endIndex {
                 let sample = history[index]
                 let duration = max(0.1, sample.duration)
-                let writeRate = Double(sample.bytesWritten) / duration
-                let cpu = Double(sample.cpuTimeNanoseconds)
-                    / duration / 1_000_000_000 * 100
-                totalRead += sample.bytesRead
-                totalWritten += sample.bytesWritten
-                totalReceived += sample.networkBytesReceived
-                totalSent += sample.networkBytesSent
-                peakWriteRate = max(peakWriteRate, writeRate)
-                cpuTotal += cpu
-                peakCPU = max(peakCPU, cpu)
-                sampleCount += 1
+                let readAvailable = !sample.unavailableMetrics.contains(.read)
+                let writeAvailable = !sample.unavailableMetrics.contains(.write)
+                let cpuAvailable = !sample.unavailableMetrics.contains(.cpu)
+                let writeRate = writeAvailable
+                    ? Double(sample.bytesWritten) / duration
+                    : nil
+                let cpu = cpuAvailable
+                    ? Double(sample.cpuTimeNanoseconds) / duration / 1_000_000_000 * 100
+                    : nil
+                intervalUnavailableMetrics.formUnion(sample.unavailableMetrics)
+                if readAvailable { totalRead = Self.addingClamped(totalRead, sample.bytesRead) }
+                if writeAvailable {
+                    totalWritten = Self.addingClamped(totalWritten, sample.bytesWritten)
+                    peakWriteRate = max(peakWriteRate, writeRate ?? 0)
+                }
+                if let cpu {
+                    cpuTotal += cpu
+                    peakCPU = max(peakCPU, cpu)
+                    sampleCount += 1
+                }
+                if !sample.unavailableMetrics.contains(.networkReceive) {
+                    totalReceived = Self.addingClamped(
+                        totalReceived, sample.networkBytesReceived
+                    )
+                }
+                if !sample.unavailableMetrics.contains(.networkSend) {
+                    totalSent = Self.addingClamped(totalSent, sample.networkBytesSent)
+                }
                 if sample.networkAvailable {
                     networkReceived += sample.networkBytesReceived
                     networkSent += sample.networkBytesSent
@@ -796,7 +907,9 @@ public final class MonitorStore {
                 if metricIndexSet.contains(index) {
                     metrics.append(ProcessMetricPoint(
                         timestamp: sample.timestamp,
-                        readBytesPerSecond: Double(sample.bytesRead) / duration,
+                        readBytesPerSecond: readAvailable
+                            ? Double(sample.bytesRead) / duration
+                            : nil,
                         writeBytesPerSecond: writeRate,
                         cpuPercent: cpu,
                         networkReceiveBytesPerSecond: sample.networkAvailable
@@ -813,14 +926,14 @@ public final class MonitorStore {
             let currentRate = GroupRates(
                 read: processWindowAverage(history, endingAt: date) {
                     Double($0.bytesRead) / max(0.1, $0.duration)
-                },
+                } where: { !$0.unavailableMetrics.contains(.read) },
                 write: processWindowAverage(history, endingAt: date) {
                     Double($0.bytesWritten) / max(0.1, $0.duration)
-                },
+                } where: { !$0.unavailableMetrics.contains(.write) },
                 cpu: processWindowAverage(history, endingAt: date) {
                     Double($0.cpuTimeNanoseconds)
                         / max(0.1, $0.duration) / 1_000_000_000 * 100
-                },
+                } where: { !$0.unavailableMetrics.contains(.cpu) },
                 networkReceived: processWindowAverage(
                     history,
                     endingAt: date,
@@ -870,6 +983,8 @@ public final class MonitorStore {
                     ? Double(networkSent) / networkObservedDuration
                     : 0,
                 isNetworkAvailable: networkObservedDuration > 0 && currentRate.networkAvailable,
+                currentUnavailableMetrics: history.last?.unavailableMetrics ?? [],
+                intervalUnavailableMetrics: intervalUnavailableMetrics,
                 metrics: metrics,
                 brand: metadata.brand,
                 brandIsVerified: metadata.brandIsVerified,
@@ -939,6 +1054,28 @@ public final class MonitorStore {
         return observedDuration > 0 ? weightedTotal / observedDuration : 0
     }
 
+    nonisolated private static func processWindowAverage(
+        _ samples: [ProcessRateSample],
+        endingAt end: Date,
+        value: (ProcessRateSample) -> Double,
+        where include: (ProcessRateSample) -> Bool
+    ) -> Double {
+        let windowStart = end.addingTimeInterval(-5)
+        var weightedTotal = 0.0
+        var observedDuration = 0.0
+        for sample in samples.reversed() {
+            let sampleEnd = min(sample.timestamp, end)
+            let sampleStart = sample.timestamp.addingTimeInterval(-max(0, sample.duration))
+            if sampleEnd <= windowStart { break }
+            guard include(sample) else { continue }
+            let overlap = sampleEnd.timeIntervalSince(max(sampleStart, windowStart))
+            guard overlap > 0 else { continue }
+            weightedTotal += value(sample) * overlap
+            observedDuration += overlap
+        }
+        return observedDuration > 0 ? weightedTotal / observedDuration : 0
+    }
+
     private func updateHealth(at date: Date) {
         guard isCollecting else {
             health = .stopped
@@ -946,7 +1083,10 @@ public final class MonitorStore {
         }
 
         let elevated = (isDiskAvailable && currentWriteRate >= Self.elevatedDeviceWriteRate)
-            || processes.contains { $0.currentWriteBytesPerSecond >= Self.elevatedProcessWriteRate }
+            || processes.contains {
+                !$0.currentUnavailableMetrics.contains(.write)
+                    && $0.currentWriteBytesPerSecond >= Self.elevatedProcessWriteRate
+            }
         if elevated {
             elevatedSince = elevatedSince ?? date
             health = .elevated(duration: date.timeIntervalSince(elevatedSince ?? date))
@@ -1010,9 +1150,12 @@ public final class MonitorStore {
                 let sample = samples[index]
                 let duration = max(0.1, sample.duration)
                 let values: [Double?] = [
-                    Double(sample.bytesRead) / duration,
-                    Double(sample.bytesWritten) / duration,
-                    Double(sample.cpuTimeNanoseconds) / duration / 1_000_000_000 * 100,
+                    sample.unavailableMetrics.contains(.read)
+                        ? nil : Double(sample.bytesRead) / duration,
+                    sample.unavailableMetrics.contains(.write)
+                        ? nil : Double(sample.bytesWritten) / duration,
+                    sample.unavailableMetrics.contains(.cpu)
+                        ? nil : Double(sample.cpuTimeNanoseconds) / duration / 1_000_000_000 * 100,
                     sample.networkAvailable ? Double(sample.networkBytesReceived) / duration : nil,
                     sample.networkAvailable ? Double(sample.networkBytesSent) / duration : nil
                 ]
@@ -1043,11 +1186,14 @@ func optionalCounterDelta(_ current: UInt64?, _ previous: UInt64?) -> UInt64? {
 }
 
 private func activityScore(_ process: ProcessActivity) -> Double {
-    let disk = process.currentWriteBytesPerSecond / 5_000_000
-    let cpu = process.currentCPUPercent / 25
-    let network = (
-        process.currentNetworkReceiveBytesPerSecond + process.currentNetworkSendBytesPerSecond
-    ) / 5_000_000
+    let disk = process.currentUnavailableMetrics.contains(.write)
+        ? 0 : process.currentWriteBytesPerSecond / 5_000_000
+    let cpu = process.currentUnavailableMetrics.contains(.cpu)
+        ? 0 : process.currentCPUPercent / 25
+    let network = process.isNetworkAvailable
+        ? (process.currentNetworkReceiveBytesPerSecond
+            + process.currentNetworkSendBytesPerSecond) / 5_000_000
+        : 0
     return max(disk, cpu, network)
 }
 

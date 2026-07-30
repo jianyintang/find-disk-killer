@@ -53,9 +53,9 @@ public struct SystemResourcePoint: Identifiable, Sendable {
 
 public struct ProcessMetricPoint: Identifiable, Sendable {
     public let timestamp: Date
-    public let readBytesPerSecond: Double
-    public let writeBytesPerSecond: Double
-    public let cpuPercent: Double
+    public let readBytesPerSecond: Double?
+    public let writeBytesPerSecond: Double?
+    public let cpuPercent: Double?
     public let networkReceiveBytesPerSecond: Double?
     public let networkSendBytesPerSecond: Double?
     public let networkSegment: Int
@@ -146,6 +146,8 @@ public struct ProcessActivity: Identifiable, Sendable {
     public let averageNetworkReceiveBytesPerSecond: Double
     public let averageNetworkSendBytesPerSecond: Double
     public let isNetworkAvailable: Bool
+    public let currentUnavailableMetrics: HistoryApplicationMetricSet
+    public let intervalUnavailableMetrics: HistoryApplicationMetricSet
     public let metrics: [ProcessMetricPoint]
     public let brand: ProcessBrand?
     public let brandIsVerified: Bool

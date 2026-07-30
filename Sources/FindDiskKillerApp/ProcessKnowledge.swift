@@ -113,43 +113,51 @@ struct ProcessLoadAssessment {
     let color: Color
 
     static func assess(_ process: ProcessActivity) -> ProcessLoadAssessment {
+        let available = process.currentUnavailableMetrics
         let network = process.isNetworkAvailable
             ? process.currentNetworkReceiveBytesPerSecond
                 + process.currentNetworkSendBytesPerSecond
             : 0
         let activeDimensions = [
-            process.currentCPUPercent >= 35,
-            process.currentReadBytesPerSecond + process.currentWriteBytesPerSecond >= 10_000_000,
+            !available.contains(.cpu) && process.currentCPUPercent >= 35,
+            !available.contains(.read) && !available.contains(.write)
+                && process.currentReadBytesPerSecond + process.currentWriteBytesPerSecond
+                    >= 10_000_000,
             network >= 10_000_000
         ].filter { $0 }.count
 
         if activeDimensions >= 2 {
             return assessment("多项资源同时活跃", "该进程正在同时使用计算、磁盘或网络资源；请结合下方实时值判断任务类型。", "waveform.path.ecg", .orange)
         }
-        if process.currentCPUPercent >= 100 {
+        if !available.contains(.cpu), process.currentCPUPercent >= 100 {
             return assessment("CPU 负载很高", "最近 5 秒至少占满一个逻辑核心；并行任务超过 100% 属于 macOS 的正常计量方式。", "cpu", .orange)
         }
-        if process.currentCPUPercent >= 35 {
+        if !available.contains(.cpu), process.currentCPUPercent >= 35 {
             return assessment("CPU 负载较高", "当前存在明显的计算任务，但是否异常取决于它是否持续以及是否符合你的操作。", "cpu", .yellow)
         }
-        if process.currentWriteBytesPerSecond >= 50_000_000 {
+        if !available.contains(.write), process.currentWriteBytesPerSecond >= 50_000_000 {
             return assessment("磁盘写入很高", "正在持续产生大量数据；构建、下载、同步和缓存任务都可能出现这种负载。", "pencil.line", .orange)
         }
-        if process.currentWriteBytesPerSecond >= 5_000_000 {
+        if !available.contains(.write), process.currentWriteBytesPerSecond >= 5_000_000 {
             return assessment("磁盘写入活跃", "当前有明确写入活动；持续时间比单次峰值更能说明是否异常。", "pencil.line", .yellow)
         }
-        if process.currentReadBytesPerSecond >= 10_000_000 {
+        if !available.contains(.read), process.currentReadBytesPerSecond >= 10_000_000 {
             return assessment("磁盘读取活跃", "当前正在扫描或载入较多数据，常见于索引、分析、构建和应用启动。", "eye", .teal)
         }
         if network >= 5_000_000 {
             return assessment("网络传输活跃", "当前有明显下载或上传；磁盘写入可能来自下载、同步或缓存。", "network", .green)
         }
-        if process.currentCPUPercent >= 5
-            || process.currentReadBytesPerSecond + process.currentWriteBytesPerSecond >= 500_000
+        if (!available.contains(.cpu) && process.currentCPUPercent >= 5)
+            || (!available.contains(.read) && !available.contains(.write)
+                && process.currentReadBytesPerSecond + process.currentWriteBytesPerSecond
+                    >= 500_000)
             || network >= 500_000 {
             return assessment("当前有轻度活动", "资源使用处于较低水平，暂未表现出持续高负载。", "waveform", .blue)
         }
-        if !process.isNetworkAvailable {
+        if !available.isEmpty || !process.isNetworkAvailable {
+            if !available.isEmpty {
+                return assessment("部分指标暂不可用", "当前采样存在计数缺口；可用指标仍按实测展示，缺失指标不会以零值参与判断。", "exclamationmark.circle", .secondary)
+            }
             return assessment("CPU 与磁盘接近空闲", "最近 5 秒没有明显的 CPU 或磁盘压力；网络数据当前不可用，无法判断网络是否空闲。", "pause.circle", .secondary)
         }
         return assessment("当前接近空闲", "最近 5 秒没有明显资源压力；列表中的区间总量可能来自更早的活动。", "pause.circle", .secondary)

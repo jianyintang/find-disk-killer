@@ -87,6 +87,7 @@ public struct HistoryApplicationSample: Sendable {
     public let cpuTimeNanoseconds: UInt64
     public let networkReceiveBytes: UInt64
     public let networkSendBytes: UInt64
+    public let unavailableMetrics: HistoryApplicationMetricSet
 
     public init(
         identity: String,
@@ -95,7 +96,8 @@ public struct HistoryApplicationSample: Sendable {
         writeBytes: UInt64,
         cpuTimeNanoseconds: UInt64,
         networkReceiveBytes: UInt64,
-        networkSendBytes: UInt64
+        networkSendBytes: UInt64,
+        unavailableMetrics: HistoryApplicationMetricSet = []
     ) {
         self.identity = identity
         self.name = name
@@ -104,7 +106,22 @@ public struct HistoryApplicationSample: Sendable {
         self.cpuTimeNanoseconds = cpuTimeNanoseconds
         self.networkReceiveBytes = networkReceiveBytes
         self.networkSendBytes = networkSendBytes
+        self.unavailableMetrics = unavailableMetrics
     }
+}
+
+public struct HistoryApplicationMetricSet: OptionSet, Equatable, Sendable {
+    public let rawValue: Int64
+
+    public init(rawValue: Int64) {
+        self.rawValue = rawValue
+    }
+
+    public static let read = Self(rawValue: 1 << 0)
+    public static let write = Self(rawValue: 1 << 1)
+    public static let cpu = Self(rawValue: 1 << 2)
+    public static let networkReceive = Self(rawValue: 1 << 3)
+    public static let networkSend = Self(rawValue: 1 << 4)
 }
 
 public struct HistoryDeviceSample: Sendable {
@@ -268,6 +285,27 @@ public struct HistoryApplicationReport: Identifiable, Equatable, Sendable {
     public let networkReceiveBytes: UInt64
     public let networkSendBytes: UInt64
     public let cpuTimeNanoseconds: UInt64
+    public let unavailableMetrics: HistoryApplicationMetricSet
+
+    public init(
+        id: String,
+        name: String,
+        readBytes: UInt64,
+        writeBytes: UInt64,
+        networkReceiveBytes: UInt64,
+        networkSendBytes: UInt64,
+        cpuTimeNanoseconds: UInt64,
+        unavailableMetrics: HistoryApplicationMetricSet = []
+    ) {
+        self.id = id
+        self.name = name
+        self.readBytes = readBytes
+        self.writeBytes = writeBytes
+        self.networkReceiveBytes = networkReceiveBytes
+        self.networkSendBytes = networkSendBytes
+        self.cpuTimeNanoseconds = cpuTimeNanoseconds
+        self.unavailableMetrics = unavailableMetrics
+    }
 }
 
 public struct HistoryReport: Equatable, Sendable {

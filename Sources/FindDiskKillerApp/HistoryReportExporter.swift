@@ -124,7 +124,7 @@ enum HistoryReportExporter {
         return data as Data
     }
 
-    private static func pdfText(for report: HistoryReport) -> String {
+    static func pdfText(for report: HistoryReport) -> String {
         let dateFormatter = ISO8601DateFormatter()
         dateFormatter.formatOptions = [.withInternetDateTime]
         let coverage = String(format: "%.1f%%", report.summary.coverage * 100)
@@ -133,8 +133,8 @@ enum HistoryReportExporter {
         let cpuCoverage = String(format: "%.1f%%", report.summary.cpuCoverage * 100)
         let applications = report.applications.prefix(12).enumerated().map { index, app in
             "\(index + 1). \(app.name)  "
-                + "write \(ByteRateFormatter.bytes(app.writeBytes))  "
-                + "read \(ByteRateFormatter.bytes(app.readBytes))"
+                + "write \(applicationMetric(app.writeBytes, .write, app))  "
+                + "read \(applicationMetric(app.readBytes, .read, app))"
         }.joined(separator: "\n")
         return """
         FindDiskKiller - History Analysis
@@ -179,5 +179,15 @@ enum HistoryReportExporter {
 
     private static func optionalNumber(_ value: Double?) -> String {
         value.map(number) ?? ""
+    }
+
+    private static func applicationMetric(
+        _ value: UInt64,
+        _ metric: HistoryApplicationMetricSet,
+        _ application: HistoryApplicationReport
+    ) -> String {
+        application.unavailableMetrics.contains(metric)
+            ? "Unavailable"
+            : ByteRateFormatter.bytes(value)
     }
 }
