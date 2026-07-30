@@ -884,3 +884,14 @@
 "清理已完成" = "Limpieza completada";
 "占用数据需要更新" = "Es necesario actualizar los datos de almacenamiento";
 "旧的空间结果已隐藏，避免显示删除前的占用数据。重新分析后即可查看最新构成。" = "Los resultados anteriores se han ocultado para no mostrar el uso previo a la limpieza. Vuelve a analizar para ver la distribución actual.";
+"其他应用汇总" = "Otras aplicaciones";
+"旧版本或单日超过 %d 个稳定应用身份时，超出部分会汇总于此。资源总量仍完整保留，但无法再拆分到单个应用。" = "Los datos de versiones anteriores o las identidades estables que superen el límite diario de %d se agrupan aquí. Los totales permanecen completos, pero ya no pueden separarse por aplicación.";
+"这是超过历史身份容量的应用汇总，资源总量仍完整保留" = "Resumen de apps que superan la capacidad de identidades; los totales permanecen completos";
+"未找到匹配的应用" = "No hay aplicaciones coincidentes";
+"清除搜索" = "Borrar búsqueda";
+"进程写入归因" = "Atribución de escritura por proceso";
+"可见进程 %@ · 物理设备 %@" = "Procesos visibles %@ · Dispositivos físicos %@";
+"正在建立同窗口写入基线" = "Creando una referencia de escritura comparable";
+"未归因 %@" = "Sin atribuir %@";
+"进程覆盖 %d%%" = "Cobertura de procesos %d%%";
+"未归因部分可能来自采样间启动并退出的进程、内核或文件系统写回；不会猜测到具体应用。" = "Las escrituras sin atribuir pueden proceder de procesos que se inician y terminan entre muestras, del kernel o de la escritura diferida del sistema de archivos; nunca se asignan por suposición a una app.";

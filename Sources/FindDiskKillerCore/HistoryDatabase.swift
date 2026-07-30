@@ -332,7 +332,7 @@ public actor HistoryRecorder {
 }
 
 public actor HistoryDatabase {
-    private static let currentSchemaVersion: Int32 = 2
+    private static let currentSchemaVersion: Int32 = 3
     private var connection: SQLiteConnection?
     private let fileURL: URL?
     private let fileOperations: any HistoryFileOperating
@@ -345,14 +345,17 @@ public actor HistoryDatabase {
     private var lastCompactedStart: Date?
     private var lastConfiguration = HistoryConfiguration()
     private var dailyIdentityCache: [Int64: Set<String>] = [:]
-    private var globalIdentityCache: Set<String>?
     private var checkpointOverrideForTesting: (@Sendable () throws -> Void)?
 
     public init(location: HistoryDatabaseLocation) throws {
         let operations = LiveHistoryFileOperations()
         let identityProvider = HistoryIdentityProvider.shared
         try identityProvider.validate()
-        let setup = try Self.openDatabase(location: location, fileOperations: operations)
+        let setup = try Self.openDatabase(
+            location: location,
+            fileOperations: operations,
+            identityProvider: identityProvider
+        )
         connection = setup.connection
         fileURL = setup.fileURL
         fileOperations = operations
@@ -367,7 +370,8 @@ public actor HistoryDatabase {
         try identityProvider.validate()
         let setup = try Self.openDatabase(
             location: location,
-            fileOperations: fileOperations
+            fileOperations: fileOperations,
+            identityProvider: identityProvider
         )
         connection = setup.connection
         fileURL = setup.fileURL
@@ -377,7 +381,8 @@ public actor HistoryDatabase {
 
     private static func openDatabase(
         location: HistoryDatabaseLocation,
-        fileOperations: any HistoryFileOperating
+        fileOperations: any HistoryFileOperating,
+        identityProvider: any HistoryIdentityProviding
     ) throws -> (connection: SQLiteConnection, fileURL: URL?) {
         let path: String
         let fileURL: URL?
@@ -397,7 +402,7 @@ public actor HistoryDatabase {
         let connection = try SQLiteConnection(path: path)
         do {
             try configure(connection.handle)
-            try migrate(connection.handle)
+            try migrate(connection.handle, identityProvider: identityProvider)
             try protectHistoryFiles(at: fileURL, fileOperations: fileOperations)
             return (connection, fileURL)
         } catch {
@@ -410,7 +415,10 @@ public actor HistoryDatabase {
         try execute(on: handle, sql: connectionPragmas)
     }
 
-    private static func migrate(_ handle: OpaquePointer) throws {
+    private static func migrate(
+        _ handle: OpaquePointer,
+        identityProvider: any HistoryIdentityProviding
+    ) throws {
         let version = try pragmaInt(on: handle, name: "user_version")
         guard version <= currentSchemaVersion else {
             throw HistoryDatabaseError(message: "Monitoring history was created by a newer app version")
@@ -460,12 +468,137 @@ public actor HistoryDatabase {
                 )
             }
             try repairSaturatedApplicationMetrics(on: handle)
+            if version < 3 {
+                try consolidateLegacyDailyApplicationIdentities(
+                    on: handle,
+                    identityProvider: identityProvider
+                )
+            }
             try execute(on: handle, sql: "PRAGMA user_version = \(currentSchemaVersion)")
             try execute(on: handle, sql: "COMMIT")
         } catch {
             try? execute(on: handle, sql: "ROLLBACK")
             throw error
         }
+    }
+
+    private struct MigratedDailyApplicationKey: Hashable {
+        let dayEpoch: Int64
+        let identity: String
+    }
+
+    private static func consolidateLegacyDailyApplicationIdentities(
+        on handle: OpaquePointer,
+        identityProvider: any HistoryIdentityProviding
+    ) throws {
+        guard try tableExists("app_daily", on: handle),
+              try columnExists("unavailable_metrics", in: "app_daily", on: handle)
+        else { return }
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            handle,
+            """
+            SELECT day_epoch, name, read_bytes, write_bytes, cpu_time_ns,
+                   network_receive_bytes, network_send_bytes, unavailable_metrics
+            FROM app_daily WHERE app_id LIKE 'hmac:%'
+            ORDER BY day_epoch, name
+            """,
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK, let statement else {
+            throw HistoryDatabaseError(message: "Unable to migrate application identities")
+        }
+
+        var grouped: [MigratedDailyApplicationKey: MutableApplicationBucket] = [:]
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let dayEpoch = sqlite3_column_int64(statement, 0)
+            let name = sqlite3_column_text(statement, 1).map { String(cString: $0) } ?? ""
+            let identity = identityProvider.applicationIdentity(
+                bundleIdentifier: nil,
+                fallbackIdentity: HistoryApplicationIdentity.stableFallback(processName: name)
+            )
+            let key = MigratedDailyApplicationKey(dayEpoch: dayEpoch, identity: identity)
+            let row = MutableApplicationBucket(
+                name: name,
+                readBytes: UInt64(max(0, sqlite3_column_int64(statement, 2))),
+                writeBytes: UInt64(max(0, sqlite3_column_int64(statement, 3))),
+                cpuTimeNanoseconds: UInt64(max(0, sqlite3_column_int64(statement, 4))),
+                networkReceiveBytes: UInt64(max(0, sqlite3_column_int64(statement, 5))),
+                networkSendBytes: UInt64(max(0, sqlite3_column_int64(statement, 6))),
+                unavailableMetrics: HistoryApplicationMetricSet(
+                    rawValue: sqlite3_column_int64(statement, 7)
+                )
+            )
+            if var existing = grouped[key] {
+                existing.merge(row)
+                grouped[key] = existing
+            } else {
+                grouped[key] = row
+            }
+        }
+        sqlite3_finalize(statement)
+
+        try execute(on: handle, sql: "DELETE FROM app_daily WHERE app_id LIKE 'hmac:%'")
+        guard !grouped.isEmpty else { return }
+
+        let sql = """
+        INSERT INTO app_daily
+        (day_epoch, app_id, name, read_bytes, write_bytes, cpu_time_ns,
+         network_receive_bytes, network_send_bytes, unavailable_metrics)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(day_epoch, app_id) DO UPDATE SET
+          read_bytes = read_bytes + excluded.read_bytes,
+          write_bytes = write_bytes + excluded.write_bytes,
+          cpu_time_ns = cpu_time_ns + excluded.cpu_time_ns,
+          network_receive_bytes = network_receive_bytes + excluded.network_receive_bytes,
+          network_send_bytes = network_send_bytes + excluded.network_send_bytes,
+          unavailable_metrics = unavailable_metrics | excluded.unavailable_metrics
+        """
+        var insertPointer: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, sql, -1, &insertPointer, nil) == SQLITE_OK,
+              let insert = insertPointer else {
+            throw HistoryDatabaseError(message: "Unable to prepare application identity migration")
+        }
+        defer { sqlite3_finalize(insert) }
+        for (key, app) in grouped {
+            sqlite3_reset(insert)
+            sqlite3_clear_bindings(insert)
+            sqlite3_bind_int64(insert, 1, key.dayEpoch)
+            bindText(key.identity, to: insert, at: 2)
+            bindText(app.name, to: insert, at: 3)
+            try bindMetric(app.readBytes, to: insert, at: 4)
+            try bindMetric(app.writeBytes, to: insert, at: 5)
+            try bindMetric(app.cpuTimeNanoseconds, to: insert, at: 6)
+            try bindMetric(app.networkReceiveBytes, to: insert, at: 7)
+            try bindMetric(app.networkSendBytes, to: insert, at: 8)
+            sqlite3_bind_int64(insert, 9, app.unavailableMetrics.rawValue)
+            guard sqlite3_step(insert) == SQLITE_DONE else {
+                throw HistoryDatabaseError(message: "Unable to migrate application identities")
+            }
+        }
+    }
+
+    private static func bindText(_ value: String, to statement: OpaquePointer, at index: Int32) {
+        sqlite3_bind_text(
+            statement,
+            index,
+            value,
+            -1,
+            unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        )
+    }
+
+    private static func bindMetric(
+        _ value: UInt64,
+        to statement: OpaquePointer,
+        at index: Int32
+    ) throws {
+        guard value < UInt64(Int64.max) else {
+            throw HistoryDatabaseError(message: "Migrated application metric exceeded its supported range")
+        }
+        sqlite3_bind_int64(statement, index, Int64(value))
     }
 
     private static func repairSaturatedApplicationMetrics(on handle: OpaquePointer) throws {
@@ -659,7 +792,8 @@ public actor HistoryDatabase {
                 ?? .memory
             let setup = try Self.openDatabase(
                 location: location,
-                fileOperations: fileOperations
+                fileOperations: fileOperations,
+                identityProvider: identityProvider
             )
             connection = setup.connection
             resetAfterClear()
@@ -668,7 +802,8 @@ public actor HistoryDatabase {
             if connection == nil {
                 connection = try? Self.openDatabase(
                     location: fileURL.map(HistoryDatabaseLocation.file) ?? .memory,
-                    fileOperations: fileOperations
+                    fileOperations: fileOperations,
+                    identityProvider: identityProvider
                 ).connection
             }
             lastError = String(describing: error)
@@ -683,7 +818,6 @@ public actor HistoryDatabase {
         isPausedForBudget = false
         lastCompactedStart = nil
         dailyIdentityCache.removeAll()
-        globalIdentityCache = []
     }
 
     func setCheckpointOverrideForTesting(
@@ -714,6 +848,26 @@ public actor HistoryDatabase {
         bind([.integer(startEpoch), .integer(Int64(resolution))], to: statement)
         guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
         return unsigned(sqlite3_column_int64(statement, 0))
+    }
+
+    func dailyApplicationForTesting(
+        dayEpoch: Int64,
+        identity: String
+    ) throws -> (name: String, writeBytes: UInt64)? {
+        let statement = try prepare(
+            "SELECT name, write_bytes FROM app_daily WHERE day_epoch = ? AND app_id = ?"
+        )
+        defer { sqlite3_finalize(statement) }
+        bind([.integer(dayEpoch), .text(identity)], to: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return (columnText(statement, 0), unsigned(sqlite3_column_int64(statement, 1)))
+    }
+
+    func dailyApplicationCountForTesting(dayEpoch: Int64) throws -> Int {
+        try rowCount(
+            "SELECT COUNT(*) FROM app_daily WHERE day_epoch = ?",
+            integers: [dayEpoch]
+        )
     }
 
     static func storagePressureDecision(
@@ -805,13 +959,14 @@ public actor HistoryDatabase {
 
     private func insertApplications(_ bucket: HistoryMinuteBucket) throws {
         let sorted = bucket.applications.sorted { $0.value.activityScore > $1.value.activityScore }
-        let keep = sorted.prefix(16)
+        let limit = HistoryApplicationAggregationPolicy.minuteApplicationLimit
+        let keep = sorted.prefix(limit)
         for (identity, app) in keep {
             try insertApplication(identity: identity, app: app, start: bucket.startEpoch, resolution: 60)
         }
-        if sorted.count > 16 {
+        if sorted.count > limit {
             var other = MutableApplicationBucket(name: "Other")
-            for (_, app) in sorted.dropFirst(16) { other.merge(app) }
+            for (_, app) in sorted.dropFirst(limit) { other.merge(app) }
             try insertApplication(identity: "other", app: other, start: bucket.startEpoch, resolution: 60)
         }
     }
@@ -847,13 +1002,19 @@ public actor HistoryDatabase {
             "SELECT app_id FROM app_daily WHERE day_epoch = ?",
             values: [.integer(day)]
         ))
-        var globalIDs = try globalIdentityCache ?? Set(loadTextColumn(
-            "SELECT DISTINCT app_id FROM app_daily",
-            values: []
-        ))
-        for (originalIdentity, originalApp) in bucket.applications {
-            let isKnown = dailyIDs.contains(originalIdentity) && globalIDs.contains(originalIdentity)
-            let identity = isKnown || (dailyIDs.count < 512 && globalIDs.count < 4_096)
+        let orderedApplications = bucket.applications.sorted { lhs, rhs in
+            let lhsKnown = dailyIDs.contains(lhs.key)
+            let rhsKnown = dailyIDs.contains(rhs.key)
+            if lhsKnown != rhsKnown { return lhsKnown }
+            if lhs.value.activityScore != rhs.value.activityScore {
+                return lhs.value.activityScore > rhs.value.activityScore
+            }
+            return lhs.key < rhs.key
+        }
+        for (originalIdentity, originalApp) in orderedApplications {
+            let trackedIdentityCount = dailyIDs.count - (dailyIDs.contains("other") ? 1 : 0)
+            let identity = dailyIDs.contains(originalIdentity)
+                || trackedIdentityCount < HistoryApplicationAggregationPolicy.dailyLedgerIdentityLimit
                 ? originalIdentity
                 : "other"
             var app = originalApp
@@ -880,10 +1041,8 @@ public actor HistoryDatabase {
                 ]
             )
             dailyIDs.insert(identity)
-            globalIDs.insert(identity)
         }
         dailyIdentityCache[day] = dailyIDs
-        globalIdentityCache = globalIDs
     }
 
     private func dailyApplication(
@@ -1068,7 +1227,9 @@ public actor HistoryDatabase {
             "DELETE FROM app_bucket WHERE start_epoch = ? AND resolution_seconds = ?",
             values: [.integer(start), .integer(Int64(resolution))]
         )
-        let limit = resolution == 900 ? 32 : 50
+        let limit = resolution == 900
+            ? HistoryApplicationAggregationPolicy.quarterHourApplicationLimit
+            : HistoryApplicationAggregationPolicy.hourlyApplicationLimit
         var other = MutableApplicationBucket(name: "Other")
         for (identity, app) in rows where identity == "other" { other.merge(app) }
         let candidates = rows.filter { $0.0 != "other" }

@@ -33,3 +33,22 @@ import Testing
     #expect(resolved[.application] >= 400)
     #expect(abs(resolved.tableWidth - 1_600) < 0.001)
 }
+
+@MainActor
+@Test func processSearchMatchesLocalizedNameAndExecutablePathWithoutChangingLayoutState() {
+    #expect(ProcessesView.matches(
+        name: "Codex",
+        executablePath: "/Applications/Codex.app/Contents/MacOS/Codex",
+        query: "codex"
+    ))
+    #expect(ProcessesView.matches(
+        name: "Finder",
+        executablePath: "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder",
+        query: "CoreServices"
+    ))
+    #expect(!ProcessesView.matches(
+        name: "Finder",
+        executablePath: "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder",
+        query: "Codex"
+    ))
+}

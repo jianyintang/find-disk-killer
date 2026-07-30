@@ -827,6 +827,91 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
 }
 
 @MainActor
+@Test func processWriteAttributionUsesDeviceWindowAndPreservesUnattributedDifference() async {
+    let store = MonitorStore()
+    let baseDate = Date(timeIntervalSinceReferenceDate: 2_250)
+
+    for index in 0..<2 {
+        store.ingest(SystemSnapshot(
+            date: baseDate.addingTimeInterval(Double(index) * 3),
+            uptime: Double(index + 1) * 3,
+            processes: [RawProcessCounter(
+                pid: 45,
+                startAbstime: 10,
+                name: "attribution-fixture",
+                path: "/usr/bin/attribution-fixture",
+                cpuTimeNanoseconds: 0,
+                bytesRead: 0,
+                bytesWritten: UInt64(index) * 36_000_000,
+                networkBytesReceived: nil,
+                networkBytesSent: nil
+            )],
+            disks: [RawDiskCounter(
+                registryID: 101,
+                name: "Physical Disk",
+                bytesRead: 0,
+                bytesWritten: UInt64(index) * 300_000_000,
+                readOperations: 0,
+                writeOperations: UInt64(index),
+                capacity: 1_000_000_000,
+                bsdName: "disk101",
+                isPhysical: true
+            )],
+            volumes: [],
+            cpuUserTicks: 0,
+            cpuSystemTicks: 0,
+            cpuNiceTicks: 0,
+            cpuIdleTicks: 0,
+            networkInterfaces: [],
+            cpuStatsAvailable: false,
+            networkInterfacesAvailable: false,
+            processNetworkAvailable: false
+        ))
+        await store.waitForPendingProcessSummary()
+    }
+
+    #expect(store.isProcessWriteAttributionAvailable)
+    #expect(store.currentWriteRate == 100_000_000)
+    #expect(store.currentAttributedProcessWriteRate == 12_000_000)
+    #expect(store.currentUnattributedWriteRate == 88_000_000)
+    #expect(store.currentProcessWriteCoverage == 0.12)
+    #expect(store.topWriter?.currentWriteBytesPerSecond == 12_000_000)
+}
+
+@MainActor
+@Test func processWriteAttributionDoesNotPublishBeforeTwoComparableSamples() {
+    let store = MonitorStore()
+    store.ingest(SystemSnapshot(
+        date: Date(timeIntervalSinceReferenceDate: 2_300),
+        uptime: 3,
+        processes: [RawProcessCounter(
+            pid: 46,
+            startAbstime: 11,
+            name: "new-process",
+            path: "/usr/bin/new-process",
+            cpuTimeNanoseconds: 0,
+            bytesRead: 0,
+            bytesWritten: 50_000_000,
+            networkBytesReceived: nil,
+            networkBytesSent: nil
+        )],
+        disks: [],
+        volumes: [],
+        cpuUserTicks: 0,
+        cpuSystemTicks: 0,
+        cpuNiceTicks: 0,
+        cpuIdleTicks: 0,
+        networkInterfaces: [],
+        cpuStatsAvailable: false,
+        networkInterfacesAvailable: false,
+        processNetworkAvailable: false
+    ))
+
+    #expect(!store.isProcessWriteAttributionAvailable)
+    #expect(store.currentProcessWriteCoverage == nil)
+}
+
+@MainActor
 @Test func clearingMonitoringHistoryRemovesSessionDataButKeepsMountedVolumes() async {
     let store = MonitorStore()
     let baseDate = Date(timeIntervalSinceReferenceDate: 2_500)

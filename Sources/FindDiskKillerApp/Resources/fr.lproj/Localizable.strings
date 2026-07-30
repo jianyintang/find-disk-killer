@@ -884,3 +884,14 @@
 "清理已完成" = "Nettoyage terminé";
 "占用数据需要更新" = "Les données de stockage doivent être actualisées";
 "旧的空间结果已隐藏，避免显示删除前的占用数据。重新分析后即可查看最新构成。" = "Les anciens résultats sont masqués pour ne pas afficher l’occupation antérieure au nettoyage. Relancez l’analyse pour voir la répartition actuelle.";
+"其他应用汇总" = "Autres applications";
+"旧版本或单日超过 %d 个稳定应用身份时，超出部分会汇总于此。资源总量仍完整保留，但无法再拆分到单个应用。" = "Les données des anciennes versions ou les identités d’app stables au-delà de la limite quotidienne de %d sont regroupées ici. Les totaux restent complets, mais ne peuvent plus être ventilés par application.";
+"这是超过历史身份容量的应用汇总，资源总量仍完整保留" = "Résumé des apps dépassant la capacité d’identités ; les totaux restent complets";
+"未找到匹配的应用" = "Aucune application correspondante";
+"清除搜索" = "Effacer la recherche";
+"进程写入归因" = "Attribution des écritures des processus";
+"可见进程 %@ · 物理设备 %@" = "Processus visibles %@ · Appareils physiques %@";
+"正在建立同窗口写入基线" = "Établissement d’une référence d’écriture comparable";
+"未归因 %@" = "Non attribué %@";
+"进程覆盖 %d%%" = "Couverture des processus %d%%";
+"未归因部分可能来自采样间启动并退出的进程、内核或文件系统写回；不会猜测到具体应用。" = "Les écritures non attribuées peuvent provenir de processus lancés et terminés entre deux mesures, du noyau ou de l’écriture différée du système de fichiers ; elles ne sont jamais attribuées arbitrairement à une app.";

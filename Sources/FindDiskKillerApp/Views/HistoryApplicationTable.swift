@@ -378,6 +378,10 @@ struct HistoryApplicationTable: View {
                     }
                 }
 
+                if selectedApplication.id == "other" {
+                    otherAggregationExplanation
+                }
+
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 24) {
                         applicationDetailMetrics(selectedApplication)
@@ -531,7 +535,23 @@ struct HistoryApplicationTable: View {
     }
 
     private func displayName(for application: HistoryApplicationReport) -> String {
-        application.id == "other" ? L10n.text("其他") : application.name
+        application.id == "other" ? L10n.text("其他应用汇总") : application.name
+    }
+
+    private var otherAggregationExplanation: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "info.circle.fill")
+                .foregroundStyle(.blue)
+                .accessibilityHidden(true)
+            Text(L10n.format(
+                "旧版本或单日超过 %d 个稳定应用身份时，超出部分会汇总于此。资源总量仍完整保留，但无法再拆分到单个应用。",
+                HistoryApplicationAggregationPolicy.dailyLedgerIdentityLimit
+            ))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private func identityColor(for application: HistoryApplicationReport) -> Color {
@@ -580,12 +600,13 @@ struct HistoryApplicationTable: View {
             )
         return [
             "#\(rank)",
+            application.id == "other" ? L10n.text("这是超过历史身份容量的应用汇总，资源总量仍完整保留") : nil,
             "\(L10n.text("写入")) \(formattedMetric(.write, for: application))",
             "\(L10n.text("读取")) \(formattedMetric(.read, for: application))",
             "CPU \(formattedMetric(.cpu, for: application))",
             "\(L10n.text("网络")) \(formattedNetwork(for: application))",
             "\(L10n.text("写入占比")) \(writeShare)"
-        ].joined(separator: ", ")
+        ].compactMap { $0 }.joined(separator: ", ")
     }
 }
 

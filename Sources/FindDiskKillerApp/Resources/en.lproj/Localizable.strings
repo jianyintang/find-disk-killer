@@ -882,3 +882,14 @@
 "清理已完成" = "Cleanup Complete";
 "占用数据需要更新" = "Storage Data Needs Updating";
 "旧的空间结果已隐藏，避免显示删除前的占用数据。重新分析后即可查看最新构成。" = "Previous storage results are hidden so pre-cleanup usage is not shown. Reanalyze to view the latest breakdown.";
+"其他应用汇总" = "Other Applications";
+"旧版本或单日超过 %d 个稳定应用身份时，超出部分会汇总于此。资源总量仍完整保留，但无法再拆分到单个应用。" = "Data from earlier versions, or stable app identities beyond the daily limit of %d, are combined here. Resource totals remain complete, but can no longer be split by app.";
+"这是超过历史身份容量的应用汇总，资源总量仍完整保留" = "A summary of apps beyond the history identity capacity; resource totals remain complete";
+"未找到匹配的应用" = "No Matching Apps";
+"清除搜索" = "Clear Search";
+"进程写入归因" = "Process Write Attribution";
+"可见进程 %@ · 物理设备 %@" = "Visible processes %@ · Physical devices %@";
+"正在建立同窗口写入基线" = "Establishing a matching write baseline";
+"未归因 %@" = "Unattributed %@";
+"进程覆盖 %d%%" = "Process coverage %d%%";
+"未归因部分可能来自采样间启动并退出的进程、内核或文件系统写回；不会猜测到具体应用。" = "Unattributed writes may come from processes that start and exit between samples, the kernel, or file-system writeback; they are never guessed into a specific app.";

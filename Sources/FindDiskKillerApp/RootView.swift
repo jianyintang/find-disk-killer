@@ -155,8 +155,7 @@ struct RootView: View {
         } else {
             SectionNavigationPlaceholder(
                 section: requestedSection,
-                snapshot: sectionSnapshots[requestedSection],
-                processSearchText: $processSearchText
+                snapshot: sectionSnapshots[requestedSection]
             )
         }
     }
@@ -392,7 +391,6 @@ private struct VolumePreviewRow: Identifiable, Sendable {
 private struct SectionNavigationPlaceholder: View {
     let section: AppSection
     let snapshot: SectionPreviewSnapshot?
-    @Binding var processSearchText: String
     @State private var processTableWidth: CGFloat = 0
 
     var body: some View {
@@ -402,10 +400,6 @@ private struct SectionNavigationPlaceholder: View {
                 overviewPlaceholder
             case .some(.processes):
                 processPlaceholder
-                    .searchable(
-                        text: $processSearchText,
-                        prompt: L10n.text("搜索应用或进程")
-                    )
             case .some(.history):
                 HistoryReportNavigationPlaceholder()
             case .some(.resources):

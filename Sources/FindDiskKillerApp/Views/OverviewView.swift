@@ -52,6 +52,7 @@ struct OverviewView: View {
             LazyVStack(alignment: .leading, spacing: 24) {
                 overviewHeader
                 metricStrip
+                diskAttributionSummary
                 volumeIOSection
                 trendSection
                 Divider()
@@ -145,6 +146,76 @@ struct OverviewView: View {
             symbol: "square.stack.3d.up",
             color: .purple
         )
+    }
+
+    private var diskAttributionSummary: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                diskAttributionIdentity
+                Spacer(minLength: 12)
+                diskAttributionResult
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                diskAttributionIdentity
+                diskAttributionResult
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 6))
+        .help(L10n.text("未归因部分可能来自采样间启动并退出的进程、内核或文件系统写回；不会猜测到具体应用。"))
+        .accessibilityElement(children: .combine)
+    }
+
+    private var diskAttributionIdentity: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "scope")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.orange)
+                .frame(width: 26, height: 26)
+                .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.text("进程写入归因"))
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                if store.isDiskAvailable, store.isProcessWriteAttributionAvailable {
+                    Text(L10n.format(
+                        "可见进程 %@ · 物理设备 %@",
+                        ByteRateFormatter.rate(store.currentAttributedProcessWriteRate),
+                        ByteRateFormatter.rate(store.currentWriteRate)
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                } else {
+                    Text(L10n.text("正在建立同窗口写入基线"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var diskAttributionResult: some View {
+        if let coverage = store.currentProcessWriteCoverage {
+            HStack(spacing: 10) {
+                Text(L10n.format(
+                    "未归因 %@",
+                    ByteRateFormatter.rate(store.currentUnattributedWriteRate)
+                ))
+                .font(.system(.caption, design: .monospaced, weight: .semibold))
+                .foregroundStyle(store.currentUnattributedWriteRate > 0 ? .orange : .secondary)
+                .lineLimit(1)
+                Text(L10n.format("进程覆盖 %d%%", Int((coverage * 100).rounded())))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
     }
 
     private var trendSection: some View {
@@ -517,6 +588,8 @@ struct ProcessTable: View {
     let hoverCoordinator: ProcessHoverCoordinator
     let onSelect: (ProcessActivity) -> Void
     var isLoading = false
+    var emptyStateTitle: String?
+    var emptyStateSymbol = "waveform.path.ecg"
     @State private var sortKey: ProcessSortKey = .cpuCurrent
     @State private var ascending = false
     @State private var columnWidths = ProcessColumnWidths.load()
@@ -533,7 +606,10 @@ struct ProcessTable: View {
                 if isLoading, processSource.isEmpty {
                     loadingRows
                 } else if processSource.isEmpty {
-                    ContentUnavailableView(L10n.text("正在建立应用基线"), systemImage: "waveform.path.ecg")
+                    ContentUnavailableView(
+                        emptyStateTitle ?? L10n.text("正在建立应用基线"),
+                        systemImage: emptyStateSymbol
+                    )
                         .frame(width: tableWidth)
                         .frame(minHeight: 180)
                 } else {

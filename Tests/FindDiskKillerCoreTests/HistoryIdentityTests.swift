@@ -12,6 +12,19 @@ import Testing
     #expect(!identity.contains("/Applications"))
 }
 
+@Test func historyFallbackIdentityIsStableAcrossTemporaryExecutablePaths() {
+    let first = HistoryApplicationIdentity.stableFallback(
+        processName: "transportcheck.test"
+    )
+    let second = HistoryApplicationIdentity.stableFallback(
+        processName: "  TransportCheck.Test  "
+    )
+
+    #expect(first == second)
+    #expect(first == "process-name:transportcheck.test")
+    #expect(!first.contains("/private/var/folders"))
+}
+
 @Test func historyIdentityHMACChangesAfterTheInstallationKeyRotates() throws {
     let store = MemoryIdentityKeyStore()
     let provider = HistoryIdentityProvider(keyStore: store)
@@ -423,7 +436,7 @@ import Testing
     #expect(report.summary.diskWriteBytes == 0)
 }
 
-private final class MemoryIdentityKeyStore: HistoryIdentityKeyStoring, @unchecked Sendable {
+final class MemoryIdentityKeyStore: HistoryIdentityKeyStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var key: Data?
     private var shouldFailLoads = false

@@ -308,6 +308,15 @@ public struct HistoryApplicationReport: Identifiable, Equatable, Sendable {
     }
 }
 
+/// Per-bucket limits used only by the compact trend store. Application rankings
+/// use the exact daily ledger and do not inherit these limits.
+public enum HistoryApplicationAggregationPolicy {
+    public static let minuteApplicationLimit = 16
+    public static let quarterHourApplicationLimit = 32
+    public static let hourlyApplicationLimit = 50
+    public static let dailyLedgerIdentityLimit = 1_024
+}
+
 public struct HistoryReport: Equatable, Sendable {
     public let range: HistoryRetention
     public let start: Date

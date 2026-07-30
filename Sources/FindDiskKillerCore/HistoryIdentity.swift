@@ -9,6 +9,16 @@ protocol HistoryIdentityProviding: Sendable {
     func validate() throws
 }
 
+enum HistoryApplicationIdentity {
+    static func stableFallback(processName: String) -> String {
+        let normalized = processName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .precomposedStringWithCanonicalMapping
+            .lowercased(with: Locale(identifier: "en_US_POSIX"))
+        return "process-name:\(normalized.isEmpty ? "unknown" : normalized)"
+    }
+}
+
 extension HistoryIdentityProviding {
     func validate() throws {}
 }

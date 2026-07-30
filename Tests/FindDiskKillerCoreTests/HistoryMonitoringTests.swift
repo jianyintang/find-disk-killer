@@ -126,7 +126,7 @@ import Testing
     sqlite3_close(databaseHandle)
 
     let database = try HistoryDatabase(location: .file(url))
-    #expect(try await database.schemaVersionForTesting == 2)
+    #expect(try await database.schemaVersionForTesting == 3)
     let report = try await database.report(
         range: .sevenDays,
         now: Date(timeIntervalSince1970: 1_800_000_060)
@@ -136,7 +136,7 @@ import Testing
     #expect(report.summary.networkObservedSeconds == 60)
 
     let reopened = try HistoryDatabase(location: .file(url))
-    #expect(try await reopened.schemaVersionForTesting == 2)
+    #expect(try await reopened.schemaVersionForTesting == 3)
 }
 
 @Test func failedHistoryMigrationRollsBackSchemaChanges() throws {
@@ -221,7 +221,7 @@ import Testing
     sqlite3_close(databaseHandle)
 
     let database = try HistoryDatabase(location: .file(url))
-    #expect(try await database.schemaVersionForTesting == 2)
+    #expect(try await database.schemaVersionForTesting == 3)
     let report = try await database.report(range: .sevenDays, now: now)
     let application = try #require(report.applications.first)
     #expect(application.name == "ApplicationsStorageExtension")
@@ -242,7 +242,7 @@ import Testing
     var handle: OpaquePointer?
     #expect(sqlite3_open(url.path, &handle) == SQLITE_OK)
     let databaseHandle = try #require(handle)
-    #expect(sqlite3_exec(databaseHandle, "PRAGMA user_version = 3", nil, nil, nil) == SQLITE_OK)
+    #expect(sqlite3_exec(databaseHandle, "PRAGMA user_version = 4", nil, nil, nil) == SQLITE_OK)
     sqlite3_close(databaseHandle)
 
     #expect(throws: (any Error).self) {
@@ -258,7 +258,7 @@ import Testing
     let versionStatement = try #require(statement)
     defer { sqlite3_finalize(versionStatement) }
     #expect(sqlite3_step(versionStatement) == SQLITE_ROW)
-    #expect(sqlite3_column_int(versionStatement, 0) == 3)
+    #expect(sqlite3_column_int(versionStatement, 0) == 4)
 }
 
 @Test func oneSecondSamplesCommitExactlyOncePerMinute() async throws {
@@ -445,6 +445,126 @@ import Testing
     #expect(report.applications.count == 20)
     #expect(report.applications.reduce(UInt64(0)) { $0 + $1.writeBytes } == 2_100)
     #expect(report.applications.first?.name == "Application 19")
+}
+
+@Test func dailyApplicationLedgerBoundsStorageAndPreservesTrackedSlowWriter() async throws {
+    let database = try HistoryDatabase(location: .memory)
+    let recorder = HistoryRecorder(database: database)
+    let start = Date(timeIntervalSince1970: 1_800_000_000)
+    let day = Int64(Calendar.current.startOfDay(for: start).timeIntervalSince1970)
+    let slowIdentity = "stable-slow-writer"
+
+    await recorder.record(.fixture(
+        at: start,
+        duration: 60,
+        diskWriteBytes: 1,
+        applications: [HistoryApplicationSample(
+            identity: slowIdentity,
+            name: "Steady Writer",
+            readBytes: 0,
+            writeBytes: 1,
+            cpuTimeNanoseconds: 0,
+            networkReceiveBytes: 0,
+            networkSendBytes: 0
+        )]
+    ))
+
+    let burst = (0..<HistoryApplicationAggregationPolicy.dailyLedgerIdentityLimit).map { index in
+        HistoryApplicationSample(
+            identity: "burst-\(index)",
+            name: "Burst \(index)",
+            readBytes: 0,
+            writeBytes: UInt64(10_000 + index),
+            cpuTimeNanoseconds: 0,
+            networkReceiveBytes: 0,
+            networkSendBytes: 0
+        )
+    } + [HistoryApplicationSample(
+        identity: slowIdentity,
+        name: "Steady Writer",
+        readBytes: 0,
+        writeBytes: 1,
+        cpuTimeNanoseconds: 0,
+        networkReceiveBytes: 0,
+        networkSendBytes: 0
+    )]
+    await recorder.record(.fixture(
+        at: start.addingTimeInterval(60),
+        duration: 60,
+        diskWriteBytes: 0,
+        applications: burst
+    ))
+    await recorder.flush()
+
+    let slow = try #require(await database.dailyApplicationForTesting(
+        dayEpoch: day,
+        identity: slowIdentity
+    ))
+    let other = try #require(await database.dailyApplicationForTesting(
+        dayEpoch: day,
+        identity: "other"
+    ))
+    #expect(slow.name == "Steady Writer")
+    #expect(slow.writeBytes == 2)
+    #expect(other.writeBytes > 0)
+    #expect(try await database.dailyApplicationCountForTesting(dayEpoch: day)
+        == HistoryApplicationAggregationPolicy.dailyLedgerIdentityLimit + 1)
+}
+
+@Test func versionTwoMigrationMergesTemporaryPathIdentitiesWithoutChangingTotals() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let url = root.appending(path: "history-v2.sqlite3")
+    let now = Date(timeIntervalSince1970: 1_800_000_060)
+    let day = Int64(Calendar.current.startOfDay(for: now).timeIntervalSince1970)
+    var handle: OpaquePointer?
+    #expect(sqlite3_open(url.path, &handle) == SQLITE_OK)
+    let databaseHandle = try #require(handle)
+    let fixture = """
+    PRAGMA user_version = 2;
+    CREATE TABLE app_daily (
+      day_epoch INTEGER NOT NULL, app_id TEXT NOT NULL, name TEXT NOT NULL,
+      read_bytes INTEGER NOT NULL, write_bytes INTEGER NOT NULL,
+      cpu_time_ns INTEGER NOT NULL, network_receive_bytes INTEGER NOT NULL,
+      network_send_bytes INTEGER NOT NULL, unavailable_metrics INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (day_epoch, app_id)
+    ) WITHOUT ROWID;
+    INSERT INTO app_daily VALUES
+      (\(day), 'hmac:path-a', 'transportcheck.test', 10, 20, 30, 40, 50, 0),
+      (\(day), 'hmac:path-b', 'transportcheck.test', 1, 2, 3, 4, 5, 0),
+      (\(day), 'other', 'Other', 7, 8, 9, 10, 11, 0);
+    """
+    #expect(sqlite3_exec(databaseHandle, fixture, nil, nil, nil) == SQLITE_OK)
+    sqlite3_close(databaseHandle)
+
+    let provider = HistoryIdentityProvider(keyStore: MemoryIdentityKeyStore())
+    let stableIdentity = provider.applicationIdentity(
+        bundleIdentifier: nil,
+        fallbackIdentity: HistoryApplicationIdentity.stableFallback(
+            processName: "transportcheck.test"
+        )
+    )
+    let database = try HistoryDatabase(
+        location: .file(url),
+        fileOperations: LiveHistoryFileOperations(),
+        identityProvider: provider
+    )
+
+    #expect(try await database.schemaVersionForTesting == 3)
+    let migrated = try #require(await database.dailyApplicationForTesting(
+        dayEpoch: day,
+        identity: stableIdentity
+    ))
+    let other = try #require(await database.dailyApplicationForTesting(
+        dayEpoch: day,
+        identity: "other"
+    ))
+    #expect(migrated.name == "transportcheck.test")
+    #expect(migrated.writeBytes == 22)
+    #expect(other.writeBytes == 8)
+    #expect(try await database.dailyApplicationCountForTesting(dayEpoch: day) == 2)
 }
 
 @Test func trendCompactionConservesTotalsAndPeak() {
@@ -814,12 +934,17 @@ import Testing
     store.ingest(.lifecycleFixture(at: start, uptime: 10, counter: 100))
     store.ingest(.lifecycleFixture(at: start.addingTimeInterval(1), uptime: 11, counter: 200))
     #expect(store.points.last?.writeBytesPerSecond == 100)
+    #expect(store.isProcessWriteAttributionAvailable)
 
     store.stop()
+    #expect(!store.isProcessWriteAttributionAvailable)
+    #expect(store.currentProcessWriteCoverage == nil)
     store.ingest(.lifecycleFixture(at: start.addingTimeInterval(3_600), uptime: 3_610, counter: 10_000))
     await store.waitForPendingProcessSummary()
 
     #expect(store.points.last?.writeBytesPerSecond == nil)
+    #expect(!store.isProcessWriteAttributionAvailable)
+    #expect(store.currentProcessWriteCoverage == nil)
     #expect(store.systemPoints.last?.cpuPercent == nil)
     #expect(store.systemPoints.last?.networkReceiveBytesPerSecond == nil)
 
@@ -829,6 +954,7 @@ import Testing
     #expect(store.points.last?.writeBytesPerSecond == 10)
     #expect(store.systemPoints.last?.networkReceiveBytesPerSecond == 10)
     #expect(store.processes.first?.currentWriteBytesPerSecond == 10)
+    #expect(store.isProcessWriteAttributionAvailable)
 }
 
 @MainActor

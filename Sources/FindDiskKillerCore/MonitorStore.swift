@@ -21,6 +21,7 @@ public final class MonitorStore {
     public private(set) var isSystemCPUAvailable = false
     public private(set) var isSystemNetworkAvailable = false
     public private(set) var isProcessNetworkAvailable = false
+    public private(set) var isProcessWriteAttributionAvailable = false
     public private(set) var selectedCoverage: Double = 0
     public var selectedRange: SampleRange = .minute {
         didSet {
@@ -44,6 +45,18 @@ public final class MonitorStore {
     }
     public var currentWriteRate: Double {
         recentDiskAverage(\.writeBytesPerSecond)
+    }
+    public var currentAttributedProcessWriteRate: Double {
+        recentProcessWriteAverage()
+    }
+    public var currentUnattributedWriteRate: Double {
+        guard isDiskAvailable, isProcessWriteAttributionAvailable else { return 0 }
+        return max(0, currentWriteRate - currentAttributedProcessWriteRate)
+    }
+    public var currentProcessWriteCoverage: Double? {
+        guard isDiskAvailable, isProcessWriteAttributionAvailable else { return nil }
+        guard currentWriteRate > 0 else { return 1 }
+        return min(1, currentAttributedProcessWriteRate / currentWriteRate)
     }
     public var currentCPUPercent: Double {
         recentSystemAverage(\.cpuPercent)
@@ -164,6 +177,13 @@ public final class MonitorStore {
         let unavailableMetrics: HistoryApplicationMetricSet
     }
 
+    private struct ProcessWriteTotalSample {
+        let timestamp: Date
+        let duration: TimeInterval
+        let bytesWritten: UInt64
+        let hasBaseline: Bool
+    }
+
     private struct GroupRates: Sendable {
         var read = 0.0
         var write = 0.0
@@ -186,6 +206,7 @@ public final class MonitorStore {
     private var networkSegment = 0
     private var networkWasAvailable = false
     private var groupHistory: [String: [ProcessRateSample]] = [:]
+    private var processWriteTotals: [ProcessWriteTotalSample] = []
     private var groupMetadata: [String: GroupMetadata] = [:]
     private var elevatedSince: Date?
     private var samplingTask: Task<Void, Never>?
@@ -277,6 +298,7 @@ public final class MonitorStore {
         priorProcesses.removeAll(keepingCapacity: true)
         priorDisks.removeAll(keepingCapacity: true)
         recentDiskSamples.removeAll(keepingCapacity: true)
+        processWriteTotals.removeAll(keepingCapacity: true)
         priorUptime = nil
         priorSystemTotals = nil
         priorNetworkInterfaces.removeAll(keepingCapacity: true)
@@ -287,6 +309,7 @@ public final class MonitorStore {
         isSystemCPUAvailable = false
         isSystemNetworkAvailable = false
         isProcessNetworkAvailable = false
+        isProcessWriteAttributionAvailable = false
     }
 
     public func flushHistory() async {
@@ -306,6 +329,7 @@ public final class MonitorStore {
         disks.removeAll(keepingCapacity: true)
         recentDiskSamples.removeAll(keepingCapacity: true)
         groupHistory.removeAll(keepingCapacity: true)
+        processWriteTotals.removeAll(keepingCapacity: true)
         groupMetadata.removeAll(keepingCapacity: true)
         processes.removeAll(keepingCapacity: true)
         selectedCoverage = 0
@@ -315,6 +339,7 @@ public final class MonitorStore {
         isSystemCPUAvailable = false
         isSystemNetworkAvailable = false
         isProcessNetworkAvailable = false
+        isProcessWriteAttributionAvailable = false
         startedAt = isCollecting ? Date() : nil
         lastUpdatedAt = nil
         lastError = nil
@@ -341,7 +366,8 @@ public final class MonitorStore {
         let applicationHistory = ingestProcesses(
             snapshot.processes,
             at: snapshot.date,
-            duration: duration
+            duration: duration,
+            hasBaseline: hasPriorSample
         )
         trimHistoryIfNeeded(at: snapshot.date)
         scheduleProcessSummaryRebuild(at: snapshot.date, priority: .utility)
@@ -563,7 +589,8 @@ public final class MonitorStore {
     private func ingestProcesses(
         _ counters: [RawProcessCounter],
         at date: Date,
-        duration: TimeInterval
+        duration: TimeInterval,
+        hasBaseline: Bool
     ) -> [HistoryApplicationSample] {
         var groupedDeltas: [String: (
             read: UInt64,
@@ -717,12 +744,29 @@ public final class MonitorStore {
             ))
         }
 
+        let attributedWriteBytes = groupedDeltas.values.reduce(UInt64(0)) { total, delta in
+            guard !delta.unavailableMetrics.contains(.write) else { return total }
+            return Self.addingClamped(total, delta.written)
+        }
+        processWriteTotals.append(ProcessWriteTotalSample(
+            timestamp: date,
+            duration: duration,
+            bytesWritten: attributedWriteBytes,
+            hasBaseline: hasBaseline
+        ))
+        if processWriteTotals.count > 3_600 {
+            processWriteTotals.removeFirst(processWriteTotals.count - 3_600)
+        }
+        isProcessWriteAttributionAvailable = processWriteTotals.contains { $0.hasBaseline }
+
         return groupedDeltas.compactMap { groupID, delta in
             guard let metadata = groupMetadata[groupID] else { return nil }
             return HistoryApplicationSample(
                 identity: historyIdentityProvider.applicationIdentity(
                     bundleIdentifier: metadata.bundleIdentifier,
-                    fallbackIdentity: groupID
+                    fallbackIdentity: metadata.bundleIdentifier == nil
+                        ? HistoryApplicationIdentity.stableFallback(processName: metadata.name)
+                        : groupID
                 ),
                 name: metadata.name,
                 readBytes: delta.read,
@@ -1006,6 +1050,7 @@ public final class MonitorStore {
         }
         lastHistoryTrimAt = date
         let cutoff = date.addingTimeInterval(-3_600)
+        processWriteTotals.removeAll { $0.timestamp < cutoff }
         for groupID in groupHistory.keys {
             guard var history = groupHistory[groupID] else { continue }
             let firstValid = Self.firstSampleIndex(onOrAfter: cutoff, in: history)
@@ -1027,6 +1072,21 @@ public final class MonitorStore {
         timeWeightedAverage(
             samples.map {
                 TimedRate(timestamp: $0.timestamp, duration: $0.duration, value: value($0))
+            },
+            endingAt: end
+        )
+    }
+
+    private func recentProcessWriteAverage() -> Double {
+        guard let end = processWriteTotals.last?.timestamp else { return 0 }
+        return timeWeightedAverage(
+            processWriteTotals.compactMap { sample in
+                guard sample.hasBaseline else { return nil }
+                return TimedRate(
+                    timestamp: sample.timestamp,
+                    duration: sample.duration,
+                    value: Double(sample.bytesWritten) / max(0.1, sample.duration)
+                )
             },
             endingAt: end
         )
