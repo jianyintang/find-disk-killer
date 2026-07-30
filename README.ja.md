@@ -31,7 +31,7 @@ AI Storage は、明示的に分析を開始したときだけ Codex と Claude 
 
 <p align="center"><img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="Codex と Claude のチャット、グローバル、未割り当て領域を分けて示す AI Storage の概要。"></p>
 
-<p align="center"><img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="thread ごとの最近の活動、サブエージェント、ストレージ割り当てを示す Codex AI Storage。"></p>
+<p align="center"><img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="thread ごとの最近の活動とサブエージェントを一覧表示し、選択した thread の完全なストレージ内訳を右側に示す Codex AI Storage。"></p>
 
 期間、プロジェクト、個別チャットを選び、完全削除の前に即時解放見込みを確認できます。Codex は公式 thread/delete、単独の Claude Code session は公式 Agent SDK を使用します。使用中、identity が変化した項目、非対応項目はスキップし、SQLite の直接更新や transcript の手動削除にはフォールバックしません。Claude Desktop/Cowork は現在 Claude Desktop 内で削除します。
 

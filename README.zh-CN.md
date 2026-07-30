@@ -53,7 +53,7 @@ thread/session 列表会合并主对话独占文件、递归子代理文件和�
 不会把估算或未知值包装成精确结果。
 
 <p align="center">
-  <img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="Codex AI Storage 列表，按 thread 展示近期活动、子代理数量和空间归因。">
+  <img src="docs/assets/screenshots/ai-storage-threads.webp" width="100%" alt="Codex AI Storage 列表，按 thread 展示近期活动、子代理数量，并在右侧完整展示所选 thread 的空间构成。">
 </p>
 
 ### 先复核，再通过官方能力安全清理
