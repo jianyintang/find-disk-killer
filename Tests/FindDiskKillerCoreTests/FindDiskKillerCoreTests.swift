@@ -827,7 +827,7 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
 }
 
 @MainActor
-@Test func processWriteAttributionUsesDeviceWindowAndPreservesUnattributedDifference() async {
+@Test func processWriteAttributionUsesDeviceWindowAndPreservesUnattributedDifference() async throws {
     let store = MonitorStore()
     let baseDate = Date(timeIntervalSinceReferenceDate: 2_250)
 
@@ -876,6 +876,307 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(store.currentUnattributedWriteRate == 88_000_000)
     #expect(store.currentProcessWriteCoverage == 0.12)
     #expect(store.topWriter?.currentWriteBytesPerSecond == 12_000_000)
+    let systemLayer = try #require(store.systemLayerActivity)
+    #expect(systemLayer.totalWriteBytes == 264_000_000)
+    #expect(systemLayer.currentWriteBytesPerSecond == 88_000_000)
+    #expect(systemLayer.peakWriteBytesPerSecond == 88_000_000)
+    #expect(systemLayer.currentCPUPercent == nil)
+    #expect(systemLayer.averageNetworkReceiveBytesPerSecond == nil)
+    #expect(systemLayer.averageNetworkSendBytesPerSecond == nil)
+}
+
+@MainActor
+@Test func systemLayerUsesComparableCPUAndNetworkWindows() async throws {
+    let store = MonitorStore(
+        sampleProvider: { preconditionFailure("Unused test sample provider") },
+        logicalProcessorCount: 8
+    )
+    let baseDate = Date(timeIntervalSinceReferenceDate: 2_400)
+
+    for index in 0..<2 {
+        store.ingest(SystemSnapshot(
+            date: baseDate.addingTimeInterval(Double(index) * 2),
+            uptime: Double(index + 1) * 2,
+            processes: [RawProcessCounter(
+                pid: 47,
+                startAbstime: 12,
+                name: "residual-fixture",
+                path: "/usr/bin/residual-fixture",
+                cpuTimeNanoseconds: UInt64(index) * 2_000_000_000,
+                bytesRead: 0,
+                bytesWritten: UInt64(index) * 4_000,
+                networkBytesReceived: UInt64(index) * 2_000,
+                networkBytesSent: UInt64(index) * 1_000
+            )],
+            disks: [RawDiskCounter(
+                registryID: 102,
+                name: "Physical Disk",
+                bytesRead: 0,
+                bytesWritten: UInt64(index) * 10_000,
+                readOperations: 0,
+                writeOperations: UInt64(index),
+                capacity: 1_000_000,
+                bsdName: "disk102",
+                isPhysical: true
+            )],
+            volumes: [],
+            cpuUserTicks: UInt64(index) * 40,
+            cpuSystemTicks: UInt64(index) * 10,
+            cpuNiceTicks: 0,
+            cpuIdleTicks: UInt64(index) * 50,
+            networkInterfaces: [RawNetworkInterfaceCounter(
+                index: 1,
+                name: "en0",
+                bytesReceived: UInt64(index) * 20_000,
+                bytesSent: UInt64(index) * 10_000
+            )],
+            cpuStatsAvailable: true,
+            networkInterfacesAvailable: true,
+            processNetworkAvailable: true
+        ))
+        await store.waitForPendingProcessSummary()
+    }
+
+    let systemLayer = try #require(store.systemLayerActivity)
+    #expect(systemLayer.currentCPUPercent == 300)
+    #expect(systemLayer.totalWriteBytes == 6_000)
+    #expect(systemLayer.currentWriteBytesPerSecond == 3_000)
+    #expect(systemLayer.peakWriteBytesPerSecond == 3_000)
+    #expect(systemLayer.averageNetworkReceiveBytesPerSecond == 9_000)
+    #expect(systemLayer.averageNetworkSendBytesPerSecond == 4_500)
+}
+
+@MainActor
+@Test func systemLayerRemainsAvailableWhileShortLivedProcessesContinuouslyAppear() async throws {
+    let store = MonitorStore(
+        sampleProvider: { preconditionFailure("Unused test sample provider") },
+        logicalProcessorCount: 4
+    )
+    let baseDate = Date(timeIntervalSinceReferenceDate: 2_420)
+
+    for index in 0..<3 {
+        var processes = [RawProcessCounter(
+            pid: 50,
+            startAbstime: 20,
+            name: "stable-fixture",
+            path: "/usr/bin/stable-fixture",
+            cpuTimeNanoseconds: UInt64(index) * 500_000_000,
+            bytesRead: 0,
+            bytesWritten: UInt64(index) * 1_000,
+            networkBytesReceived: UInt64(index) * 1_000,
+            networkBytesSent: UInt64(index) * 500
+        )]
+        if index > 0 {
+            processes.append(RawProcessCounter(
+                pid: Int32(50 + index),
+                startAbstime: UInt64(20 + index),
+                name: "short-lived-\(index)",
+                path: "/usr/bin/short-lived-\(index)",
+                cpuTimeNanoseconds: UInt64(index) * 200_000_000,
+                bytesRead: 0,
+                bytesWritten: UInt64(index) * 4_000,
+                networkBytesReceived: UInt64(index) * 2_000,
+                networkBytesSent: UInt64(index) * 1_000
+            ))
+        }
+        store.ingest(SystemSnapshot(
+            date: baseDate.addingTimeInterval(Double(index)),
+            uptime: Double(index + 1),
+            processes: processes,
+            disks: [RawDiskCounter(
+                registryID: 104,
+                name: "Physical Disk",
+                bytesRead: 0,
+                bytesWritten: [0, 10_000, 25_000][index],
+                readOperations: 0,
+                writeOperations: UInt64(index),
+                capacity: 1_000_000,
+                bsdName: "disk104",
+                isPhysical: true
+            )],
+            volumes: [],
+            cpuUserTicks: UInt64(index) * 40,
+            cpuSystemTicks: UInt64(index) * 10,
+            cpuNiceTicks: 0,
+            cpuIdleTicks: UInt64(index) * 50,
+            networkInterfaces: [RawNetworkInterfaceCounter(
+                index: 1,
+                name: "en0",
+                bytesReceived: UInt64(index) * 10_000,
+                bytesSent: UInt64(index) * 5_000
+            )],
+            cpuStatsAvailable: true,
+            networkInterfacesAvailable: true,
+            processNetworkAvailable: true
+        ))
+        await store.waitForPendingProcessSummary()
+    }
+
+    let systemLayer = try #require(store.systemLayerActivity)
+    #expect(systemLayer.currentCPUPercent == 150)
+    #expect(systemLayer.totalWriteBytes == 23_000)
+    #expect(systemLayer.currentWriteBytesPerSecond == 11_500)
+    #expect(systemLayer.peakWriteBytesPerSecond == 14_000)
+    #expect(systemLayer.averageNetworkReceiveBytesPerSecond == 9_000)
+    #expect(systemLayer.averageNetworkSendBytesPerSecond == 4_500)
+}
+
+@MainActor
+@Test func systemLayerKeepsUnavailableSourcesAsGaps() async throws {
+    let store = MonitorStore()
+    let baseDate = Date(timeIntervalSinceReferenceDate: 2_425)
+
+    for index in 0..<2 {
+        store.ingest(SystemSnapshot(
+            date: baseDate.addingTimeInterval(Double(index)),
+            uptime: Double(index + 1),
+            processes: [],
+            disks: [],
+            volumes: [],
+            cpuUserTicks: 0,
+            cpuSystemTicks: 0,
+            cpuNiceTicks: 0,
+            cpuIdleTicks: 0,
+            networkInterfaces: [],
+            cpuStatsAvailable: false,
+            networkInterfacesAvailable: false,
+            processNetworkAvailable: false
+        ))
+        await store.waitForPendingProcessSummary()
+    }
+
+    let systemLayer = try #require(store.systemLayerActivity)
+    #expect(systemLayer.currentCPUPercent == nil)
+    #expect(systemLayer.totalWriteBytes == nil)
+    #expect(systemLayer.currentWriteBytesPerSecond == nil)
+    #expect(systemLayer.peakWriteBytesPerSecond == nil)
+    #expect(systemLayer.averageNetworkReceiveBytesPerSecond == nil)
+    #expect(systemLayer.averageNetworkSendBytesPerSecond == nil)
+}
+
+@MainActor
+@Test func systemLayerNetworkUsesTheLatestContinuousAvailableSegment() async throws {
+    let store = MonitorStore()
+    let baseDate = Date(timeIntervalSinceReferenceDate: 2_440)
+
+    for index in 0..<4 {
+        let processNetworkAvailable = index != 0 && index != 2
+        let processNetworkCounter: UInt64? = processNetworkAvailable
+            ? UInt64(index) * 1_000
+            : nil
+        store.ingest(SystemSnapshot(
+            date: baseDate.addingTimeInterval(Double(index)),
+            uptime: Double(index + 1),
+            processes: [RawProcessCounter(
+                pid: 49,
+                startAbstime: 14,
+                name: "network-segment-fixture",
+                path: "/usr/bin/network-segment-fixture",
+                cpuTimeNanoseconds: UInt64(index) * 100_000_000,
+                bytesRead: 0,
+                bytesWritten: UInt64(index) * 100,
+                networkBytesReceived: processNetworkCounter,
+                networkBytesSent: processNetworkCounter
+            )],
+            disks: [RawDiskCounter(
+                registryID: 105,
+                name: "Physical Disk",
+                bytesRead: 0,
+                bytesWritten: UInt64(index) * 1_000,
+                readOperations: 0,
+                writeOperations: UInt64(index),
+                capacity: 1_000_000,
+                bsdName: "disk105",
+                isPhysical: true
+            )],
+            volumes: [],
+            cpuUserTicks: UInt64(index) * 10,
+            cpuSystemTicks: 0,
+            cpuNiceTicks: 0,
+            cpuIdleTicks: UInt64(index) * 90,
+            networkInterfaces: [RawNetworkInterfaceCounter(
+                index: 1,
+                name: "en0",
+                bytesReceived: UInt64(index) * 10_000,
+                bytesSent: UInt64(index) * 5_000
+            )],
+            cpuStatsAvailable: true,
+            networkInterfacesAvailable: true,
+            processNetworkAvailable: processNetworkAvailable
+        ))
+        await store.waitForPendingProcessSummary()
+
+        if index == 2 {
+            let systemLayer = try #require(store.systemLayerActivity)
+            #expect(systemLayer.averageNetworkReceiveBytesPerSecond == nil)
+            #expect(systemLayer.averageNetworkSendBytesPerSecond == nil)
+        }
+    }
+
+    let recovered = try #require(store.systemLayerActivity)
+    #expect(recovered.averageNetworkReceiveBytesPerSecond == 10_000)
+    #expect(recovered.averageNetworkSendBytesPerSecond == 5_000)
+}
+
+@MainActor
+@Test func systemLayerClampsOverAttributionWithoutUnsignedUnderflow() async throws {
+    let store = MonitorStore(
+        sampleProvider: { preconditionFailure("Unused test sample provider") },
+        logicalProcessorCount: 1
+    )
+    let baseDate = Date(timeIntervalSinceReferenceDate: 2_450)
+
+    for index in 0..<2 {
+        store.ingest(SystemSnapshot(
+            date: baseDate.addingTimeInterval(Double(index)),
+            uptime: Double(index + 1),
+            processes: [RawProcessCounter(
+                pid: 48,
+                startAbstime: 13,
+                name: "over-attribution-fixture",
+                path: "/usr/bin/over-attribution-fixture",
+                cpuTimeNanoseconds: UInt64(index) * 2_000_000_000,
+                bytesRead: 0,
+                bytesWritten: UInt64(index) * 2_000,
+                networkBytesReceived: UInt64(index) * 2_000,
+                networkBytesSent: UInt64(index) * 2_000
+            )],
+            disks: [RawDiskCounter(
+                registryID: 103,
+                name: "Physical Disk",
+                bytesRead: 0,
+                bytesWritten: UInt64(index) * 1_000,
+                readOperations: 0,
+                writeOperations: UInt64(index),
+                capacity: 1_000_000,
+                bsdName: "disk103",
+                isPhysical: true
+            )],
+            volumes: [],
+            cpuUserTicks: UInt64(index),
+            cpuSystemTicks: 0,
+            cpuNiceTicks: 0,
+            cpuIdleTicks: UInt64(index),
+            networkInterfaces: [RawNetworkInterfaceCounter(
+                index: 1,
+                name: "en0",
+                bytesReceived: UInt64(index) * 1_000,
+                bytesSent: UInt64(index) * 1_000
+            )],
+            cpuStatsAvailable: true,
+            networkInterfacesAvailable: true,
+            processNetworkAvailable: true
+        ))
+        await store.waitForPendingProcessSummary()
+    }
+
+    let systemLayer = try #require(store.systemLayerActivity)
+    #expect(systemLayer.currentCPUPercent == 0)
+    #expect(systemLayer.totalWriteBytes == 0)
+    #expect(systemLayer.currentWriteBytesPerSecond == 0)
+    #expect(systemLayer.peakWriteBytesPerSecond == 0)
+    #expect(systemLayer.averageNetworkReceiveBytesPerSecond == 0)
+    #expect(systemLayer.averageNetworkSendBytesPerSecond == 0)
 }
 
 @MainActor
@@ -966,6 +1267,7 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(store.points.isEmpty)
     #expect(store.systemPoints.isEmpty)
     #expect(store.processes.isEmpty)
+    #expect(store.systemLayerActivity == nil)
     #expect(store.disks.isEmpty)
     #expect(store.volumes.map(\.id) == ["volume-a"])
     #expect(store.lastUpdatedAt == nil)

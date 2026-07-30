@@ -45,6 +45,7 @@ struct OverviewView: View {
     @State private var selectedMetric: OverviewMetric = .disk
     @State private var frozenAt: Date?
     @State private var frozenProcesses: [ProcessActivity] = []
+    @State private var frozenSystemLayerActivity: SystemLayerActivity?
     @State private var processHoverCoordinator = ProcessHoverCoordinator()
 
     var body: some View {
@@ -52,7 +53,6 @@ struct OverviewView: View {
             LazyVStack(alignment: .leading, spacing: 24) {
                 overviewHeader
                 metricStrip
-                diskAttributionSummary
                 volumeIOSection
                 trendSection
                 Divider()
@@ -148,76 +148,6 @@ struct OverviewView: View {
         )
     }
 
-    private var diskAttributionSummary: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
-                diskAttributionIdentity
-                Spacer(minLength: 12)
-                diskAttributionResult
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                diskAttributionIdentity
-                diskAttributionResult
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 6))
-        .help(L10n.text("未归因部分可能来自采样间启动并退出的进程、内核或文件系统写回；不会猜测到具体应用。"))
-        .accessibilityElement(children: .combine)
-    }
-
-    private var diskAttributionIdentity: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "scope")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.orange)
-                .frame(width: 26, height: 26)
-                .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(L10n.text("进程写入归因"))
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                if store.isDiskAvailable, store.isProcessWriteAttributionAvailable {
-                    Text(L10n.format(
-                        "可见进程 %@ · 物理设备 %@",
-                        ByteRateFormatter.rate(store.currentAttributedProcessWriteRate),
-                        ByteRateFormatter.rate(store.currentWriteRate)
-                    ))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                } else {
-                    Text(L10n.text("正在建立同窗口写入基线"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var diskAttributionResult: some View {
-        if let coverage = store.currentProcessWriteCoverage {
-            HStack(spacing: 10) {
-                Text(L10n.format(
-                    "未归因 %@",
-                    ByteRateFormatter.rate(store.currentUnattributedWriteRate)
-                ))
-                .font(.system(.caption, design: .monospaced, weight: .semibold))
-                .foregroundStyle(store.currentUnattributedWriteRate > 0 ? .orange : .secondary)
-                .lineLimit(1)
-                Text(L10n.format("进程覆盖 %d%%", Int((coverage * 100).rounded())))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-        }
-    }
-
     private var trendSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionHeading("资源趋势", subtitle: trendSubtitle) {
@@ -267,7 +197,7 @@ struct OverviewView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(L10n.text("正在活动的应用"))
                         .font(.headline)
-                    Text(L10n.text("一个应用的磁盘、CPU 与网络行为汇总在同一处"))
+                    Text(L10n.text("应用与系统层的磁盘、CPU 与网络活动汇总在同一处"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -280,6 +210,7 @@ struct OverviewView: View {
 
             ProcessTable(
                 processes: displayedProcesses,
+                systemLayerActivity: displayedSystemLayerActivity,
                 selectedProcessID: selectedProcessID,
                 limit: 12,
                 hoverCoordinator: processHoverCoordinator,
@@ -319,6 +250,10 @@ struct OverviewView: View {
     private var displayedProcesses: [ProcessActivity] {
         let source = store.isFollowingLive ? store.processes : frozenProcesses
         return source.filter { $0.memberCount > 0 }
+    }
+
+    private var displayedSystemLayerActivity: SystemLayerActivity? {
+        store.isFollowingLive ? store.systemLayerActivity : frozenSystemLayerActivity
     }
 
     private func presentProcess(_ process: ProcessActivity) {
@@ -365,10 +300,12 @@ struct OverviewView: View {
         if store.isFollowingLive {
             frozenAt = Date()
             frozenProcesses = store.processes
+            frozenSystemLayerActivity = store.systemLayerActivity
             store.isFollowingLive = false
         } else {
             frozenAt = nil
             frozenProcesses = []
+            frozenSystemLayerActivity = nil
             store.isFollowingLive = true
         }
     }
@@ -479,6 +416,7 @@ struct ProcessHoverPresentation {
 final class ProcessHoverCoordinator {
     var presentation: ProcessHoverPresentation?
     var frozenProcesses: [ProcessActivity]?
+    var frozenSystemLayerActivity: SystemLayerActivity?
     private(set) var interaction = ProcessHoverInteractionState()
 
     @ObservationIgnored private var pendingShowTask: Task<Void, Never>?
@@ -488,15 +426,21 @@ final class ProcessHoverCoordinator {
         interaction.activeProcessID
     }
 
-    func tableHoverChanged(_ isHovered: Bool, processes: [ProcessActivity]) {
+    func tableHoverChanged(
+        _ isHovered: Bool,
+        processes: [ProcessActivity],
+        systemLayerActivity: SystemLayerActivity?
+    ) {
         if isHovered {
             if frozenProcesses == nil {
                 frozenProcesses = processes
+                frozenSystemLayerActivity = systemLayerActivity
             }
         } else if let activeProcessID {
             endHover(for: activeProcessID)
         } else if presentation == nil {
             frozenProcesses = nil
+            frozenSystemLayerActivity = nil
         }
     }
 
@@ -545,6 +489,7 @@ final class ProcessHoverCoordinator {
                 else { return }
                 self.presentation = nil
                 self.frozenProcesses = nil
+                self.frozenSystemLayerActivity = nil
             }
         }
     }
@@ -554,6 +499,7 @@ final class ProcessHoverCoordinator {
         interaction.suppressUntilExit(processID)
         presentation = nil
         frozenProcesses = nil
+        frozenSystemLayerActivity = nil
     }
 
     func clearForSelection() {
@@ -561,6 +507,7 @@ final class ProcessHoverCoordinator {
         interaction.clearForSelection()
         presentation = nil
         frozenProcesses = nil
+        frozenSystemLayerActivity = nil
     }
 
     func popoverDismissed(for processID: ProcessActivity.ID) {
@@ -581,7 +528,11 @@ final class ProcessHoverCoordinator {
 }
 
 struct ProcessTable: View {
+    static let defaultSortKey: ProcessSortKey = .writeCurrent
+    static let defaultSortAscending = false
+
     let processes: [ProcessActivity]
+    var systemLayerActivity: SystemLayerActivity?
     let selectedProcessID: ProcessActivity.ID?
     var limit: Int? = nil
     var scrollAxes: Axis.Set = .horizontal
@@ -590,10 +541,35 @@ struct ProcessTable: View {
     var isLoading = false
     var emptyStateTitle: String?
     var emptyStateSymbol = "waveform.path.ecg"
-    @State private var sortKey: ProcessSortKey = .cpuCurrent
-    @State private var ascending = false
+    @State private var sortKey: ProcessSortKey = Self.defaultSortKey
+    @State private var ascending = Self.defaultSortAscending
     @State private var columnWidths = ProcessColumnWidths.load()
     @State private var availableTableWidth: CGFloat = 0
+    @State private var isSystemLayerExplanationPresented = false
+
+    init(
+        processes: [ProcessActivity],
+        systemLayerActivity: SystemLayerActivity? = nil,
+        selectedProcessID: ProcessActivity.ID?,
+        limit: Int? = nil,
+        scrollAxes: Axis.Set = .horizontal,
+        hoverCoordinator: ProcessHoverCoordinator,
+        onSelect: @escaping (ProcessActivity) -> Void,
+        isLoading: Bool = false,
+        emptyStateTitle: String? = nil,
+        emptyStateSymbol: String = "waveform.path.ecg"
+    ) {
+        self.processes = processes
+        self.systemLayerActivity = systemLayerActivity
+        self.selectedProcessID = selectedProcessID
+        self.limit = limit
+        self.scrollAxes = scrollAxes
+        self.hoverCoordinator = hoverCoordinator
+        self.onSelect = onSelect
+        self.isLoading = isLoading
+        self.emptyStateTitle = emptyStateTitle
+        self.emptyStateSymbol = emptyStateSymbol
+    }
 
     var body: some View {
         ScrollView(scrollAxes) {
@@ -603,9 +579,9 @@ struct ProcessTable: View {
                     .frame(height: 34)
                 Divider()
 
-                if isLoading, processSource.isEmpty {
+                if isLoading, activeRows.isEmpty {
                     loadingRows
-                } else if processSource.isEmpty {
+                } else if activeRows.isEmpty {
                     ContentUnavailableView(
                         emptyStateTitle ?? L10n.text("正在建立应用基线"),
                         systemImage: emptyStateSymbol
@@ -614,42 +590,8 @@ struct ProcessTable: View {
                         .frame(minHeight: 180)
                 } else {
                     LazyVStack(spacing: 0) {
-                        ForEach(visibleSortedProcesses) { process in
-                            Button {
-                                select(process)
-                            } label: {
-                                processColumns(process: process)
-                                    .padding(.horizontal, 14)
-                                    .frame(height: 56)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(
-                                ProcessRowButtonStyle(
-                                    isSelected: selectedProcessID == process.id,
-                                    isHovered: hoverCoordinator.activeProcessID == process.id
-                                )
-                            )
-                            .frame(height: 56)
-                            .accessibilityLabel(process.localizedDisplayName)
-                            .accessibilityValue(accessibilitySummary(for: process))
-                            .accessibilityHint(L10n.text("按下打开详情"))
-                            .onContinuousHover { phase in
-                                updateContinuousHover(for: process, phase: phase)
-                            }
-                            .background {
-                                ProcessRowMouseDownMonitor(
-                                    isEnabled: hoverCoordinator.presentation?.process.id == process.id,
-                                    onMouseDown: { select(process) }
-                                )
-                            }
-                            .popover(
-                                isPresented: popoverBinding(for: process.id),
-                                attachmentAnchor: .rect(.bounds)
-                            ) {
-                                ProcessHoverCard(
-                                    process: hoverCoordinator.presentation?.process ?? process
-                                )
-                            }
+                        ForEach(visibleSortedRows) { row in
+                            activeRow(row)
                             Divider().padding(.leading, 8)
                         }
                     }
@@ -672,10 +614,70 @@ struct ProcessTable: View {
             availableTableWidth = width
         }
         .onHover { isHovered in
-            hoverCoordinator.tableHoverChanged(isHovered, processes: processes)
+            hoverCoordinator.tableHoverChanged(
+                isHovered,
+                processes: processes,
+                systemLayerActivity: systemLayerActivity
+            )
         }
         .onDisappear {
             hoverCoordinator.reset()
+        }
+    }
+
+    @ViewBuilder
+    private func activeRow(_ row: ActiveAppRow) -> some View {
+        switch row {
+        case let .process(process):
+            Button {
+                select(process)
+            } label: {
+                processColumns(process: process)
+                    .padding(.horizontal, 14)
+                    .frame(height: 56)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(ProcessRowButtonStyle(
+                isSelected: selectedProcessID == process.id,
+                isHovered: hoverCoordinator.activeProcessID == process.id
+            ))
+            .frame(height: 56)
+            .accessibilityLabel(process.localizedDisplayName)
+            .accessibilityValue(accessibilitySummary(for: process))
+            .accessibilityHint(L10n.text("按下打开详情"))
+            .onContinuousHover { phase in
+                updateContinuousHover(for: process, phase: phase)
+            }
+            .background {
+                ProcessRowMouseDownMonitor(
+                    isEnabled: hoverCoordinator.presentation?.process.id == process.id,
+                    onMouseDown: { select(process) }
+                )
+            }
+            .popover(
+                isPresented: popoverBinding(for: process.id),
+                attachmentAnchor: .rect(.bounds)
+            ) {
+                ProcessHoverCard(process: hoverCoordinator.presentation?.process ?? process)
+            }
+        case let .systemLayer(activity):
+            Button {
+                isSystemLayerExplanationPresented.toggle()
+            } label: {
+                systemLayerColumns(activity)
+                    .padding(.horizontal, 14)
+                    .frame(height: 56)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .frame(height: 56)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.42))
+            .popover(isPresented: $isSystemLayerExplanationPresented) {
+                SystemLayerExplanationView()
+            }
+            .accessibilityLabel(L10n.text("macOS 与存储层"))
+            .accessibilityValue(accessibilitySummary(for: activity))
+            .accessibilityHint(L10n.text("按下查看统计口径"))
         }
     }
 
@@ -748,6 +750,49 @@ struct ProcessTable: View {
             }
         }
         .font(.callout)
+    }
+
+    private func systemLayerColumns(_ activity: SystemLayerActivity) -> some View {
+        let widths = displayedColumnWidths
+        return HStack(spacing: 0) {
+            HStack(spacing: 9) {
+                Image(systemName: "internaldrive")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 26, height: 26)
+                    .background(.quaternary.opacity(0.65), in: RoundedRectangle(cornerRadius: 6))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(L10n.text("macOS 与存储层"))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(L10n.text("系统服务、文件系统及无法进一步拆分的活动"))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(width: widths[.application], alignment: .leading)
+
+            columnGap()
+            optionalMetric(activity.currentCPUPercent.map(PercentFormatter.cpu), width: widths[.cpu])
+            columnGap()
+            optionalMetric(activity.totalWriteBytes.map(ByteRateFormatter.bytes), width: widths[.writeTotal])
+            columnGap()
+            optionalMetric(activity.currentWriteBytesPerSecond.map(ByteRateFormatter.rate), width: widths[.writeCurrent])
+            columnGap()
+            optionalMetric(activity.peakWriteBytesPerSecond.map(ByteRateFormatter.rate), width: widths[.writePeak])
+            columnGap()
+            optionalMetric(activity.averageNetworkReceiveBytesPerSecond.map(ByteRateFormatter.rate), width: widths[.networkDownload])
+            columnGap()
+            optionalMetric(activity.averageNetworkSendBytesPerSecond.map(ByteRateFormatter.rate), width: widths[.networkUpload])
+            columnGap()
+        }
+        .font(.callout)
+    }
+
+    private func optionalMetric(_ value: String?, width: CGFloat) -> some View {
+        metricText(value ?? L10n.text("缺口"), width: width)
+            .foregroundStyle(value == nil ? .secondary : .primary)
     }
 
     private var loadingRows: some View {
@@ -872,48 +917,69 @@ struct ProcessTable: View {
         .accessibilityLabel(L10n.format("按%@排序", L10n.text(title)))
     }
 
-    private var sortedProcesses: [ProcessActivity] {
-        processSource.sorted { lhs, rhs in
-            switch sortKey {
-            case .name:
-                let comparison = lhs.localizedDisplayName.localizedStandardCompare(rhs.localizedDisplayName)
-                if comparison == .orderedSame { return lhs.id < rhs.id }
-                return ascending ? comparison == .orderedAscending : comparison == .orderedDescending
-            case .cpuCurrent:
-                return sortsBefore(lhs, rhs, value: \ProcessActivity.currentCPUPercent)
-            case .writeTotal:
-                return sortsBefore(lhs, rhs, value: \ProcessActivity.totalWriteBytes)
-            case .writeCurrent:
-                return sortsBefore(lhs, rhs, value: \ProcessActivity.currentWriteBytesPerSecond)
-            case .writePeak:
-                return sortsBefore(lhs, rhs, value: \ProcessActivity.peakWriteBytesPerSecond)
-            case .networkDownload:
-                return sortsBefore(lhs, rhs, value: \ProcessActivity.averageNetworkReceiveBytesPerSecond)
-            case .networkUpload:
-                return sortsBefore(lhs, rhs, value: \ProcessActivity.averageNetworkSendBytesPerSecond)
+    private var activeRows: [ActiveAppRow] {
+        var rows = processSource.map(ActiveAppRow.process)
+        if let systemLayerSource { rows.append(.systemLayer(systemLayerSource)) }
+        return rows
+    }
+
+    private var systemLayerSource: SystemLayerActivity? {
+        hoverCoordinator.frozenProcesses == nil
+            ? systemLayerActivity
+            : hoverCoordinator.frozenSystemLayerActivity
+    }
+
+    private var visibleSortedRows: [ActiveAppRow] {
+        Self.visibleRows(activeRows, limit: limit, sortKey: sortKey, ascending: ascending)
+    }
+
+    static func visibleRows(
+        _ rows: [ActiveAppRow],
+        limit: Int?,
+        sortKey: ProcessSortKey,
+        ascending: Bool
+    ) -> [ActiveAppRow] {
+        let sorted = rows.sorted { lhs, rhs in
+            if sortKey == .name {
+                let comparison = lhs.displayName.localizedStandardCompare(rhs.displayName)
+                if comparison != .orderedSame {
+                    return ascending
+                        ? comparison == .orderedAscending
+                        : comparison == .orderedDescending
+                }
+                return lhs.id < rhs.id
+            }
+
+            switch (lhs.metric(for: sortKey), rhs.metric(for: sortKey)) {
+            case let (left?, right?) where left != right:
+                return ascending ? left < right : left > right
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            default:
+                let comparison = lhs.displayName.localizedStandardCompare(rhs.displayName)
+                if comparison != .orderedSame { return comparison == .orderedAscending }
+                return lhs.id < rhs.id
             }
         }
-    }
 
-    private func sortsBefore<Value: Comparable>(
-        _ lhs: ProcessActivity,
-        _ rhs: ProcessActivity,
-        value: KeyPath<ProcessActivity, Value>
-    ) -> Bool {
-        let leftValue = lhs[keyPath: value]
-        let rightValue = rhs[keyPath: value]
-        if leftValue != rightValue {
-            return ascending ? leftValue < rightValue : leftValue > rightValue
+        guard let limit, limit >= 0, sorted.count > limit else { return sorted }
+        guard limit > 0, let systemLayer = sorted.first(where: \.isSystemLayer) else {
+            return Array(sorted.prefix(limit))
         }
-
-        let nameComparison = lhs.localizedDisplayName.localizedStandardCompare(rhs.localizedDisplayName)
-        if nameComparison != .orderedSame { return nameComparison == .orderedAscending }
-        return lhs.id < rhs.id
-    }
-
-    private var visibleSortedProcesses: [ProcessActivity] {
-        guard let limit else { return sortedProcesses }
-        return Array(sortedProcesses.prefix(limit))
+        var selected = Array(sorted.prefix(limit))
+        if !selected.contains(where: \.isSystemLayer) {
+            selected.removeLast()
+            selected.append(systemLayer)
+            selected.sort { lhs, rhs in
+                guard let leftIndex = sorted.firstIndex(where: { $0.id == lhs.id }),
+                      let rightIndex = sorted.firstIndex(where: { $0.id == rhs.id })
+                else { return lhs.id < rhs.id }
+                return leftIndex < rightIndex
+            }
+        }
+        return selected
     }
 
     private var processSource: [ProcessActivity] {
@@ -962,6 +1028,76 @@ struct ProcessTable: View {
             "\(L10n.text("读取")): \(ByteRateFormatter.rate(process.currentReadBytesPerSecond))",
             "\(L10n.text("写入")): \(ByteRateFormatter.rate(process.currentWriteBytesPerSecond))"
         ].joined(separator: ". ")
+    }
+
+    private func accessibilitySummary(for activity: SystemLayerActivity) -> String {
+        [
+            "\(L10n.text("CPU · 5 秒")): \(activity.currentCPUPercent.map(PercentFormatter.cpu) ?? L10n.text("缺口"))",
+            "\(L10n.text("写入总量")): \(activity.totalWriteBytes.map(ByteRateFormatter.bytes) ?? L10n.text("缺口"))",
+            "\(L10n.text("当前写入")): \(activity.currentWriteBytesPerSecond.map(ByteRateFormatter.rate) ?? L10n.text("缺口"))",
+            "\(L10n.text("写入峰值")): \(activity.peakWriteBytesPerSecond.map(ByteRateFormatter.rate) ?? L10n.text("缺口"))",
+            "\(L10n.text("下载平均")): \(activity.averageNetworkReceiveBytesPerSecond.map(ByteRateFormatter.rate) ?? L10n.text("缺口"))",
+            "\(L10n.text("上传平均")): \(activity.averageNetworkSendBytesPerSecond.map(ByteRateFormatter.rate) ?? L10n.text("缺口"))"
+        ].joined(separator: ". ")
+    }
+}
+
+enum ActiveAppRow: Identifiable {
+    case process(ProcessActivity)
+    case systemLayer(SystemLayerActivity)
+
+    var id: String {
+        switch self {
+        case let .process(process): process.id
+        case let .systemLayer(activity): activity.id
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case let .process(process): process.localizedDisplayName
+        case .systemLayer: L10n.text("macOS 与存储层")
+        }
+    }
+
+    func metric(for key: ProcessSortKey) -> Double? {
+        switch (self, key) {
+        case (_, .name): nil
+        case let (.process(value), .cpuCurrent): value.currentCPUPercent
+        case let (.process(value), .writeTotal): Double(value.totalWriteBytes)
+        case let (.process(value), .writeCurrent): value.currentWriteBytesPerSecond
+        case let (.process(value), .writePeak): value.peakWriteBytesPerSecond
+        case let (.process(value), .networkDownload): value.isNetworkAvailable ? value.averageNetworkReceiveBytesPerSecond : nil
+        case let (.process(value), .networkUpload): value.isNetworkAvailable ? value.averageNetworkSendBytesPerSecond : nil
+        case let (.systemLayer(value), .cpuCurrent): value.currentCPUPercent
+        case let (.systemLayer(value), .writeTotal): value.totalWriteBytes.map(Double.init)
+        case let (.systemLayer(value), .writeCurrent): value.currentWriteBytesPerSecond
+        case let (.systemLayer(value), .writePeak): value.peakWriteBytesPerSecond
+        case let (.systemLayer(value), .networkDownload): value.averageNetworkReceiveBytesPerSecond
+        case let (.systemLayer(value), .networkUpload): value.averageNetworkSendBytesPerSecond
+        }
+    }
+
+    var isSystemLayer: Bool {
+        id == SystemLayerActivity.stableID
+    }
+}
+
+private struct SystemLayerExplanationView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(L10n.text("macOS 与存储层"), systemImage: "internaldrive")
+                .font(.headline)
+            Text(L10n.text("汇总整机与可见应用之间的采样差值，包括受保护的系统服务、文件系统写回及存储层活动。"))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(L10n.text("只有可比较的采样才显示数值；缺口不会被当作 0。"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .frame(width: 340, alignment: .leading)
     }
 }
 
@@ -1191,7 +1327,7 @@ private struct ProcessColumnResizeHandle: View {
     }
 }
 
-private enum ProcessSortKey {
+enum ProcessSortKey: Equatable {
     case name
     case cpuCurrent
     case writeTotal

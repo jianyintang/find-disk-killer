@@ -32,6 +32,12 @@
 "应用 I/O 当前为全盘合计" = "Les I/O des apps couvrent actuellement tous les disques";
 "正在活动的应用" = "Apps actives";
 "一个应用的磁盘、CPU 与网络行为汇总在同一处" = "L'activité disque, CPU et réseau est regroupée par app";
+"应用与系统层的磁盘、CPU 与网络活动汇总在同一处" = "Activité disque, CPU et réseau des apps et du système au même endroit";
+"macOS 与存储层" = "macOS et couche de stockage";
+"系统服务、文件系统及无法进一步拆分的活动" = "Services système, système de fichiers et activité non décomposable";
+"汇总整机与可见应用之间的采样差值，包括受保护的系统服务、文件系统写回及存储层活动。" = "Différence mesurée entre le système et les apps visibles, dont les services protégés, l’écriture différée et la couche de stockage.";
+"只有可比较的采样才显示数值；缺口不会被当作 0。" = "Seuls les échantillons comparables sont affichés ; une lacune ne vaut jamais zéro.";
+"按下查看统计口径" = "Appuyer pour afficher les détails de mesure";
 "点击表头排序 · 显示前 12 个" = "Cliquez sur une colonne pour trier · 12 premiers";
 "发现持续磁盘活动" = "Activité disque soutenue détectée";
 "采集已停止" = "Collecte arrêtée";

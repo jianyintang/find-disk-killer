@@ -10,6 +10,7 @@ public final class MonitorStore {
     public private(set) var disks: [DiskActivity] = []
     public private(set) var volumes: [VolumeInfo] = []
     public private(set) var processes: [ProcessActivity] = []
+    public private(set) var systemLayerActivity: SystemLayerActivity?
     public private(set) var health: MonitorHealth = .starting
     public private(set) var isCollecting = false
     public private(set) var startedAt: Date?
@@ -184,6 +185,23 @@ public final class MonitorStore {
         let hasBaseline: Bool
     }
 
+    private struct ProcessIngestResult {
+        let applications: [HistoryApplicationSample]
+        let cpuTimeNanoseconds: UInt64?
+        let bytesWritten: UInt64?
+        let networkBytesReceived: UInt64?
+        let networkBytesSent: UInt64?
+    }
+
+    private struct SystemLayerSample: Sendable {
+        let timestamp: Date
+        let duration: TimeInterval
+        let cpuPercent: Double?
+        let bytesWritten: UInt64?
+        let networkBytesReceived: UInt64?
+        let networkBytesSent: UInt64?
+    }
+
     private struct GroupRates: Sendable {
         var read = 0.0
         var write = 0.0
@@ -207,6 +225,7 @@ public final class MonitorStore {
     private var networkWasAvailable = false
     private var groupHistory: [String: [ProcessRateSample]] = [:]
     private var processWriteTotals: [ProcessWriteTotalSample] = []
+    private var systemLayerHistory: [SystemLayerSample] = []
     private var groupMetadata: [String: GroupMetadata] = [:]
     private var elevatedSince: Date?
     private var samplingTask: Task<Void, Never>?
@@ -217,21 +236,25 @@ public final class MonitorStore {
     private var historyRecordingTask: Task<Void, Never>?
     private let sampleProvider: @Sendable () async -> SystemSnapshot
     private let historyIdentityProvider: any HistoryIdentityProviding
+    private let logicalProcessorCount: Int
 
     public init(historyRecorder: HistoryRecorder? = nil) {
         self.historyRecorder = historyRecorder
         sampleProvider = { await SystemSampler.shared.collect() }
         historyIdentityProvider = HistoryIdentityProvider.shared
+        logicalProcessorCount = max(1, ProcessInfo.processInfo.activeProcessorCount)
     }
 
     init(
         historyRecorder: HistoryRecorder? = nil,
         sampleProvider: @escaping @Sendable () async -> SystemSnapshot,
-        historyIdentityProvider: any HistoryIdentityProviding = HistoryIdentityProvider.shared
+        historyIdentityProvider: any HistoryIdentityProviding = HistoryIdentityProvider.shared,
+        logicalProcessorCount: Int = ProcessInfo.processInfo.activeProcessorCount
     ) {
         self.historyRecorder = historyRecorder
         self.sampleProvider = sampleProvider
         self.historyIdentityProvider = historyIdentityProvider
+        self.logicalProcessorCount = max(1, logicalProcessorCount)
     }
 
     public func attachHistoryRecorder(_ recorder: HistoryRecorder) {
@@ -299,6 +322,7 @@ public final class MonitorStore {
         priorDisks.removeAll(keepingCapacity: true)
         recentDiskSamples.removeAll(keepingCapacity: true)
         processWriteTotals.removeAll(keepingCapacity: true)
+        systemLayerHistory.removeAll(keepingCapacity: true)
         priorUptime = nil
         priorSystemTotals = nil
         priorNetworkInterfaces.removeAll(keepingCapacity: true)
@@ -310,6 +334,7 @@ public final class MonitorStore {
         isSystemNetworkAvailable = false
         isProcessNetworkAvailable = false
         isProcessWriteAttributionAvailable = false
+        systemLayerActivity = nil
     }
 
     public func flushHistory() async {
@@ -330,8 +355,10 @@ public final class MonitorStore {
         recentDiskSamples.removeAll(keepingCapacity: true)
         groupHistory.removeAll(keepingCapacity: true)
         processWriteTotals.removeAll(keepingCapacity: true)
+        systemLayerHistory.removeAll(keepingCapacity: true)
         groupMetadata.removeAll(keepingCapacity: true)
         processes.removeAll(keepingCapacity: true)
+        systemLayerActivity = nil
         selectedCoverage = 0
         visibleProcessCount = 0
         activeApplicationCount = 0
@@ -363,11 +390,21 @@ public final class MonitorStore {
 
         let diskHistory = ingestDisks(snapshot.disks, at: snapshot.date, duration: duration)
         let systemHistory = ingestSystem(snapshot, duration: duration)
-        let applicationHistory = ingestProcesses(
+        let processResult = ingestProcesses(
             snapshot.processes,
             at: snapshot.date,
             duration: duration,
             hasBaseline: hasPriorSample
+        )
+        ingestSystemLayer(
+            at: snapshot.date,
+            duration: duration,
+            hasBaseline: hasPriorSample,
+            diskBytesWritten: isDiskAvailable ? diskHistory.write : nil,
+            systemCPUPercent: systemHistory.cpuPercent,
+            systemNetworkReceived: isSystemNetworkAvailable ? systemHistory.networkReceive : nil,
+            systemNetworkSent: isSystemNetworkAvailable ? systemHistory.networkSend : nil,
+            processes: processResult
         )
         trimHistoryIfNeeded(at: snapshot.date)
         scheduleProcessSummaryRebuild(at: snapshot.date, priority: .utility)
@@ -388,7 +425,7 @@ public final class MonitorStore {
                 networkReceiveBytes: systemHistory.networkReceive,
                 networkSendBytes: systemHistory.networkSend,
                 networkStatsAvailable: isSystemNetworkAvailable,
-                applications: applicationHistory,
+                applications: processResult.applications,
                 devices: diskHistory.devices
             )
             let pending = historyRecordingTask
@@ -591,7 +628,7 @@ public final class MonitorStore {
         at date: Date,
         duration: TimeInterval,
         hasBaseline: Bool
-    ) -> [HistoryApplicationSample] {
+    ) -> ProcessIngestResult {
         var groupedDeltas: [String: (
             read: UInt64,
             written: UInt64,
@@ -604,6 +641,9 @@ public final class MonitorStore {
         var liveKeys: Set<ProcessKey> = []
         var livePIDsByGroup: [String: Set<Int32>] = [:]
         var liveSessionsByGroup: [String: Set<ProcessSession>] = [:]
+        var hasComparableCPU = hasBaseline
+        var hasComparableWrite = hasBaseline
+        var hasComparableNetwork = hasBaseline && isProcessNetworkAvailable
 
         for counter in counters {
             let key = ProcessKey(pid: counter.pid, startAbstime: counter.startAbstime)
@@ -641,7 +681,20 @@ public final class MonitorStore {
             )
             groupMetadata[classification.groupID] = metadata
 
-            guard let prior else { continue }
+            guard let prior else {
+                // A newly observed process has no delta yet. Its activity remains in the
+                // system-layer residual until the next sample establishes attribution.
+                // Only malformed supplied counters make the source incomparable.
+                if current.cpuTimeNanoseconds == nil { hasComparableCPU = false }
+                if current.written == nil { hasComparableWrite = false }
+                if counter.networkBytesReceived != nil, current.networkReceived == nil {
+                    hasComparableNetwork = false
+                }
+                if counter.networkBytesSent != nil, current.networkSent == nil {
+                    hasComparableNetwork = false
+                }
+                continue
+            }
             let readDeltaValue = Self.validProcessDelta(current.read, prior.read)
             let writeDeltaValue = Self.validProcessDelta(current.written, prior.written)
             let cpuDeltaValue = Self.validProcessDelta(
@@ -664,6 +717,8 @@ public final class MonitorStore {
             if readDeltaValue == nil { unavailableMetrics.insert(.read) }
             if writeDeltaValue == nil { unavailableMetrics.insert(.write) }
             if cpuDeltaValue == nil { unavailableMetrics.insert(.cpu) }
+            if writeDeltaValue == nil { hasComparableWrite = false }
+            if cpuDeltaValue == nil { hasComparableCPU = false }
             if Self.networkCounterHasGap(
                 rawCurrent: counter.networkBytesReceived,
                 current: current.networkReceived,
@@ -671,6 +726,7 @@ public final class MonitorStore {
                 delta: receivedDeltaValue
             ) {
                 unavailableMetrics.insert(.networkReceive)
+                hasComparableNetwork = false
             }
             if Self.networkCounterHasGap(
                 rawCurrent: counter.networkBytesSent,
@@ -679,6 +735,7 @@ public final class MonitorStore {
                 delta: sentDeltaValue
             ) {
                 unavailableMetrics.insert(.networkSend)
+                hasComparableNetwork = false
             }
             let hasActivity = readDelta > 0 || writeDelta > 0 || cpuDelta > 0
                 || receivedDelta > 0 || sentDelta > 0
@@ -759,7 +816,8 @@ public final class MonitorStore {
         }
         isProcessWriteAttributionAvailable = processWriteTotals.contains { $0.hasBaseline }
 
-        return groupedDeltas.compactMap { groupID, delta in
+        let applications: [HistoryApplicationSample] = groupedDeltas.compactMap {
+            groupID, delta -> HistoryApplicationSample? in
             guard let metadata = groupMetadata[groupID] else { return nil }
             return HistoryApplicationSample(
                 identity: historyIdentityProvider.applicationIdentity(
@@ -777,6 +835,65 @@ public final class MonitorStore {
                 unavailableMetrics: delta.unavailableMetrics
             )
         }
+        let totals = groupedDeltas.values.reduce(
+            (cpu: UInt64(0), write: UInt64(0), received: UInt64(0), sent: UInt64(0))
+        ) { partial, delta in
+            (
+                Self.addingClamped(partial.cpu, delta.cpu),
+                Self.addingClamped(partial.write, delta.written),
+                Self.addingClamped(partial.received, delta.networkReceived),
+                Self.addingClamped(partial.sent, delta.networkSent)
+            )
+        }
+        return ProcessIngestResult(
+            applications: applications,
+            cpuTimeNanoseconds: hasComparableCPU ? totals.cpu : nil,
+            bytesWritten: hasComparableWrite ? totals.write : nil,
+            networkBytesReceived: hasComparableNetwork ? totals.received : nil,
+            networkBytesSent: hasComparableNetwork ? totals.sent : nil
+        )
+    }
+
+    private func ingestSystemLayer(
+        at date: Date,
+        duration: TimeInterval,
+        hasBaseline: Bool,
+        diskBytesWritten: UInt64?,
+        systemCPUPercent: Double?,
+        systemNetworkReceived: UInt64?,
+        systemNetworkSent: UInt64?,
+        processes: ProcessIngestResult
+    ) {
+        guard hasBaseline else { return }
+        let processCPUPercent = processes.cpuTimeNanoseconds.map {
+            Double($0) / max(0.1, duration) / 1_000_000_000 * 100
+        }
+        let hostCPUPercent = systemCPUPercent.map {
+            $0 * Double(logicalProcessorCount)
+        }
+        systemLayerHistory.append(SystemLayerSample(
+            timestamp: date,
+            duration: duration,
+            cpuPercent: Self.residual(hostCPUPercent, processCPUPercent),
+            bytesWritten: Self.residual(diskBytesWritten, processes.bytesWritten),
+            networkBytesReceived: Self.residual(
+                systemNetworkReceived, processes.networkBytesReceived
+            ),
+            networkBytesSent: Self.residual(systemNetworkSent, processes.networkBytesSent)
+        ))
+        if systemLayerHistory.count > 3_600 {
+            systemLayerHistory.removeFirst(systemLayerHistory.count - 3_600)
+        }
+    }
+
+    nonisolated private static func residual(_ total: UInt64?, _ attributed: UInt64?) -> UInt64? {
+        guard let total, let attributed else { return nil }
+        return total >= attributed ? total - attributed : 0
+    }
+
+    nonisolated private static func residual(_ total: Double?, _ attributed: Double?) -> Double? {
+        guard let total, let attributed, total.isFinite, attributed.isFinite else { return nil }
+        return max(0, total - attributed)
     }
 
     nonisolated private static func addingClamped(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
@@ -802,10 +919,13 @@ public final class MonitorStore {
         previous: UInt64?,
         delta: UInt64?
     ) -> Bool {
-        // nettop legitimately omits members without observations. Only a supplied
-        // counter that is invalid or cannot be rebased creates a metric gap.
+        // nettop legitimately omits members without observations and can start
+        // publishing a process after its process counters already have a baseline.
+        // That first valid value establishes a network baseline; it is not a gap.
         guard rawCurrent != nil else { return false }
-        return current == nil || previous == nil || delta == nil
+        guard current != nil else { return true }
+        guard previous != nil else { return false }
+        return delta == nil
     }
 
     nonisolated private static func addProcessMetric(
@@ -838,16 +958,26 @@ public final class MonitorStore {
         let generation = processSummaryGeneration
         let historySnapshot = groupHistory
         let metadataSnapshot = groupMetadata
+        let systemLayerSnapshot = systemLayerHistory
         let range = selectedRange
         let processNetworkAvailable = isProcessNetworkAvailable
-        let worker = Task.detached(priority: priority) {
-            Self.buildProcessSummaries(
+        let worker = Task<([ProcessActivity], SystemLayerActivity?)?, Never>.detached(
+            priority: priority
+        ) {
+            let processes = Self.buildProcessSummaries(
                 history: historySnapshot,
                 metadata: metadataSnapshot,
                 at: date,
                 range: range,
                 observedDuration: observedDuration,
                 processNetworkAvailable: processNetworkAvailable
+            )
+            guard let processes else { return nil }
+            return (
+                processes,
+                Self.buildSystemLayerSummary(
+                    history: systemLayerSnapshot, at: date, range: range
+                )
             )
         }
 
@@ -861,7 +991,8 @@ public final class MonitorStore {
                   generation == processSummaryGeneration,
                   let result
             else { return }
-            processes = result
+            processes = result.0
+            systemLayerActivity = result.1
             updateHealth(at: date)
         }
     }
@@ -1044,6 +1175,89 @@ public final class MonitorStore {
             .map { $0 }
     }
 
+    nonisolated private static func buildSystemLayerSummary(
+        history: [SystemLayerSample],
+        at date: Date,
+        range: SampleRange
+    ) -> SystemLayerActivity? {
+        let cutoff = date.addingTimeInterval(-range.seconds)
+        let startIndex = history.firstIndex { $0.timestamp >= cutoff } ?? history.endIndex
+        let selected = history[startIndex...]
+        guard !selected.isEmpty else { return nil }
+
+        let cpu = completeWindowAverage(
+            Array(selected), endingAt: date, value: \.cpuPercent
+        )
+        let currentWrite = completeWindowAverage(Array(selected), endingAt: date) { sample in
+            sample.bytesWritten.map { Double($0) / max(0.1, sample.duration) }
+        }
+        let writeValues = selected.compactMap(\.bytesWritten)
+        let writesComplete = writeValues.count == selected.count
+        let totalWrite = writesComplete
+            ? writeValues.reduce(UInt64(0), addingClamped)
+            : nil
+        let peakWrite = writesComplete
+            ? selected.compactMap { sample in
+                sample.bytesWritten.map { Double($0) / max(0.1, sample.duration) }
+            }.max()
+            : nil
+        let averageReceive = latestCompleteIntervalAverage(Array(selected)) {
+            $0.networkBytesReceived
+        }
+        let averageSend = latestCompleteIntervalAverage(Array(selected)) {
+            $0.networkBytesSent
+        }
+
+        return SystemLayerActivity(
+            currentCPUPercent: cpu,
+            totalWriteBytes: totalWrite,
+            currentWriteBytesPerSecond: currentWrite,
+            peakWriteBytesPerSecond: peakWrite,
+            averageNetworkReceiveBytesPerSecond: averageReceive,
+            averageNetworkSendBytesPerSecond: averageSend
+        )
+    }
+
+    nonisolated private static func completeWindowAverage(
+        _ samples: [SystemLayerSample],
+        endingAt end: Date,
+        value: (SystemLayerSample) -> Double?
+    ) -> Double? {
+        let windowStart = end.addingTimeInterval(-5)
+        var weightedTotal = 0.0
+        var observedDuration = 0.0
+        for sample in samples.reversed() {
+            let sampleEnd = min(sample.timestamp, end)
+            let sampleStart = sample.timestamp.addingTimeInterval(-max(0, sample.duration))
+            if sampleEnd <= windowStart { break }
+            let overlap = sampleEnd.timeIntervalSince(max(sampleStart, windowStart))
+            guard overlap > 0 else { continue }
+            guard let metric = value(sample) else { return nil }
+            weightedTotal += metric * overlap
+            observedDuration += overlap
+        }
+        return observedDuration > 0 ? weightedTotal / observedDuration : nil
+    }
+
+    nonisolated private static func latestCompleteIntervalAverage(
+        _ samples: [SystemLayerSample],
+        bytes: (SystemLayerSample) -> UInt64?
+    ) -> Double? {
+        var total = UInt64(0)
+        var duration = 0.0
+        for sample in samples.reversed() {
+            guard let value = bytes(sample) else {
+                // Missing leading samples are normal while the asynchronous process-network
+                // source establishes its first baseline. A missing latest sample is still a
+                // real current gap; after recovery, report only the new contiguous segment.
+                break
+            }
+            total = addingClamped(total, value)
+            duration += sample.duration
+        }
+        return duration > 0 ? Double(total) / duration : nil
+    }
+
     private func trimHistoryIfNeeded(at date: Date) {
         guard lastHistoryTrimAt.map({ date.timeIntervalSince($0) >= 60 }) ?? true else {
             return
@@ -1051,6 +1265,7 @@ public final class MonitorStore {
         lastHistoryTrimAt = date
         let cutoff = date.addingTimeInterval(-3_600)
         processWriteTotals.removeAll { $0.timestamp < cutoff }
+        systemLayerHistory.removeAll { $0.timestamp < cutoff }
         for groupID in groupHistory.keys {
             guard var history = groupHistory[groupID] else { continue }
             let firstValid = Self.firstSampleIndex(onOrAfter: cutoff, in: history)

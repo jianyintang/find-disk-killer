@@ -154,6 +154,36 @@ public struct ProcessActivity: Identifiable, Sendable {
     public let lastActivity: Date
 }
 
+public struct SystemLayerActivity: Identifiable, Sendable {
+    public static let stableID = "aggregate:macos-storage-layer"
+
+    public let id: String
+    public let currentCPUPercent: Double?
+    public let totalWriteBytes: UInt64?
+    public let currentWriteBytesPerSecond: Double?
+    public let peakWriteBytesPerSecond: Double?
+    public let averageNetworkReceiveBytesPerSecond: Double?
+    public let averageNetworkSendBytesPerSecond: Double?
+
+    public init(
+        id: String = Self.stableID,
+        currentCPUPercent: Double?,
+        totalWriteBytes: UInt64?,
+        currentWriteBytesPerSecond: Double?,
+        peakWriteBytesPerSecond: Double?,
+        averageNetworkReceiveBytesPerSecond: Double?,
+        averageNetworkSendBytesPerSecond: Double?
+    ) {
+        self.id = id
+        self.currentCPUPercent = currentCPUPercent
+        self.totalWriteBytes = totalWriteBytes
+        self.currentWriteBytesPerSecond = currentWriteBytesPerSecond
+        self.peakWriteBytesPerSecond = peakWriteBytesPerSecond
+        self.averageNetworkReceiveBytesPerSecond = averageNetworkReceiveBytesPerSecond
+        self.averageNetworkSendBytesPerSecond = averageNetworkSendBytesPerSecond
+    }
+}
+
 public struct ProcessSession: Hashable, Sendable {
     public let pid: Int32
     public let startAbstime: UInt64
