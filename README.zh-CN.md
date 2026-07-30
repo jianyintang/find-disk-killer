@@ -1,8 +1,8 @@
 <div align="center">
-  <img src="docs/assets/find-disk-killer-icon.png" width="136" height="136" alt="FindDiskKiller 应用图标">
+  <img src="docs/assets/find-disk-killer-icon.png" width="128" height="128" alt="FindDiskKiller 应用图标">
   <h1>FindDiskKiller</h1>
   <p><strong>看见是谁在持续使用你的磁盘。</strong></p>
-  <p>将应用磁盘 I/O、AI Agent 空间、文件活动和磁盘健康证据集中在一个原生 macOS 工作区中。</p>
+  <p>从应用磁盘 I/O 出发，沿着文件活动、AI Agent 空间与物理磁盘证据完成一次连贯排查。</p>
   <p>
     <a href="README.md">English</a> ·
     <a href="README.zh-CN.md">简体中文</a> ·
@@ -15,218 +15,140 @@
     <a href="README.pt-BR.md">Português (Brasil)</a> ·
     <a href="README.ru.md">Русский</a>
   </p>
-  <p><strong>macOS 14+ · Apple 芯片与 Intel · 本机处理 · 10 种界面语言</strong></p>
+  <p><strong>macOS 14+ · Apple silicon 与 Intel · 100% 本机处理</strong></p>
   <p>
-    <a href="https://finddiskkiller.com/zh-cn/download/">下载</a> ·
+    <a href="https://finddiskkiller.com/zh-cn/download/"><strong>下载 macOS 版</strong></a> ·
     <a href="https://finddiskkiller.com/zh-cn/">官网</a> ·
-    <a href="docs/find-disk-killer-product-and-technical-plan.md">产品模型</a> ·
-    <a href="SUPPORT.md">支持</a> ·
-    <a href="PRIVACY.md">隐私</a>
+    <a href="https://finddiskkiller.com/zh-cn/how-it-works/">工作原理</a> ·
+    <a href="PRIVACY.md">隐私</a> ·
+    <a href="SUPPORT.md">支持</a>
   </p>
 </div>
 
 ---
 
+<a href="docs/assets/screenshots/overview-sustained-activity.webp">
+  <img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="FindDiskKiller 当前状态工作区，完整展示持续磁盘活动、资源趋势和主要应用。">
+</a>
+
+<p align="center"><sub>发现持续磁盘活动，并定位背后的应用。点击图片可查看原图。</sub></p>
+
+FindDiskKiller 是一个原生 macOS 工具，专注于一件事：从持续磁盘活动的信号出发，逐步找到背后的应用、文件与物理设备。CPU、磁盘读写和网络数据都以应用为中心呈现，无需在多个系统工具之间拼凑上下文。
+
 <p align="center">
-  <img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="FindDiskKiller 当前状态工作区，展示持续磁盘活动、资源趋势和主要应用。">
+  <strong>100%</strong> 本机处理　·　<strong>0</strong> 数据上传　·　<strong>10</strong> 种界面语言　·　<strong>macOS 14+</strong>
 </p>
-<p align="center"><sub>发现持续磁盘活动，并定位背后的应用。</sub></p>
 
-当 Mac 开始发热、磁盘持续繁忙，而一张进程列表又无法解释原因时，
-FindDiskKiller 会把排查过程重新组织成以应用为中心的工作流：先识别持续负载，
-再查看相关应用的 CPU、磁盘、网络、文件和存储上下文，不必在多个工具之间拼凑线索。
+## 所有信息，一个工作区
 
-## AI Agents 也会持续占用磁盘空间
+### AI Agent 空间
 
-Codex 和 Claude 会逐渐积累大量对话记录、子代理会话、快照、可视化文件与共享数据库。
-**AI Storage** 将这些空间变成一个必须由用户明确启动的分析流程：分别测量支持的
-provider，将占用归因到具体 thread/session，查看构成，再复核并永久删除不再需要的对话。
+Codex 与 Claude 会积累聊天记录、子代理会话、快照、可视化和共享数据库。AI Storage 只在你明确点击后开始本机分析，将空间归因到具体 thread 或 session，并在永久删除前提供完整复核。
 
-<p align="center">
+<a href="docs/assets/screenshots/ai-storage-overview.webp">
   <img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="AI Storage 总览，分别展示 Codex 与 Claude 的聊天、全局和未归因空间。">
-</p>
+</a>
 
-### 把空间归因到真正占用它的对话
-
-thread/session 列表会合并主对话独占文件、递归子代理文件和明确标注的数据库估算。
-物理空间统计与聊天归因使用两套独立质量状态；证据不完整或版本不支持时会明确披露，
-不会把估算或未知值包装成精确结果。
+<p align="center"><sub>先测量提供方的完整占用，再区分聊天、全局数据与未归因空间。</sub></p>
 
 <p align="center">
-  <img src="docs/assets/screenshots/ai-storage-thread-details.webp" width="100%" alt="Codex AI Storage 列表，按 thread 展示近期活动、子代理数量，并在右侧完整展示所选 thread 的空间构成。">
+  <a href="docs/assets/screenshots/ai-storage-thread-details.webp"><img src="docs/assets/screenshots/ai-storage-thread-details.webp" width="57%" alt="Codex AI Storage 列表，按 thread 展示活动时间、子代理数量和所选 thread 的完整空间构成。"></a>
+  <a href="docs/assets/screenshots/ai-storage-batch-cleanup.webp"><img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="41%" alt="AI Agent 批量清理复核界面，在永久删除前展示选择范围与预计立即释放空间。"></a>
 </p>
 
-### 先复核，再通过官方能力安全清理
+<p align="center"><sub>左：追溯到具体对话　·　右：永久删除前按时间、项目与对话复核</sub></p>
 
-可以按时间边界、项目或单个对话选择范围，在提交前核对选中 thread、独占文件和预计
-立即释放空间。支持的 Codex thread 通过官方 `thread/delete` 提交，独立 Claude Code
-session 使用官方 Agent SDK；活动中或 identity 已变化的会话会立即跳过。如果没有兼容的
-官方能力，FindDiskKiller 不会降级为直接改写数据库或手工删除 transcript 文件。
+分析不会自动开始。活动中或身份已变化的会话会被跳过；不支持的提供方不会降级为直接写数据库或手工删除 transcript。Claude Desktop 与 Cowork 会话目前仍需在 Claude Desktop 内删除。
+
+### 应用活动与文件证据
+
+先对照应用的 CPU、磁盘 I/O 与网络趋势，再进入它当前打开的位置和最近变化的目录。需要更明确的证据时，可以主动开始一次有时间边界的文件或文件夹追踪。
 
 <p align="center">
-  <img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="82%" alt="AI Agent 批量清理复核界面，可选择较旧对话并在永久删除前查看预计立即释放空间。">
+  <a href="docs/assets/screenshots/app-codex-overview.webp"><img src="docs/assets/screenshots/app-codex-overview.webp" width="49%" alt="Codex 应用详情，分别展示 CPU、磁盘 I/O 和网络时间线。"></a>
+  <a href="docs/assets/screenshots/app-codex-file-activity.webp"><img src="docs/assets/screenshots/app-codex-file-activity.webp" width="49%" alt="Codex 文件活动视图，展示相关位置、可写目录和最近变化。"></a>
 </p>
 
-AI Storage 永远不会自动扫描。进入页面只展示最近一次有效结果，只有明确点击“开始分析”
-或“重新分析”才会读取数据。Claude Desktop 与 Cowork 的空间可以统计，但由于当前没有稳定的
-公开第三方删除接口，这些会话必须在 Claude Desktop 内删除。
-
-## 一眼看清
-
-| 工作区 | 能够看到什么 |
-| --- | --- |
-| **应用活动** | 最近 5 秒 CPU、读取、写入、下载和上传；支持排序、调整列宽和原生应用图标 |
-| **时间曲线** | 1 分钟、15 分钟和 1 小时直线折线，悬停查看精确时间与数值 |
-| **进程详情** | 使用独立窗口并排比较应用 CPU、磁盘、网络和文件证据 |
-| **文件活动** | 当前打开的位置，以及最近 5 分钟内观察到变化的目录 |
-| **文件访问追踪** | 按需查看请求读写总量、最近 5 秒速率、会话峰值、活跃文件和已验证进程 |
-| **磁盘** | 以用户认识的挂载卷名展示物理设备吞吐，包括外接存储 |
-| **磁盘健康** | 在 macOS 提供时展示温度、累计主机写入、磨损、备用空间、通电记录和错误 |
-| **菜单栏** | 安静查看当前状态，不使用反复通知打扰用户 |
-| **历史分析** | 可选保存本机聚合历史，查看 7 天、30 天和 1 年趋势、覆盖率、周期对比与主要应用 |
-| **AI Storage** | 明确点击后分析 Codex 与 Claude 空间，归因到 thread/session，并通过支持的官方接口批量清理 |
-
-## 从应用到磁盘的完整视图
-
-### 先确认负责的应用
+<p align="center"><sub>左：判断资源活动是否持续　·　右：进入应用实际涉及的位置</sub></p>
 
 <p align="center">
-  <img src="docs/assets/screenshots/app-codex-overview.webp" width="100%" alt="Codex 应用详情，分别展示 CPU、磁盘 I/O 和网络时间曲线。">
+  <a href="docs/assets/screenshots/folder-access-trace.webp"><img src="docs/assets/screenshots/folder-access-trace.webp" width="86%" alt="有时间边界的文件夹追踪，展示请求读写速率、活跃文件和访问进程。"></a>
 </p>
 
-### 再查看文件位置和有边界的访问证据
+<p align="center"><sub>追踪只在明确启动后运行，展示请求读写量、活跃文件与已验证的进程会话。</sub></p>
+
+### 物理磁盘与健康状态
+
+把 Macintosh HD、外接硬盘等熟悉的卷名映射到物理设备吞吐，再查看 macOS 与硬件实际提供的 SMART/NVMe 健康字段。
 
 <p align="center">
-  <img src="docs/assets/screenshots/app-codex-file-activity.webp" width="100%" alt="Codex 文件活动视图，展示相关位置、可写目录和最近变化。">
+  <a href="docs/assets/screenshots/disk-live-activity.webp"><img src="docs/assets/screenshots/disk-live-activity.webp" width="49%" alt="磁盘工作区，展示物理设备吞吐、挂载卷和硬件诊断。"></a>
+  <a href="docs/assets/screenshots/disk-health.webp"><img src="docs/assets/screenshots/disk-health.webp" width="49%" alt="磁盘健康视图，展示 SMART 状态、磨损、温度、主机写入、通电记录和介质错误。"></a>
 </p>
 
-<p align="center">
-  <img src="docs/assets/screenshots/folder-access-trace.webp" width="100%" alt="有时限的目录追踪，展示请求读写速率、活跃文件和访问进程。">
-</p>
-
-### 最后核对存储设备与健康信息
-
-<p align="center">
-  <img src="docs/assets/screenshots/disk-live-activity.webp" width="100%" alt="磁盘工作区，展示物理设备吞吐、挂载卷和硬件诊断。">
-</p>
-
-<p align="center">
-  <img src="docs/assets/screenshots/disk-health.webp" width="100%" alt="磁盘健康视图，展示 SMART 状态、磨损、温度、主机写入、通电记录和介质错误。">
-</p>
-
-## 一条完整的排查路径
-
-```text
-发现持续负载
-      |
-      v
-找到主要应用  -->  CPU / 磁盘 / 下载 / 上传
-      |
-      v
-查看打开文件与最近变化
-      |
-      v
-按需启动有时限的文件或目录追踪
-      |
-      v
-核对物理设备吞吐与可用健康证据
-```
-
-交互面向高频排查进行了优化：CPU 始终位于第一项，读取与写入分开，下载与上传分开；
-实时值取最近 5 秒；悬停时列表暂停视觉重排但仍可点击；进程详情使用独立窗口。
+<p align="center"><sub>左：哪个物理设备正在繁忙　·　右：设备实际报告了哪些健康信息</sub></p>
 
 ## 不制造虚假的精确度
 
-FindDiskKiller 始终区分 macOS 提供的不同证据：
+FindDiskKiller 会把相关证据放在一起，但不会把不同口径的数据强行解释成同一种测量：
 
-- **应用磁盘 I/O** 来自进程计数器，代表该进程涉及所有存储的总量。
-- **设备吞吐** 来自物理设备计数器，并通过 `Macintosh HD`、`ExternalSSD` 等卷名呈现。
-- **最近变化** 只能说明系统观察到某个位置发生变化，不能单独确认修改进程。
-- **文件访问追踪** 统计成功系统调用向系统请求的字节。缓存、APFS 写回、压缩、
-  写时复制、内存映射和覆盖缺口都会让它不同于物理磁盘或 NAND 写入。
-- **磁盘健康** 只展示 macOS 实际提供的字段；缺失值显示为不可用，而不是零。
-- **AI Agent 空间** 区分已测量的独占文件、数据库归因估算、共享数据和不支持的数据源；
-  数据库逻辑清理不会被描述成物理磁盘立即释放。
+- **应用 I/O** 是进程向所有存储发出的请求量，不等于物理 NAND 读写量。
+- **物理设备吞吐** 无法精确归因到某一个进程，应用数据与设备数据不要求相加相等。
+- **最近变化的位置** 说明 macOS 观察到了变化，但不能单独证明写入者是谁。
+- **AI 数据库归因** 是明确标注的逻辑估算，不会被描述成立即可释放的物理空间。
 
-产品不会声称能够精确计算任意进程向某块物理磁盘写入的每一个字节。
+缺失、覆盖不足或硬件不支持的数据会明确显示为不可用，而不是用零填充。
 
 ## 隐私与权限
 
-监控和分析全部在本机完成。当前版本不包含广告、遥测、行为分析或第三方追踪 SDK，
-也不会上传进程活动、文件路径、监控历史或磁盘序列号。
+所有监控、分析与展示都在 Mac 本机完成。当前版本不上传进程名、文件路径、磁盘序列号或监控历史，也不包含广告、遥测、分析或第三方跟踪 SDK。
 
-AI Storage 同样完全在本机运行并且必须由用户明确启动。打开页面不会开始扫描；清理操作
-不可撤销，只使用兼容的官方 provider 能力，会跳过活动中或 identity 已变化的会话，绝不
-降级为直接写 SQLite 或手工删除 transcript。
+基础 CPU、磁盘、网络、卷和进程监控无需管理员权限。只有当你主动开始文件或目录访问追踪时，macOS 才可能要求批准已签名、用途固定的后台组件；受保护的位置可能还需要“完全磁盘访问权限”。追踪何时开始和停止始终由你控制。
 
-长期历史默认关闭。开启后，逐秒采样先在内存聚合，每分钟最多用一个 SQLite 事务保存；
-分钟明细只保留 24 小时，历史分析使用 15 分钟和小时聚合。用户可严格选择 7 天、30 天
-或 1 个本地日历年，自动空间上限分别为 32 MB、64 MB 和 128 MB，绝对上限 160 MB。
-历史库不保存 PID、完整路径、逐秒样本、文件追踪明细或磁盘序列号，并可随时在设置中清除。
+完整说明请阅读[隐私政策](PRIVACY.md)与[安全政策](SECURITY.md)。
 
-“登录时启动”使用 macOS 原生登录项。默认登录后安静驻留菜单栏，用户可以单独选择是否
-同时打开主窗口。
+## 安装
 
-基础监控不申请管理员权限。只有当你明确开始文件或目录追踪时，macOS 才可能要求批准
-FindDiskKiller 的签名后台组件。它只能监管参数固定且有时限的 `/usr/bin/fs_usage`
-会话，不能执行 shell 或任意命令，并可在设置中停用和移除。
-
-完整说明见 [隐私政策](PRIVACY.md) 与 [安全政策](SECURITY.md)。
-
-## 系统要求与安装
-
-- macOS 14 或更高版本
-- Apple 芯片或 Intel Mac
-- 仅在启用按需文件访问追踪时需要管理员账户
-
-正式版本发布后，将以 Developer ID 签名、Apple 公证的 universal2 DMG 提供：
-
-1. 从[官网](https://finddiskkiller.com/zh-cn/download/)下载最新版。
-2. 打开 DMG，将 FindDiskKiller 拖入“应用程序”。
+1. 从[官网](https://finddiskkiller.com/zh-cn/download/)下载最新的已签名、已公证 DMG。
+2. 打开 DMG，将 FindDiskKiller 拖入“应用程序”文件夹。
 3. 从“应用程序”启动 FindDiskKiller。
 
-每个正式版本都会发布 SHA-256。若软件包无法通过 Gatekeeper 验证，请勿绕过系统安全检查。
+正式版本支持 Apple silicon 与 Intel Mac，并提供 SHA-256 校验值。签名或公证验证失败时，请勿绕过 Gatekeeper。
 
-## 构建与测试
+## 开发与文档
 
-开发需要 Xcode 16 或更高版本，以及 XcodeGen 2.42.0 或更高版本。
+<details>
+<summary><strong>从源码构建并运行测试</strong></summary>
+
+开发需要 Xcode 16+ 与 XcodeGen 2.42.0+。
 
 ```bash
 git clone https://github.com/jianyintang/find-disk-killer.git
 cd find-disk-killer
 xcodegen generate
-xcodebuild -project FindDiskKiller.xcodeproj \
+xcodebuild \
+  -project FindDiskKiller.xcodeproj \
   -scheme FindDiskKillerApp \
   -configuration Release \
   -destination 'generic/platform=macOS' \
-  CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=NO build
-swift test
+  CODE_SIGNING_ALLOWED=NO \
+  ONLY_ACTIVE_ARCH=NO \
+  build
+make test
 ```
 
-无签名开发构建可验证基础监控，但不能完成需要特权的文件或目录追踪。App 与 helper
-会通过维护者的 Team ID 相互验签，因此该流程必须使用官方签名构建验证。批准后台组件
-与为受保护位置授予“完全磁盘访问权限”是两项独立的 macOS 权限，前者不会自动授予后者。
+未签名构建可以验证基础监控，但不能完成特权文件追踪；该流程要求 App 与 helper 具备正式签名身份。
 
-从干净提交创建签名并公证的官网发行包：
+</details>
 
-```bash
-make lint test
-make release VERSION=1.0.0 BUILD_NUMBER=100
-```
-
-设置 `SKIP_NOTARIZATION=1` 生成的内容只用于本地彩排，绝不能公开发布。
-
-## 文档与支持
-
-- [产品与技术方案](docs/find-disk-killer-product-and-technical-plan.md)
-- [深度文件追踪与 SSD 健康方案](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.md)
+- [产品与技术计划](docs/find-disk-killer-product-and-technical-plan.md)
+- [深度文件追踪与 SSD 健康计划](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.md)
 - [官网发布检查表](docs/website-release-checklist.md)
 - [参与贡献](CONTRIBUTING.md)
-- [支持](SUPPORT.md) · [隐私](PRIVACY.md) · [安全](SECURITY.md) · [第三方声明](THIRD_PARTY_NOTICES.md)
+- [第三方声明](THIRD_PARTY_NOTICES.md)
 
-普通问题请使用 [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues)。
-安全漏洞请通过 [GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new)
-私密报告，并在诊断信息中遮挡路径、用户名和序列号。
+## 支持与许可
 
-FindDiskKiller 按 [MIT License](LICENSE) 开源。第三方应用标识仅用于识别
-被观察的软件，不代表合作、认可或背书。
+普通问题、缺陷与功能建议请使用 [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues)。安全漏洞请通过 [GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new) 私下报告；提交诊断或截图前，请移除敏感路径、用户名和磁盘序列号。
+
+FindDiskKiller 以 [MIT License](LICENSE) 开源。

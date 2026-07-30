@@ -1,174 +1,154 @@
 <div align="center">
-  <img src="docs/assets/find-disk-killer-icon.png" width="136" height="136" alt="FindDiskKiller App-Symbol">
+  <img src="docs/assets/find-disk-killer-icon.png" width="128" height="128" alt="FindDiskKiller App-Symbol">
   <h1>FindDiskKiller</h1>
-  <p><strong>Erkennen Sie, welche App Ihre Festplatte dauerhaft beansprucht.</strong></p>
-  <p>Festplatten-I/O, CPU, Netzwerk, Dateiaktivität und Laufwerkszustand in einem nativen macOS-Arbeitsbereich.</p>
+  <p><strong>Sehen Sie, was Ihre Festplatte ständig nutzt.</strong></p>
+  <p>Beginnen Sie bei der Datenträger-E/A einer App und folgen Sie den Hinweisen über Dateiaktivität, AI-Agent-Speicher und physische Laufwerke.</p>
   <p>
-    <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> ·
-    <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ja.md">日本語</a> ·
-    <a href="README.ko.md">한국어</a> · <a href="README.de.md">Deutsch</a> ·
-    <a href="README.fr.md">Français</a> · <a href="README.es.md">Español</a> ·
-    <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.ru.md">Русский</a>
+    <a href="README.md">English</a> ·
+    <a href="README.zh-CN.md">简体中文</a> ·
+    <a href="README.zh-TW.md">繁體中文</a> ·
+    <a href="README.ja.md">日本語</a> ·
+    <a href="README.ko.md">한국어</a> ·
+    <a href="README.de.md">Deutsch</a> ·
+    <a href="README.fr.md">Français</a> ·
+    <a href="README.es.md">Español</a> ·
+    <a href="README.pt-BR.md">Português (Brasil)</a> ·
+    <a href="README.ru.md">Русский</a>
   </p>
-  <p><strong>macOS 14+ · Apple-Chips & Intel · Lokale Verarbeitung · 10 Oberflächensprachen</strong></p>
-  <p><a href="https://finddiskkiller.com/de/download/">Download</a> · <a href="https://finddiskkiller.com/de/">Website</a> · <a href="docs/find-disk-killer-product-and-technical-plan.md">Produktmodell</a> · <a href="SUPPORT.md">Support</a> · <a href="PRIVACY.md">Datenschutz</a></p>
+  <p><strong>macOS 14+ · Apple Silicon & Intel · 100% lokale Verarbeitung</strong></p>
+  <p>
+    <a href="https://finddiskkiller.com/de/download/"><strong>Für macOS laden</strong></a> ·
+    <a href="https://finddiskkiller.com/de/">Website</a> ·
+    <a href="https://finddiskkiller.com/de/how-it-works/">Funktionsweise</a> ·
+    <a href="PRIVACY.md">Datenschutz</a> ·
+    <a href="SUPPORT.md">Support</a>
+  </p>
 </div>
 
 ---
 
-<p align="center"><img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="FindDiskKiller-Arbeitsbereich Jetzt mit anhaltender Festplattenaktivität, Ressourcentrends und den führenden Apps."></p>
-<p align="center"><sub>Anhaltende Festplattenaktivität erkennen und die verantwortlichen Apps finden.</sub></p>
+<a href="docs/assets/screenshots/overview-sustained-activity.webp">
+  <img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="Vollständiger FindDiskKiller-Arbeitsbereich mit anhaltender Datenträgeraktivität, Ressourcentrends und führenden Apps.">
+</a>
 
-Wenn Ihr Mac warm wird und das Laufwerk dauerhaft arbeitet, erklärt eine reine
-Prozessliste oft nicht die Ursache. FindDiskKiller ordnet die Untersuchung nach
-Apps: anhaltende Last erkennen, die verantwortliche App finden und anschließend
-CPU, Festplatten-I/O, Netzwerk, Dateien und Speichergerät im selben Kontext prüfen.
+<p align="center"><sub>Erkennen Sie anhaltende Datenträgeraktivität und die verantwortlichen Apps. Klicken Sie für das Originalbild.</sub></p>
 
-## Auch AI Agents belegen Speicherplatz
+FindDiskKiller ist ein natives macOS-Werkzeug für eine klar umrissene Aufgabe: anhaltende Datenträgeraktivität bis zu den verantwortlichen Apps, Dateien und physischen Geräten zu verfolgen. CPU-, Datenträger- und Netzwerkhinweise bleiben app-zentriert, statt über mehrere Systemwerkzeuge verteilt zu sein.
 
-AI Storage misst Codex- und Claude-Daten nur nach einem ausdrücklichen Start und ordnet erkennbare Belegung einzelnen Threads/Sitzungen, Hauptchats und rekursiven Subagents zu. Gemessene Dateien und Datenbankschätzungen bleiben getrennt; unvollständige Belege werden nicht als exakt ausgegeben.
+<p align="center">
+  <strong>100%</strong> lokal　·　<strong>0</strong> Daten hochgeladen　·　<strong>10</strong> Sprachen　·　<strong>macOS 14+</strong>
+</p>
 
-<p align="center"><img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="AI-Storage-Übersicht mit getrenntem Chat-, globalem und nicht zugeordnetem Speicher für Codex und Claude."></p>
+## Alles in einem Arbeitsbereich
 
-<p align="center"><img src="docs/assets/screenshots/ai-storage-thread-details.webp" width="100%" alt="Codex AI Storage mit Aktivität und Subagents pro Thread sowie der vollständigen Speicheraufteilung des ausgewählten Threads rechts."></p>
+### AI-Agent-Speicher
 
-Vor dem dauerhaften Löschen lassen sich Zeitraum, Projekt oder einzelne Chats auswählen und der voraussichtlich sofort freigegebene Speicher prüfen. Codex nutzt das offizielle thread/delete, eigenständige Claude-Code-Sitzungen das offizielle Agent SDK. Aktive, geänderte oder nicht unterstützte Einträge werden übersprungen; direkte SQLite-Schreibvorgänge oder manuelles Löschen von Transkripten sind kein Fallback. Claude Desktop/Cowork wird derzeit in Claude Desktop gelöscht.
+Codex und Claude sammeln Unterhaltungen, Subagent-Sitzungen, Snapshots, Visualisierungen und gemeinsame Datenbanken. AI Storage startet die lokale Analyse nur nach einem ausdrücklichen Klick, ordnet Speicher einzelnen Threads oder Sitzungen zu und bietet eine vollständige Prüfung vor dem dauerhaften Löschen.
 
-<p align="center"><img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="82%" alt="Stapelbereinigung für AI-Agent-Chats mit Prüfung des sofort freigebbaren Speichers vor dem dauerhaften Löschen."></p>
+<a href="docs/assets/screenshots/ai-storage-overview.webp">
+  <img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="AI-Storage-Übersicht mit getrennten Chat-, globalen und nicht zugeordneten Werten für Codex und Claude.">
+</a>
 
-## Alles Wichtige auf einen Blick
+<p align="center"><sub>Zuerst den gesamten Anbieterspeicher messen, dann Chats, globale Daten und nicht zugeordneten Speicher trennen.</sub></p>
 
-| Bereich | Was Sie sehen |
-| --- | --- |
-| **App-Aktivität** | CPU, Lesen, Schreiben, Download und Upload der letzten 5 Sekunden; sortierbare Spalten mit anpassbarer Breite und native App-Symbole |
-| **Zeitverlauf** | Geradlinige Kurven für 1 Minute, 15 Minuten und 1 Stunde mit exakten Werten beim Darüberfahren |
-| **Prozessdetails** | Separate Fenster zum Vergleichen von CPU-, Festplatten-, Netzwerk- und Dateiinformationen |
-| **Dateiaktivität** | Aktuell geöffnete Orte und Verzeichnisse, deren Änderung in den letzten 5 Minuten beobachtet wurde |
-| **Dateizugriffsverfolgung** | Bei Bedarf angeforderte Lese-/Schreibmengen, 5-Sekunden-Raten, Sitzungsspitzen, aktive Dateien und verifizierte Prozesse |
-| **Laufwerke** | Durchsatz physischer Geräte über verständliche Namen eingebundener Volumes, auch bei externem Speicher |
-| **Laufwerkszustand** | Temperatur, Host-Schreibmenge, Verschleiß, Reserve, Betriebsdaten und Fehler, sofern macOS sie bereitstellt |
-| **Menüleiste** | Aktuelle Aktivität dezent prüfen, ohne wiederholte Mitteilungen |
+<p align="center">
+  <a href="docs/assets/screenshots/ai-storage-thread-details.webp"><img src="docs/assets/screenshots/ai-storage-thread-details.webp" width="57%" alt="Codex AI Storage mit Aktivität, Subagents und vollständiger Aufteilung des gewählten Threads."></a>
+  <a href="docs/assets/screenshots/ai-storage-batch-cleanup.webp"><img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="41%" alt="Stapelbereinigung mit Auswahlumfang und voraussichtlich sofort freigebbarem Speicher vor dem dauerhaften Löschen."></a>
+</p>
 
-## Von der App bis zum Laufwerk
+<p align="center"><sub>Links: Speicher einer Unterhaltung zuordnen　·　Rechts: Alter, Projekt und Unterhaltungen vor dem Löschen prüfen</sub></p>
 
-### Zuerst die verantwortliche App untersuchen
+Die Analyse startet nie automatisch. Aktive oder identitätsveränderte Sitzungen werden übersprungen; nicht unterstützte Anbieter führen nie zu direkten Datenbankänderungen oder manuellem Löschen von Transkripten. Claude-Desktop- und Cowork-Sitzungen müssen derzeit in Claude Desktop gelöscht werden.
 
-<p align="center"><img src="docs/assets/screenshots/app-codex-overview.webp" width="100%" alt="Codex-App-Details mit getrennten Verläufen für CPU, Festplatten-I/O und Netzwerk."></p>
+### App-Aktivität und Dateihinweise
 
-### Dann Speicherorte und begrenzte Dateizugriffe prüfen
+Vergleichen Sie CPU-, Datenträger- und Netzwerkverläufe einer App und wechseln Sie dann zu geöffneten Orten und kürzlich geänderten Verzeichnissen. Bei Bedarf starten Sie ausdrücklich eine zeitlich begrenzte Datei- oder Ordnerverfolgung.
 
-<p align="center"><img src="docs/assets/screenshots/app-codex-file-activity.webp" width="100%" alt="Codex-Dateiaktivität mit zugehörigen Speicherorten, beschreibbaren Ordnern und letzten Änderungen."></p>
+<p align="center">
+  <a href="docs/assets/screenshots/app-codex-overview.webp"><img src="docs/assets/screenshots/app-codex-overview.webp" width="49%" alt="Codex-App-Details mit getrennten CPU-, Datenträger- und Netzwerkzeitachsen."></a>
+  <a href="docs/assets/screenshots/app-codex-file-activity.webp"><img src="docs/assets/screenshots/app-codex-file-activity.webp" width="49%" alt="Codex-Dateiaktivität mit zugehörigen Orten, beschreibbaren Ordnern und letzten Änderungen."></a>
+</p>
 
-<p align="center"><img src="docs/assets/screenshots/folder-access-trace.webp" width="100%" alt="Zeitlich begrenzte Ordnerverfolgung mit angeforderten Lese- und Schreibraten, aktiven Dateien und zugreifenden Prozessen."></p>
+<p align="center"><sub>Links: anhaltende Ressourcenaktivität erkennen　·　Rechts: zu den beteiligten Orten wechseln</sub></p>
 
-### Abschließend Speicher und Zustand einordnen
+<p align="center">
+  <a href="docs/assets/screenshots/folder-access-trace.webp"><img src="docs/assets/screenshots/folder-access-trace.webp" width="86%" alt="Begrenzte Ordnerverfolgung mit angeforderten Lese-/Schreibraten, aktiven Dateien und zugreifenden Prozessen."></a>
+</p>
 
-<p align="center"><img src="docs/assets/screenshots/disk-live-activity.webp" width="100%" alt="Laufwerksarbeitsbereich mit physischem Gerätedurchsatz, eingebundenen Volumes und Hardwarediagnose."></p>
+<p align="center"><sub>Die Verfolgung läuft nur nach ausdrücklichem Start und zeigt angeforderte E/A, aktive Dateien und verifizierte Prozesssitzungen.</sub></p>
 
-<p align="center"><img src="docs/assets/screenshots/disk-health.webp" width="100%" alt="Laufwerkszustand mit SMART-Status, Verschleiß, Temperatur, Host-Schreibmenge, Betriebsdaten und Medienfehlern."></p>
+### Physische Laufwerke und Zustand
 
-## Eine durchgängige Untersuchung
+Ordnen Sie bekannte Volumenamen wie Macintosh HD oder externe Laufwerke dem Durchsatz physischer Geräte zu und prüfen Sie die SMART/NVMe-Felder, die macOS und die Hardware tatsächlich bereitstellen.
 
-```text
-Anhaltende Aktivität
-        |
-        v
-Führende App  -->  CPU / Festplatte / Download / Upload
-        |
-        v
-Geöffnete Dateien und letzte Änderungen
-        |
-        v
-Optionale, zeitlich begrenzte Datei- oder Ordnerverfolgung
-        |
-        v
-Physischer Durchsatz und verfügbare Zustandsdaten
-```
+<p align="center">
+  <a href="docs/assets/screenshots/disk-live-activity.webp"><img src="docs/assets/screenshots/disk-live-activity.webp" width="49%" alt="Laufwerksansicht mit physischem Gerätedurchsatz, eingebundenen Volumes und Hardwarediagnose."></a>
+  <a href="docs/assets/screenshots/disk-health.webp"><img src="docs/assets/screenshots/disk-health.webp" width="49%" alt="Laufwerkszustand mit SMART-Status, Verschleiß, Temperatur, Host-Schreibvorgängen, Betriebsverlauf und Medienfehlern."></a>
+</p>
 
-CPU steht immer an erster Stelle. Lesen und Schreiben sowie Download und Upload
-bleiben getrennt. Aktuelle Werte basieren auf den letzten fünf Sekunden. Beim
-Untersuchen einer Zeile pausiert nur die visuelle Neusortierung; die Zeile bleibt
-anklickbar. Prozessdetails öffnen sich in eigenen Fenstern.
+<p align="center"><sub>Links: das aktive physische Gerät erkennen　·　Rechts: gemeldete Zustandsinformationen prüfen</sub></p>
 
 ## Keine vorgetäuschte Genauigkeit
 
-- **App-Festplatten-I/O** stammt aus Prozesszählern und umfasst alle vom Prozess verwendeten Speichergeräte.
-- **Gerätedurchsatz** stammt aus Zählern physischer Geräte und wird über Namen wie `Macintosh HD` oder `ExternalSSD` dargestellt.
-- **Letzte Änderungen** bedeuten, dass macOS eine Änderung beobachtet hat; der verursachende Prozess ist damit nicht belegt.
-- **Dateizugriffsverfolgung** misst Bytes, die erfolgreiche Systemaufrufe angefordert haben. Cache, APFS-Rückschreiben, Komprimierung, Copy-on-Write, Memory Mapping und Erfassungslücken führen zu anderen Werten als bei physischen oder NAND-Schreibvorgängen.
-- **Laufwerkszustand** zeigt nur Felder, die macOS tatsächlich meldet. Fehlende Daten bleiben nicht verfügbar und werden nicht zu null.
+FindDiskKiller zeigt zusammengehörige Hinweise gemeinsam, zwingt Messungen mit unterschiedlicher Bedeutung aber nicht in eine Zahl:
 
-FindDiskKiller behauptet nicht, jedes Byte eines Prozesses exakt einem physischen Laufwerk zuordnen zu können.
+- **App-E/A** meldet Prozessanforderungen über alle Speichergeräte und ist kein physischer NAND-Verkehr.
+- **Gerätedurchsatz** kann keinem einzelnen Prozess exakt zugeordnet werden; App- und Gerätesummen müssen nicht übereinstimmen.
+- **Kürzlich geänderte Orte** zeigen eine von macOS beobachtete Änderung, identifizieren allein aber nicht den Schreiber.
+- **AI-Datenbankzuordnung** ist eine gekennzeichnete logische Schätzung, kein sofort physisch freigebbarer Speicher.
+
+Fehlende, teilweise oder nicht unterstützte Hinweise werden als nicht verfügbar angezeigt und nicht durch Null ersetzt.
 
 ## Datenschutz und Berechtigungen
 
-Überwachung und Analyse erfolgen lokal auf dem Mac. Die aktuelle Version enthält
-keine Werbung, Telemetrie, Nutzungsanalyse oder Tracking-SDKs Dritter und lädt
-weder Prozessaktivitäten noch Dateipfade, Verlauf oder Laufwerksseriennummern hoch.
+Überwachung, Analyse und Anzeige bleiben auf dem Mac. Die aktuelle Version lädt keine Prozessnamen, Dateipfade, Laufwerksseriennummern oder Überwachungsverläufe hoch und enthält keine Werbung, Telemetrie, Analyse oder Tracking-SDKs Dritter.
 
-Für die grundlegende Überwachung ist keine Administratorfreigabe erforderlich.
-Nur wenn Sie ausdrücklich eine Datei- oder Ordnerverfolgung starten, kann macOS
-die Freigabe der signierten Hintergrundkomponente verlangen. Sie darf ausschließlich
-eine zeitlich begrenzte `/usr/bin/fs_usage`-Sitzung mit festen Parametern verwalten
-und kann weder eine Shell noch beliebige Befehle ausführen.
+Die Basisüberwachung von CPU, Datenträger, Netzwerk, Volumes und Prozessen benötigt keine Administratorfreigabe. Erst beim ausdrücklichen Start einer Datei- oder Verzeichnisverfolgung kann macOS die Freigabe der signierten, zweckgebundenen Hintergrundkomponente verlangen; geschützte Orte können zusätzlich vollen Festplattenzugriff erfordern. Sie bestimmen stets Start und Ende der Verfolgung.
 
-Weitere Informationen: [Datenschutzrichtlinie](PRIVACY.md) und [Sicherheitsrichtlinie](SECURITY.md).
+Lesen Sie die vollständige [Datenschutzerklärung](PRIVACY.md) · [Sicherheitsrichtlinie](SECURITY.md).
 
-## Voraussetzungen und Installation
+## Installation
 
-- macOS 14 oder neuer
-- Mac mit Apple-Chip oder Intel-Prozessor
-- Administratorkonto nur zum Aktivieren der bedarfsgesteuerten Dateizugriffsverfolgung
+1. Laden Sie das neueste signierte und notarisierte DMG von der [offiziellen Website](https://finddiskkiller.com/de/download/) herunter.
+2. Öffnen Sie es und ziehen Sie FindDiskKiller in den Programme-Ordner.
+3. Starten Sie FindDiskKiller aus Programme.
 
-Sobald verfügbar, werden offizielle Versionen als universal2-DMG mit Developer-ID-Signatur und Apple-Beglaubigung veröffentlicht.
+Offizielle Versionen unterstützen Apple Silicon und Intel Macs und enthalten eine SHA-256-Prüfsumme. Umgehen Sie Gatekeeper nicht, wenn Signatur- oder Notarisierungsprüfung fehlschlägt.
 
-1. Laden Sie die neueste Version von der [offiziellen Website](https://finddiskkiller.com/de/download/) herunter.
-2. Öffnen Sie das DMG und ziehen Sie FindDiskKiller in den Ordner „Programme“.
-3. Starten Sie FindDiskKiller aus „Programme“.
+## Entwicklung und Dokumentation
 
-Zu jeder offiziellen Version wird eine SHA-256-Prüfsumme veröffentlicht. Umgehen Sie Gatekeeper nicht, wenn ein Paket die Prüfung nicht besteht.
+<details>
+<summary><strong>Aus dem Quellcode bauen und Tests ausführen</strong></summary>
 
-## Erstellen und Testen
-
-Die Entwicklung erfordert Xcode 16 oder neuer und XcodeGen 2.42.0 oder neuer.
+Die Entwicklung benötigt Xcode 16+ und XcodeGen 2.42.0+.
 
 ```bash
 git clone https://github.com/jianyintang/find-disk-killer.git
 cd find-disk-killer
 xcodegen generate
-xcodebuild -project FindDiskKiller.xcodeproj \
-  -scheme FindDiskKillerApp -configuration Release \
+xcodebuild \
+  -project FindDiskKiller.xcodeproj \
+  -scheme FindDiskKillerApp \
+  -configuration Release \
   -destination 'generic/platform=macOS' \
-  CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=NO build
-swift test
+  CODE_SIGNING_ALLOWED=NO \
+  ONLY_ACTIVE_ARCH=NO \
+  build
+make test
 ```
 
-Der nicht signierte Entwicklungsbuild kann die grundlegende Überwachung prüfen,
-aber keine privilegierte Datei- oder Ordnerverfolgung ausführen. App und Helper
-authentifizieren einander anhand der Team-ID des Maintainers; dieser Ablauf muss
-daher mit einem offiziell signierten Build geprüft werden. Die Freigabe der
-Hintergrundkomponente und der Festplattenvollzugriff für geschützte Orte sind
-getrennte macOS-Berechtigungen.
+Der unsignierte Build deckt die Basisüberwachung ab, nicht jedoch privilegiertes Dateitracing, das offiziell signierte App- und Helper-Identitäten benötigt.
 
-Signierte und beglaubigte Website-Version aus einem sauberen Commit erstellen:
-
-```bash
-make lint test
-make release VERSION=1.0.0 BUILD_NUMBER=100
-```
-
-Mit `SKIP_NOTARIZATION=1` erstellte Artefakte sind ausschließlich lokale Probeläufe und dürfen nicht veröffentlicht werden.
-
-## Dokumentation und Support
+</details>
 
 - [Produkt- und Technikplan](docs/find-disk-killer-product-and-technical-plan.md)
-- [Plan für detaillierte Dateiverfolgung und SSD-Zustand](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.md)
-- [Checkliste für Website-Veröffentlichungen](docs/website-release-checklist.md)
+- [Plan für tiefes Dateitracing und SSD-Zustand](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.md)
+- [Website-Release-Checkliste](docs/website-release-checklist.md)
 - [Mitwirken](CONTRIBUTING.md)
-- [Support](SUPPORT.md) · [Datenschutz](PRIVACY.md) · [Sicherheit](SECURITY.md) · [Hinweise zu Drittanbietern](THIRD_PARTY_NOTICES.md)
+- [Hinweise zu Drittanbietern](THIRD_PARTY_NOTICES.md)
 
-Allgemeine Fragen gehören in [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues).
-Sicherheitslücken melden Sie vertraulich über [GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new).
+## Support und Lizenz
 
-FindDiskKiller ist Open Source unter der [MIT License](LICENSE).
-Marken Dritter dienen nur der Erkennung beobachteter Software und stellen keine Verbindung oder Empfehlung dar.
+Für Fragen, Fehler und Funktionswünsche nutzen Sie [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues). Melden Sie Schwachstellen privat über [GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new) und entfernen Sie sensible Pfade, Benutzernamen und Laufwerksseriennummern aus Diagnosen oder Screenshots.
+
+FindDiskKiller ist unter der [MIT License](LICENSE) quelloffen.

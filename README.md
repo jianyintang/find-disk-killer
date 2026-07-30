@@ -1,8 +1,8 @@
 <div align="center">
-  <img src="docs/assets/find-disk-killer-icon.png" width="136" height="136" alt="FindDiskKiller app icon">
+  <img src="docs/assets/find-disk-killer-icon.png" width="128" height="128" alt="FindDiskKiller app icon">
   <h1>FindDiskKiller</h1>
   <p><strong>See what keeps using your disk.</strong></p>
-  <p>A native macOS workspace for application disk I/O, AI Agent storage, file activity, and drive-health evidence.</p>
+  <p>Start with application disk I/O, then follow the evidence through file activity, AI Agent storage, and physical disks.</p>
   <p>
     <a href="README.md">English</a> ·
     <a href="README.zh-CN.md">简体中文</a> ·
@@ -15,205 +15,112 @@
     <a href="README.pt-BR.md">Português (Brasil)</a> ·
     <a href="README.ru.md">Русский</a>
   </p>
-  <p><strong>macOS 14+ · Apple silicon & Intel · Local processing · 10 interface languages</strong></p>
+  <p><strong>macOS 14+ · Apple silicon & Intel · 100% local processing</strong></p>
   <p>
-    <a href="https://finddiskkiller.com/en/download/">Download</a> ·
+    <a href="https://finddiskkiller.com/en/download/"><strong>Download for macOS</strong></a> ·
     <a href="https://finddiskkiller.com/en/">Website</a> ·
-    <a href="docs/find-disk-killer-product-and-technical-plan.md">Product model</a> ·
-    <a href="SUPPORT.md">Support</a> ·
-    <a href="PRIVACY.md">Privacy</a>
+    <a href="https://finddiskkiller.com/en/how-it-works/">How it works</a> ·
+    <a href="PRIVACY.md">Privacy</a> ·
+    <a href="SUPPORT.md">Support</a>
   </p>
 </div>
 
 ---
 
-<p align="center">
-  <img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="FindDiskKiller Now workspace showing sustained disk activity, resource trends, and the leading apps.">
-</p>
-<p align="center"><sub>Find sustained disk activity and identify the apps behind it.</sub></p>
+<a href="docs/assets/screenshots/overview-sustained-activity.webp">
+  <img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="The complete FindDiskKiller Now workspace showing sustained disk activity, resource trends, and leading applications.">
+</a>
 
-FindDiskKiller is built for the moment when your Mac is warm, the disk is busy,
-and a process list alone does not explain why. It keeps the investigation
-application-centered: identify sustained activity, inspect the responsible
-application, then move into its CPU, disk, network, files, and storage context
-without assembling the story across several tools.
+<p align="center"><sub>Find sustained disk activity and identify the applications behind it. Click the image to open the original.</sub></p>
 
-## AI Agents Use Disk Space Too
-
-Codex and Claude can accumulate gigabytes of transcripts, subagent sessions,
-snapshots, visualizations, and shared databases. **AI Storage** turns that
-footprint into an explicit, user-started workflow: measure each supported
-provider, attribute storage to individual threads or sessions, inspect the
-breakdown, then review old conversations before permanent deletion.
+FindDiskKiller is a native macOS tool focused on one job: follow sustained disk activity from a visible signal to the applications, files, and physical devices behind it. CPU, disk, and network evidence stays application-centered, so you do not have to assemble the story across several system tools.
 
 <p align="center">
-  <img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="AI Storage overview measuring Codex and Claude storage with separate chat, global, and unattributed totals.">
+  <strong>100%</strong> local processing　·　<strong>0</strong> data uploaded　·　<strong>10</strong> interface languages　·　<strong>macOS 14+</strong>
 </p>
 
-### Attribute storage to the conversation that owns it
+## Everything in One Workspace
 
-Thread and session rows combine exclusive transcript files, recursive
-subagents, and clearly labelled database estimates. Physical measurement and
-chat attribution have independent quality states, so incomplete or unsupported
-evidence is disclosed instead of being presented as exact.
+### AI Agent Storage
+
+Codex and Claude accumulate transcripts, subagent sessions, snapshots, visualizations, and shared databases. AI Storage starts only after an explicit click, attributes storage to individual threads or sessions, and provides a complete review before permanent deletion.
+
+<a href="docs/assets/screenshots/ai-storage-overview.webp">
+  <img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="AI Storage overview separating chat, global, and unattributed storage for Codex and Claude.">
+</a>
+
+<p align="center"><sub>Measure total provider storage first, then separate chats, global data, and unattributed space.</sub></p>
 
 <p align="center">
-  <img src="docs/assets/screenshots/ai-storage-thread-details.webp" width="100%" alt="Codex AI Storage view listing thread-level usage, recent activity, subagents, and the selected thread's complete storage breakdown.">
+  <a href="docs/assets/screenshots/ai-storage-thread-details.webp"><img src="docs/assets/screenshots/ai-storage-thread-details.webp" width="57%" alt="Codex AI Storage listing activity, subagents, and the selected thread's complete storage breakdown."></a>
+  <a href="docs/assets/screenshots/ai-storage-batch-cleanup.webp"><img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="41%" alt="AI Agent batch cleanup review showing the selected scope and estimated immediate reclaim before permanent deletion."></a>
 </p>
 
-### Review first, then clean up through official provider capabilities
+<p align="center"><sub>Left: attribute storage to a conversation　·　Right: review age, project, and conversation scope before permanent deletion</sub></p>
 
-Choose an age boundary, project, or individual conversations; compare selected
-threads, exclusive files, and estimated immediate reclaim before committing.
-Supported Codex threads are submitted to the official `thread/delete` capability,
-and standalone Claude Code sessions use the official Agent SDK. Active or
-changed sessions are skipped immediately. If a compatible official capability
-is unavailable, FindDiskKiller does not fall back to editing databases or
-deleting transcript files by hand.
+Analysis never starts automatically. Active or identity-changed sessions are skipped, and unsupported providers never fall back to direct database writes or manual transcript deletion. Claude Desktop and Cowork sessions currently remain deletable only inside Claude Desktop.
+
+### Application Activity and File Evidence
+
+Compare an application's CPU, disk I/O, and network trends, then move into its open locations and recently changed directories. When you need stronger evidence, explicitly start a time-bounded file or folder trace.
 
 <p align="center">
-  <img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="82%" alt="Batch cleanup review for selecting older AI Agent chats and seeing estimated immediate reclaim before permanent deletion.">
+  <a href="docs/assets/screenshots/app-codex-overview.webp"><img src="docs/assets/screenshots/app-codex-overview.webp" width="49%" alt="Codex application detail with separate CPU, disk I/O, and network timelines."></a>
+  <a href="docs/assets/screenshots/app-codex-file-activity.webp"><img src="docs/assets/screenshots/app-codex-file-activity.webp" width="49%" alt="Codex File Activity showing related locations, writable folders, and recent changes."></a>
 </p>
 
-Analysis never starts automatically. Entering AI Storage only shows the last
-valid result; scanning begins only after an explicit **Start Analysis** or
-**Analyze Again** action. Claude Desktop and Cowork storage can be measured,
-but those sessions must currently be deleted inside Claude Desktop because no
-stable public third-party deletion interface is available.
-
-## What You Can See
-
-| Workspace | What it gives you |
-| --- | --- |
-| **Applications** | Five-second CPU, reads, writes, download, and upload; sortable and resizable live columns; native app icons |
-| **Timelines** | Straight-line one-minute, 15-minute, and one-hour history with precise hover values |
-| **Process details** | Independent windows for comparing application CPU, disk, network, and file evidence |
-| **File Activity** | Current open locations and directories changed during the last five minutes |
-| **File access trace** | On-demand requested read/write totals, five-second rates, session peaks, active files, and verified process sessions |
-| **Disks** | Mounted-volume names mapped to physical-device throughput, including external storage |
-| **Drive health** | Native NVMe/SMART evidence such as temperature, host writes, wear, spare capacity, power history, and errors when macOS exposes it |
-| **Menu bar** | A quiet, lightweight view of current activity without notification noise |
-| **Period reports** | Optional local aggregate history with 7-day, 30-day, and one-year trends, coverage, comparisons, and leading applications |
-| **AI Storage** | Explicit one-click analysis for Codex and Claude, thread/session-level attribution, and capability-gated batch cleanup through supported official interfaces |
-
-## A Complete Investigation, Visually
-
-### Start with the responsible app
-
-CPU, disk I/O, download, and upload remain separate so one busy resource does
-not hide another. Current values use the latest five seconds, and each app can
-open in an independent detail window.
+<p align="center"><sub>Left: determine whether resource activity is sustained　·　Right: move into the locations involved</sub></p>
 
 <p align="center">
-  <img src="docs/assets/screenshots/app-codex-overview.webp" width="100%" alt="Codex app detail showing CPU, disk I/O, and network timelines.">
+  <a href="docs/assets/screenshots/folder-access-trace.webp"><img src="docs/assets/screenshots/folder-access-trace.webp" width="86%" alt="A bounded folder trace showing requested read and write rates, active files, and accessing processes."></a>
 </p>
 
-### Move from locations to bounded file evidence
+<p align="center"><sub>Tracing runs only after an explicit start and shows requested I/O, active files, and verified process sessions.</sub></p>
 
-See locations an app currently has open and directories changed in the last
-five minutes. When that context is not enough, explicitly start a time-limited
-file or folder trace and inspect requested reads, writes, active files, and
-verified process sessions.
+### Physical Disks and Health
+
+Map familiar volume names such as Macintosh HD and external drives to physical-device throughput, then inspect the SMART/NVMe health fields that macOS and the hardware actually expose.
 
 <p align="center">
-  <img src="docs/assets/screenshots/app-codex-file-activity.webp" width="100%" alt="Codex File Activity view showing related locations, writable folders, and recent changes.">
+  <a href="docs/assets/screenshots/disk-live-activity.webp"><img src="docs/assets/screenshots/disk-live-activity.webp" width="49%" alt="Disks workspace showing physical-device throughput, mounted volumes, and hardware diagnostics."></a>
+  <a href="docs/assets/screenshots/disk-health.webp"><img src="docs/assets/screenshots/disk-health.webp" width="49%" alt="Disk Health showing SMART status, wear, temperature, host writes, power history, and media errors."></a>
 </p>
 
-<p align="center">
-  <img src="docs/assets/screenshots/folder-access-trace.webp" width="100%" alt="Bounded folder trace showing requested read and write rates, active files, and accessing processes.">
-</p>
+<p align="center"><sub>Left: see which physical device is busy　·　Right: inspect the health evidence the device reports</sub></p>
 
-### Finish with the storage context
+## No False Precision
 
-Map familiar mounted-volume names to physical-device throughput, then inspect
-the SMART or NVMe health evidence that macOS and the drive actually expose.
+FindDiskKiller presents related evidence together without forcing measurements with different meanings into one number:
 
-<p align="center">
-  <img src="docs/assets/screenshots/disk-live-activity.webp" width="100%" alt="Disks workspace showing physical-device throughput, mounted volumes, and hardware diagnostics.">
-</p>
+- **Application I/O** reports process requests across storage; it is not physical NAND traffic.
+- **Physical-device throughput** cannot be assigned exactly to one process, and application totals are not expected to equal device totals.
+- **Recently changed locations** show that macOS observed a change; they do not identify the writer by themselves.
+- **AI database attribution** is a clearly labelled logical estimate, not immediate physical disk reclaim.
 
-<p align="center">
-  <img src="docs/assets/screenshots/disk-health.webp" width="100%" alt="Disk Health view showing SMART status, wear, temperature, host writes, power history, and media errors.">
-</p>
-
-## Measurement Without False Precision
-
-FindDiskKiller keeps macOS evidence sources separate:
-
-- **Application disk I/O** comes from per-process counters and covers all
-  storage used by that process.
-- **Device throughput** comes from physical storage counters and is shown
-  through names people recognize, such as `Macintosh HD` or `ExternalSSD`.
-- **Recent changes** show that macOS observed a location changing; they do not
-  identify the writer by themselves.
-- **File access traces** measure bytes requested through successful system
-  calls. Cache, APFS writeback, compression, copy-on-write, memory mapping, and
-  coverage gaps mean those values are not physical NAND writes.
-- **Drive health** contains only fields macOS actually reports. Missing values
-  remain unavailable instead of becoming zero.
-- **AI storage** separates measured exclusive files from attributed database
-  estimates, shared provider data, and unsupported sources. Estimated logical
-  database cleanup is never presented as immediate physical disk reclaim.
-
-The app does **not** claim exact process-to-physical-device byte attribution.
-Related measurements are presented together without forcing them to add up.
+Missing, partial, or unsupported evidence is shown as unavailable rather than replaced with zero.
 
 ## Privacy and Permissions
 
-Monitoring and analysis happen locally. The current release contains no ads,
-telemetry, analytics, or third-party tracking SDKs, and it does not upload
-process activity, file paths, monitoring history, or disk serial numbers.
+All monitoring, analysis, and display happen on the Mac. The current release uploads no process names, file paths, disk serial numbers, or monitoring history, and contains no ads, telemetry, analytics, or third-party tracking SDKs.
 
-AI Storage is also local and opt-in. Opening the workspace never starts a scan;
-the app reads supported Agent data only after an explicit action. Cleanup is
-permanent, uses compatible official provider capabilities, skips active or
-identity-changed sessions, and never falls back to direct SQLite writes or
-manual transcript deletion.
-
-Long-term history is off by default. When enabled, per-second samples are first
-aggregated in memory and saved in at most one SQLite transaction per minute.
-Minute detail is retained for 24 hours; longer reports use 15-minute and hourly
-rollups. Strict 7-day, 30-day, and one-local-calendar-year retention options use
-automatic 32 MB, 64 MB, and 128 MB storage budgets, with a 160 MB absolute cap.
-The history database excludes PIDs, full paths, per-second samples, file-trace
-detail, and disk serial numbers, and can be cleared from Settings at any time.
-
-The native macOS login item can start FindDiskKiller quietly in the menu bar.
-Opening the main window after login is a separate user-controlled option.
-
-Basic monitoring does not request administrator approval. When you explicitly
-start a file or folder trace, macOS may ask you to approve FindDiskKiller's
-signed background component. The helper can supervise only a bounded
-`/usr/bin/fs_usage` session with a fixed command shape; it cannot execute a
-shell or arbitrary command. It can be stopped and removed from Settings.
+Basic CPU, disk, network, volume, and process monitoring needs no administrator approval. Only when you explicitly start file or directory tracing may macOS ask you to approve the signed, fixed-purpose background component; protected locations may also require Full Disk Access. You always control when tracing starts and stops.
 
 Read the complete [Privacy Policy](PRIVACY.md) and [Security Policy](SECURITY.md).
 
-## Requirements
-
-- macOS 14 or later
-- Apple silicon or Intel Mac
-- An administrator account only when enabling on-demand file access tracing
-
 ## Install
 
-When available, official website releases are distributed as universal2,
-Developer ID signed, Apple-notarized disk images.
-
-1. Download the latest DMG from the [official website](https://finddiskkiller.com/en/download/).
-2. Open it and drag FindDiskKiller to Applications.
+1. Download the latest signed and notarized DMG from the [official website](https://finddiskkiller.com/en/download/).
+2. Open it and drag FindDiskKiller into Applications.
 3. Launch FindDiskKiller from Applications.
 
-Published releases include a SHA-256 checksum. Never bypass Gatekeeper for a
-package that fails signature or notarization validation.
+Official releases support Apple silicon and Intel Macs and include a SHA-256 checksum. Do not bypass Gatekeeper if signature or notarization validation fails.
 
-## Build and Test
+## Development and Documentation
 
-XcodeGen is the source of truth for the Xcode project:
+<details>
+<summary><strong>Build from source and run tests</strong></summary>
 
-Development requires Xcode 16 or later and XcodeGen 2.42.0 or later. The
-following build disables code signing, so it does not require the maintainer's
-Developer ID certificate:
+Development requires Xcode 16+ and XcodeGen 2.42.0+.
 
 ```bash
 git clone https://github.com/jianyintang/find-disk-killer.git
@@ -227,96 +134,21 @@ xcodebuild \
   CODE_SIGNING_ALLOWED=NO \
   ONLY_ACTIVE_ARCH=NO \
   build
-```
-
-Run the core test suite:
-
-```bash
 make test
 ```
 
-This target is fully non-privileged: it does not launch the App, register the
-Trace Helper, or request an administrator password. Helper registration and
-recovery behavior are covered by dependency-injected unit tests.
+The unsigned build covers basic monitoring but cannot complete privileged file tracing, which requires officially signed App and helper identities.
 
-The unsigned development build can validate the base monitoring experience,
-but it cannot complete privileged file or folder tracing. The App and helper
-authenticate each other against the maintainer's Team ID, so that workflow must
-be verified with an official signed build. Approving the background component
-and granting Full Disk Access for protected locations are separate macOS
-permissions; one does not imply the other.
-
-Maintainers can create a signed, notarized website release from a clean commit:
-
-```bash
-make lint test
-make release VERSION=1.0.0 BUILD_NUMBER=100
-```
-
-The release pipeline builds universal2 App and helper binaries, verifies
-Hardened Runtime and trusted timestamps, creates a signed DMG, submits it for
-Apple notarization, staples the ticket, runs Gatekeeper checks, and writes
-`SHA256SUMS`. Artifacts produced with `SKIP_NOTARIZATION=1` are local rehearsals
-and must never be published.
-
-On a release host without Finder automation permission, reuse a previously
-approved installer layout without opening Finder:
-
-```bash
-DMG_TEMPLATE=artifacts/FindDiskKiller-1.0.1-101/FindDiskKiller-1.0.1.dmg \
-  make release VERSION=1.0.2 BUILD_NUMBER=102
-```
-
-Before publishing, install the exact signed release app in `/Applications` and
-run the privileged tracing gate once. This gate is deliberately separate from
-automated tests and requires an explicit opt-in:
-
-```bash
-EXPECTED_VERSION=1.0.3 EXPECTED_BUILD=103 ALLOW_PRIVILEGED_TEST=1 \
-  make test-privileged
-```
-
-The gate verifies the embedded helper identity, performs a real file-I/O trace, confirms the launchd service is running, and rejects any new launch-constraint violation.
-An attempt marker prevents an accidental second run for the same version and
-build. A maintainer can set `FORCE_PRIVILEGED_TEST=1` only after diagnosing a
-failed first attempt.
-
-## Architecture
-
-```text
-Sources/
-  CFindDiskKiller/              Low-level macOS sampling bridge
-  CFindDiskKillerTrace/         Thread-to-process identity bridge
-  FindDiskKillerCore/           Models, aggregation, and health parsing
-  FindDiskKillerApp/            SwiftUI application and resources
-  FindDiskKillerTraceProtocol/  Bounded XPC contract
-  FindDiskKillerTraceHelper/    Signed fixed-purpose helper
-AppConfig/                      Signing, bundle, and helper metadata
-Tests/                          Core and contract tests
-docs/                           Product, tracing, and release documentation
-```
-
-The real distribution artifact is the Xcode-built `.app`; the SwiftPM
-executable does not contain the signed helper bundle layout.
-
-## Documentation
+</details>
 
 - [Product and Technical Plan](docs/find-disk-killer-product-and-technical-plan.md)
 - [Deep File Tracing and SSD Health Plan](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.md)
 - [Website Release Checklist](docs/website-release-checklist.md)
 - [Contributing](CONTRIBUTING.md)
-- [Support](SUPPORT.md)
-- [Privacy](PRIVACY.md)
-- [Security](SECURITY.md)
 - [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 
 ## Support and License
 
-Use [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues) for
-ordinary support. Report vulnerabilities privately through
-[GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new)
-and remove sensitive paths, usernames, and serial numbers from diagnostics.
+Use [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues) for questions, bugs, and feature requests. Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new); remove sensitive paths, usernames, and disk serial numbers before submitting diagnostics or screenshots.
 
-FindDiskKiller is open source under the [MIT License](LICENSE). Third-party
-application marks are used only to identify observed software and do not imply
-affiliation or endorsement.
+FindDiskKiller is open source under the [MIT License](LICENSE).
