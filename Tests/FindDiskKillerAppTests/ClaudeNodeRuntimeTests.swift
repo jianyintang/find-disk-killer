@@ -21,7 +21,7 @@ struct ClaudeNodeRuntimeTests {
         for architecture in ClaudeNodeRuntime.Architecture.allCases {
             let digest = architecture.expectedSHA256
             #expect(digest.count == 64)
-            #expect(digest.allSatisfy(\.isHexDigit))
+            #expect(digest.allSatisfy { $0.isHexDigit })
         }
     }
 
