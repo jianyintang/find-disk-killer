@@ -1,7 +1,7 @@
 import Foundation
 
 public enum TraceHelperProtocolConfiguration {
-    public static let version = 5
+    public static let version = 6
     public static let machServiceName = "com.jianyintang.FindDiskKiller.TraceHelper.v2"
     public static let helperExecutableName = "com.jianyintang.FindDiskKiller.TraceHelper"
     public static let launchDaemonPlistName =
@@ -102,6 +102,11 @@ public protocol TraceHelperXPCProtocol {
     func startTrace(
         maximumDurationSeconds: NSNumber,
         processIdentifiers: NSArray,
+        withReply reply: @escaping (NSString, NSString) -> Void
+    )
+
+    func startSystemTrace(
+        maximumDurationSeconds: NSNumber,
         withReply reply: @escaping (NSString, NSString) -> Void
     )
 

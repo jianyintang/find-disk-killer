@@ -130,6 +130,18 @@ private final class FakeTraceHelperTransport: TraceHelperTransporting, @unchecke
         return "session"
     }
 
+    func startSystemTrace(maximumDurationSeconds: Int) async throws -> String {
+        let shouldFail = lock.withLock {
+            guard startTraceFailures > 0 else { return false }
+            startTraceFailures -= 1
+            return true
+        }
+        if shouldFail {
+            throw TraceHelperClientError.unavailable
+        }
+        return "system-session"
+    }
+
     func drainTrace(
         sessionID: String,
         maximumRecordCount: Int

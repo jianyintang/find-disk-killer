@@ -67,6 +67,7 @@ protocol TraceHelperTransporting: AnyObject, Sendable {
         maximumDurationSeconds: Int,
         processIdentifiers: [Int32]
     ) async throws -> String
+    func startSystemTrace(maximumDurationSeconds: Int) async throws -> String
     func drainTrace(
         sessionID: String,
         maximumRecordCount: Int
@@ -246,6 +247,28 @@ final class TraceHelperXPCTransport: TraceHelperTransporting, @unchecked Sendabl
                 helper.startTrace(
                     maximumDurationSeconds: NSNumber(value: maximumDurationSeconds),
                     processIdentifiers: processIdentifiers.map(NSNumber.init(value:)) as NSArray
+                ) { sessionID, status in
+                    let status = status as String
+                    guard status == "started" else {
+                        relay.resume(with: .failure(TraceHelperClientError.rejected(status)))
+                        return
+                    }
+                    relay.resume(with: .success(sessionID as String))
+                }
+            } catch {
+                relay.resume(with: .failure(error))
+            }
+        }
+    }
+
+    func startSystemTrace(maximumDurationSeconds: Int) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            let relay = TraceHelperContinuation(continuation)
+            relay.failAfter(.seconds(5))
+            do {
+                let helper = try remoteProxy(relay: relay)
+                helper.startSystemTrace(
+                    maximumDurationSeconds: NSNumber(value: maximumDurationSeconds)
                 ) { sessionID, status in
                     let status = status as String
                     guard status == "started" else {
@@ -685,6 +708,21 @@ final class TraceHelperController {
         return try await transport.startTrace(
             maximumDurationSeconds: maximumDurationSeconds,
             processIdentifiers: processIdentifiers
+        )
+    }
+
+    func startSystemTrace(maximumDurationSeconds: Int) async throws -> String {
+        do {
+            try await ping(timeout: .seconds(2))
+        } catch {
+            refreshStatus()
+            if service.status == .requiresApproval {
+                throw TraceHelperClientError.approvalRequired
+            }
+            throw error
+        }
+        return try await transport.startSystemTrace(
+            maximumDurationSeconds: maximumDurationSeconds
         )
     }
 

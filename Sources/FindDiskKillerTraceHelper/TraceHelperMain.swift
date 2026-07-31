@@ -107,7 +107,7 @@ final class TraceSession: TraceSessionManaging, @unchecked Sendable {
     let id = UUID().uuidString
     let process: Process
     private let output: Pipe
-    private let resolver: TraceProcessResolver
+    private let resolver: TraceProcessResolver?
     private let lock = NSLock()
     private var pendingBytes = Data()
     private var records: [TraceHelperRecord] = []
@@ -120,17 +120,19 @@ final class TraceSession: TraceSessionManaging, @unchecked Sendable {
 
     init(
         maximumDurationSeconds: Int,
-        processIdentifiers: [Int32],
+        processIdentifiers: [Int32]?,
         onTermination: @escaping @Sendable (String) -> Void
     ) throws {
         process = Process()
         output = Pipe()
-        resolver = TraceProcessResolver(processIdentifiers: processIdentifiers)
+        resolver = processIdentifiers.map {
+            TraceProcessResolver(processIdentifiers: $0)
+        }
         self.onTermination = onTermination
         process.executableURL = URL(fileURLWithPath: "/usr/bin/fs_usage")
         process.arguments = [
             "-w", "-f", "filesys", "-t", String(maximumDurationSeconds)
-        ] + processIdentifiers.map(String.init)
+        ] + (processIdentifiers ?? []).map(String.init)
         process.environment = [
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
             "LANG": "C",
@@ -248,7 +250,9 @@ final class TraceSession: TraceSessionManaging, @unchecked Sendable {
     }
 
     private func append(line: String) {
-        let processIdentity = Self.threadID(in: line).flatMap(resolver.identity)
+        let processIdentity = resolver.flatMap { resolver in
+            Self.threadID(in: line).flatMap(resolver.identity)
+        }
         let record = TraceHelperRecord(line: line, process: processIdentity)
         let byteCount = line.utf8.count
 
@@ -300,7 +304,7 @@ final class TraceSession: TraceSessionManaging, @unchecked Sendable {
 final class TraceHelperService: @unchecked Sendable {
     typealias SessionFactory = @Sendable (
         Int,
-        [Int32],
+        [Int32]?,
         @escaping @Sendable (String) -> Void
     ) throws -> any TraceSessionManaging
 
@@ -387,6 +391,48 @@ final class TraceHelperService: @unchecked Sendable {
                 let session = try self.sessionFactory(
                     duration,
                     identifiers,
+                    { [weak self] sessionID in
+                        self?.queue.async { [weak self] in
+                            self?.sessionDidTerminate(sessionID)
+                        }
+                    }
+                )
+                self.session = session
+                self.sessionOwnerID = clientID
+                replyBox((session.id as NSString, TraceHelperStatus.started as NSString))
+            } catch {
+                self.session = nil
+                replyBox(("" as NSString, TraceHelperStatus.launchFailed as NSString))
+            }
+        }
+    }
+
+    func startSystemTrace(
+        clientID: UUID,
+        maximumDurationSeconds: NSNumber,
+        withReply reply: @escaping (NSString, NSString) -> Void
+    ) {
+        let requestedDuration = maximumDurationSeconds.intValue
+        let replyBox = XPCReply<(NSString, NSString)> { reply($0.0, $0.1) }
+        queue.async {
+            guard let duration = TraceHelperProtocolConfiguration.validatedDuration(
+                requestedDuration
+            ) else {
+                replyBox(("" as NSString, TraceHelperStatus.invalidRequest as NSString))
+                return
+            }
+            if let session = self.session {
+                replyBox((session.id as NSString, TraceHelperStatus.busy as NSString))
+                return
+            }
+            guard self.stoppingSessionID == nil else {
+                replyBox(("" as NSString, TraceHelperStatus.busy as NSString))
+                return
+            }
+            do {
+                let session = try self.sessionFactory(
+                    duration,
+                    nil,
                     { [weak self] sessionID in
                         self?.queue.async { [weak self] in
                             self?.sessionDidTerminate(sessionID)
@@ -521,6 +567,17 @@ final class TraceHelperConnection: NSObject, TraceHelperXPCProtocol, @unchecked 
             clientID: clientID,
             maximumDurationSeconds: maximumDurationSeconds,
             processIdentifiers: processIdentifiers,
+            withReply: reply
+        )
+    }
+
+    func startSystemTrace(
+        maximumDurationSeconds: NSNumber,
+        withReply reply: @escaping (NSString, NSString) -> Void
+    ) {
+        service.startSystemTrace(
+            clientID: clientID,
+            maximumDurationSeconds: maximumDurationSeconds,
             withReply: reply
         )
     }
