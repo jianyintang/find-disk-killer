@@ -3391,13 +3391,17 @@ struct AgentStorageProviderIcon: View {
     let size: CGFloat
     private static let codexImage = loadImage(named: "codex-openai")
     private static let claudeImage = loadImage(named: "claude-code")
+    private static let openCodeImage = loadImage(
+        named: "opencode",
+        fileExtension: "icns"
+    )
 
     var body: some View {
         Group {
             if let image = providerImage {
                 Image(nsImage: image)
                     .resizable()
-                    .renderingMode(provider == .codex ? .original : .template)
+                    .renderingMode(provider == .claude ? .template : .original)
                     .foregroundStyle(Color(red: 0.82, green: 0.39, blue: 0.18))
             } else {
                 Image(systemName: fallbackSymbol)
@@ -3414,7 +3418,7 @@ struct AgentStorageProviderIcon: View {
         switch provider {
         case .codex: Self.codexImage
         case .claude: Self.claudeImage
-        case .openCode: nil
+        case .openCode: Self.openCodeImage
         }
     }
 
@@ -3426,8 +3430,11 @@ struct AgentStorageProviderIcon: View {
         }
     }
 
-    private static func loadImage(named name: String) -> NSImage? {
-        guard let url = AppResourceBundle.value.url(forResource: name, withExtension: "png") else {
+    private static func loadImage(
+        named name: String,
+        fileExtension: String = "png"
+    ) -> NSImage? {
+        guard let url = AppResourceBundle.value.url(forResource: name, withExtension: fileExtension) else {
             return nil
         }
         return NSImage(contentsOf: url)

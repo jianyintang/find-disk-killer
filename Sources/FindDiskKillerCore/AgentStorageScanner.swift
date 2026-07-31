@@ -912,7 +912,7 @@ private struct AgentStorageScanEngine {
                 path: databaseURL.path,
                 interruptRegistry: interruptRegistry
             )
-            let snapshot = try database.openCodeSnapshot { count in
+            let snapshot = try openCodeSnapshotWithRetry(database: database) { count in
                 metadataProgress.setActivityCount(count)
             }
             openCodeDatabaseEstimates[scope.id] = OpenCodeDatabaseEstimate(
@@ -1082,6 +1082,27 @@ private struct AgentStorageScanEngine {
                 absolutePath: databaseURL.path
             )
         }
+    }
+
+    private func openCodeSnapshotWithRetry(
+        database: ReadOnlyAgentSQLite,
+        progress: (Int) -> Void
+    ) throws -> OpenCodeDatabaseSnapshot {
+        var lastError: AgentSQLiteError = .temporarilyBusy
+        for (attempt, delay) in [0.0, 0.25, 0.75, 1.5].enumerated() {
+            if delay > 0 {
+                Thread.sleep(forTimeInterval: delay)
+            }
+            do {
+                return try database.openCodeSnapshot(progress: progress)
+            } catch let error as AgentSQLiteError {
+                lastError = error
+                guard case .temporarilyBusy = error, attempt < 3 else {
+                    throw error
+                }
+            }
+        }
+        throw lastError
     }
 
     private mutating func loadClaudeMetadata(
@@ -3921,7 +3942,7 @@ private final class ReadOnlyAgentSQLite {
             handle = nil
             throw error
         }
-        sqlite3_busy_timeout(pointer, 150)
+        sqlite3_busy_timeout(pointer, 1_000)
     }
 
     deinit {
