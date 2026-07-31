@@ -1,6 +1,16 @@
 import Foundation
 import FindDiskKillerCore
 
+struct UnsupportedAgentCleanupAdapter: AgentStorageCleanupCapabilityProviding {
+    func availability(for family: AgentStorageThreadFamily) async -> AgentStorageCleanupAvailability {
+        .unsupported("OpenCode 暂不支持安全清理")
+    }
+
+    func delete(_ family: AgentStorageThreadFamily) async -> AgentStorageCleanupOutcome {
+        .failed("OpenCode 暂不支持安全清理")
+    }
+}
+
 struct CodexAppServerCleanupAdapter: AgentStorageCleanupCapabilityProviding {
     private let executableOverride: String?
 

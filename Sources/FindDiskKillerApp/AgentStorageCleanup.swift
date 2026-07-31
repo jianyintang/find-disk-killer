@@ -98,6 +98,7 @@ enum AgentStorageCleanupValidator {
     }
 
     static func officialArtifacts(for family: AgentStorageThreadFamily) -> [AgentStorageCleanupArtifact] {
+        if family.provider == .openCode { return [] }
         let artifacts: [AgentStorageCleanupArtifact]
         if family.provider == .claude {
             guard family.sourceKind == .claudeCode else { return [] }
@@ -147,6 +148,7 @@ enum AgentStorageCleanupValidator {
             return canonicalMain.contains(family.nativeThreadID)
                 && family.projectPath?.hasPrefix("/") == true
         }
+        if family.provider == .openCode { return false }
         return family.sourceKind == .codexHome
     }
 
@@ -154,7 +156,7 @@ enum AgentStorageCleanupValidator {
         _ family: AgentStorageThreadFamily,
         artifacts: [AgentStorageCleanupArtifact]
     ) -> Bool {
-        guard family.provider == .claude else { return true }
+        guard family.provider == .claude else { return family.provider != .openCode }
         guard family.sourceKind == .claudeCode, let mainPath = family.path else { return false }
         let main = URL(fileURLWithPath: mainPath).standardizedFileURL
         let sessionDirectory = main.deletingLastPathComponent()
@@ -314,16 +316,19 @@ enum AgentStorageCleanupError: LocalizedError {
 actor AgentStorageCleanupCoordinator {
     private let codex: any AgentStorageCleanupCapabilityProviding
     private let claude: any AgentStorageCleanupCapabilityProviding
+    private let openCode: any AgentStorageCleanupCapabilityProviding
     private let activityInspector: any AgentStorageCleanupActivityInspecting
     private var capabilityCache: [String: AgentStorageCleanupAvailability] = [:]
 
     init(
         codex: any AgentStorageCleanupCapabilityProviding = CodexAppServerCleanupAdapter(),
         claude: any AgentStorageCleanupCapabilityProviding = ClaudeSDKCleanupAdapter(),
+        openCode: any AgentStorageCleanupCapabilityProviding = UnsupportedAgentCleanupAdapter(),
         activityInspector: any AgentStorageCleanupActivityInspecting = AgentStorageLsofActivityInspector()
     ) {
         self.codex = codex
         self.claude = claude
+        self.openCode = openCode
         self.activityInspector = activityInspector
     }
 
@@ -434,7 +439,11 @@ actor AgentStorageCleanupCoordinator {
     }
 
     private func adapter(for family: AgentStorageThreadFamily) -> any AgentStorageCleanupCapabilityProviding {
-        family.provider == .codex ? codex : claude
+        switch family.provider {
+        case .codex: codex
+        case .claude: claude
+        case .openCode: openCode
+        }
     }
 
     private func capabilityKey(for family: AgentStorageThreadFamily) -> String {
@@ -636,7 +645,12 @@ struct AgentStorageCleanupReviewView: View {
                 let providerTargets = session.targets.filter { $0.family.provider == provider }
                 if !providerTargets.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Label(provider == .codex ? "Codex" : "Claude", systemImage: provider == .codex ? "terminal" : "bubble.left.and.text.bubble.right")
+                        Label(
+                            provider == .codex ? "Codex" : provider == .claude ? "Claude" : "OpenCode",
+                            systemImage: provider == .codex
+                                ? "terminal"
+                                : provider == .claude ? "bubble.left.and.text.bubble.right" : "curlybraces"
+                        )
                             .font(.headline)
                         ForEach(providerTargets) { target in targetRow(target) }
                     }

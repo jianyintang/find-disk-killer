@@ -3,6 +3,7 @@ import Foundation
 public enum AgentStorageProvider: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
     case codex
     case claude
+    case openCode
 
     public var id: String { rawValue }
 }
@@ -13,6 +14,7 @@ public enum AgentStorageSourceKind: String, Codable, Hashable, Sendable {
     case claudeCode
     case claudeDesktop
     case claudeDesktopAgent
+    case openCode
 }
 
 public enum AgentStorageProviderSupportStatus: String, Codable, Hashable, Sendable {
