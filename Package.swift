@@ -10,6 +10,7 @@ let package = Package(
     ],
     products: [
         .library(name: "FindDiskKillerCore", targets: ["FindDiskKillerCore"]),
+        .library(name: "FindDiskKillerNodeRuntime", targets: ["FindDiskKillerNodeRuntime"]),
         .library(name: "FindDiskKillerTraceProtocol", targets: ["FindDiskKillerTraceProtocol"]),
         .library(name: "CFindDiskKillerTrace", targets: ["CFindDiskKillerTrace"]),
         .executable(name: "FindDiskKiller", targets: ["FindDiskKillerApp"])
@@ -35,6 +36,7 @@ let package = Package(
             ]
         ),
         .target(name: "FindDiskKillerTraceProtocol"),
+        .target(name: "FindDiskKillerNodeRuntime"),
         .target(
             name: "CFindDiskKillerTrace",
             publicHeadersPath: "include"
@@ -43,6 +45,7 @@ let package = Package(
             name: "FindDiskKillerApp",
             dependencies: [
                 "FindDiskKillerCore",
+                "FindDiskKillerNodeRuntime",
                 "FindDiskKillerTraceProtocol",
                 .product(name: "Sparkle", package: "Sparkle")
             ],
@@ -58,7 +61,8 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "FindDiskKillerClaudeCleanupHelper"
+            name: "FindDiskKillerClaudeCleanupHelper",
+            dependencies: ["FindDiskKillerNodeRuntime"]
         ),
         .testTarget(
             name: "FindDiskKillerCoreTests",
@@ -72,6 +76,7 @@ let package = Package(
             name: "FindDiskKillerAppTests",
             dependencies: [
                 "FindDiskKillerApp",
+                "FindDiskKillerNodeRuntime",
                 "FindDiskKillerCore",
                 "FindDiskKillerTraceProtocol"
             ]

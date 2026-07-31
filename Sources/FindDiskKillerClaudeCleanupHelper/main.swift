@@ -1,4 +1,5 @@
 import Foundation
+import FindDiskKillerNodeRuntime
 
 let environment = ProcessInfo.processInfo.environment
 let fileManager = FileManager.default
@@ -9,39 +10,25 @@ let resources = executable
     .appending(path: "Resources/AgentCleanup", directoryHint: .isDirectory)
 let script = resources.appending(path: "claude-cleanup-helper.mjs")
 
-let isExecutable: (String) -> Bool = { fileManager.isExecutableFile(atPath: $0) }
-
-// Mirrors the resolution order of ClaudeNodeRuntime in the main app: explicit
-// override, legacy bundled runtime, a runtime downloaded by the app into
-// Application Support, then any installation reachable from PATH or common
-// package-manager locations. The app normally resolves the runtime first and
-// passes it via FDK_NODE_BINARY; the fallbacks keep direct helper invocations
-// (fixtures, development) working.
-let resolveNodeBinary: () -> String? = {
-    if let override = environment["FDK_NODE_BINARY"], isExecutable(override) {
-        return override
-    }
-    let bundled = resources.appending(path: "node").path
-    if isExecutable(bundled) { return bundled }
-
-    let supportRoot = (fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-        ?? fileManager.homeDirectoryForCurrentUser.appending(path: "Library/Application Support"))
-        .appending(path: "FindDiskKiller/AgentCleanup", directoryHint: .isDirectory)
-    let downloaded = ((try? fileManager.contentsOfDirectory(atPath: supportRoot.path)) ?? [])
-        .sorted(by: >)
-        .map { supportRoot.appending(path: "\($0)/node").path }
-        .first(where: isExecutable)
-    if let downloaded { return downloaded }
-
-    let pathDirectories = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
-    let commonDirectories = ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"]
-    return (pathDirectories + commonDirectories)
-        .map { URL(fileURLWithPath: $0).appending(path: "node").path }
-        .first(where: isExecutable)
+guard let requestedNode = environment["FDK_NODE_BINARY"] else {
+    FileHandle.standardError.write(Data("FDK_NODE_BINARY is required; launch this helper through FindDiskKiller\n".utf8))
+    exit(69)
 }
 
-guard let node = resolveNodeBinary(), fileManager.fileExists(atPath: script.path) else {
-    FileHandle.standardError.write(Data("Bundled Claude SDK runtime is unavailable\n".utf8))
+let node: String
+do {
+    node = try NodeRuntimeResolver.validate(
+        path: requestedNode,
+        source: .environmentOverride,
+        minimumMajor: 20
+    ).path
+} catch {
+    FileHandle.standardError.write(Data("FDK_NODE_BINARY is invalid: \(error)\n".utf8))
+    exit(69)
+}
+
+guard fileManager.fileExists(atPath: script.path) else {
+    FileHandle.standardError.write(Data("Bundled Claude SDK script is unavailable\n".utf8))
     exit(69)
 }
 
