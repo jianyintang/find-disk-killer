@@ -288,7 +288,7 @@ struct ClaudeSDKCleanupAdapter: AgentStorageCleanupCapabilityProviding {
         default:
             return .unsupported("此 Claude 来源不支持安全清理")
         }
-        guard let helper = helperOverride ?? Self.bundledHelperPath() else {
+        guard let helper = Self.resolvedHelper(override: helperOverride) else {
             return .unsupported("官方 Claude SDK 清理组件不可用")
         }
         do {
@@ -304,7 +304,7 @@ struct ClaudeSDKCleanupAdapter: AgentStorageCleanupCapabilityProviding {
 
     func delete(_ family: AgentStorageThreadFamily) async -> AgentStorageCleanupOutcome {
         guard family.sourceKind == .claudeCode,
-              let helper = helperOverride ?? Self.bundledHelperPath(),
+              let helper = Self.resolvedHelper(override: helperOverride),
               let projectPath = family.projectPath,
               let sourcePath = family.sourcePath
         else { return .failed("官方 Claude SDK 清理组件不可用") }
@@ -324,12 +324,20 @@ struct ClaudeSDKCleanupAdapter: AgentStorageCleanupCapabilityProviding {
         }
     }
 
-    private func runHelper(_ helper: String, request: [String: Any]) async throws -> [String: Any] {
+    private func runHelper(_ helper: Helper, request: [String: Any]) async throws -> [String: Any] {
+        // The bundled helper no longer ships a Node.js runtime; resolve (and
+        // download once, if nothing usable is installed) before invoking it.
+        // Override helpers used by tests manage their own runtime.
+        var environment: [String: String] = [:]
+        if helper.isBundled {
+            environment["FDK_NODE_BINARY"] = try await ClaudeNodeRuntime.ensureAvailable()
+        }
         let input = try JSONSerialization.data(withJSONObject: request)
         let result = try await AgentCleanupProcess.run(
-            executable: helper,
+            executable: helper.path,
             arguments: [],
             stdin: input + Data([0x0A]),
+            environment: environment.isEmpty ? nil : environment,
             timeoutSeconds: 20
         )
         guard let data = result.stdout.data(using: .utf8),
@@ -343,13 +351,21 @@ struct ClaudeSDKCleanupAdapter: AgentStorageCleanupCapabilityProviding {
         return object
     }
 
-    private static func bundledHelperPath() -> String? {
+    private struct Helper {
+        let path: String
+        let isBundled: Bool
+    }
+
+    private static func resolvedHelper(override helperOverride: String?) -> Helper? {
+        if let helperOverride { return Helper(path: helperOverride, isBundled: false) }
         if let override = ProcessInfo.processInfo.environment["FDK_CLAUDE_CLEANUP_HELPER"],
-           FileManager.default.isExecutableFile(atPath: override) { return override }
+           FileManager.default.isExecutableFile(atPath: override) {
+            return Helper(path: override, isBundled: false)
+        }
         guard let executable = Bundle.main.executableURL else { return nil }
         let path = executable.deletingLastPathComponent()
             .appending(path: "FindDiskKillerClaudeCleanupHelper").path
-        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+        return FileManager.default.isExecutableFile(atPath: path) ? Helper(path: path, isBundled: true) : nil
     }
 }
 
@@ -368,12 +384,17 @@ private enum AgentCleanupProcess {
         executable: String,
         arguments: [String],
         stdin: Data? = nil,
+        environment: [String: String]? = nil,
         timeoutSeconds: TimeInterval
     ) async throws -> Result {
         try await Task.detached(priority: .userInitiated) {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
+            if let environment {
+                process.environment = ProcessInfo.processInfo.environment
+                    .merging(environment) { _, override in override }
+            }
             let output = Pipe()
             let errors = Pipe()
             let input = Pipe()

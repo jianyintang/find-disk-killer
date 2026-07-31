@@ -35,7 +35,8 @@ third_party_notices="$app_path/Contents/Resources/THIRD_PARTY_NOTICES.md"
 provisioning_profile="$app_path/Contents/embedded.provisionprofile"
 sparkle_framework="$app_path/Contents/Frameworks/Sparkle.framework"
 claude_cleanup_helper="$app_path/Contents/MacOS/FindDiskKillerClaudeCleanupHelper"
-claude_cleanup_node="$app_path/Contents/Resources/AgentCleanup/node"
+claude_cleanup_script="$app_path/Contents/Resources/AgentCleanup/claude-cleanup-helper.mjs"
+claude_cleanup_sdk="$app_path/Contents/Resources/AgentCleanup/claude-agent-sdk/sdk.mjs"
 
 for required_path in \
     "$info_plist" \
@@ -46,10 +47,18 @@ for required_path in \
     "$third_party_notices" \
     "$sparkle_framework" \
     "$claude_cleanup_helper" \
-    "$claude_cleanup_node" \
+    "$claude_cleanup_script" \
+    "$claude_cleanup_sdk" \
     "$provisioning_profile"; do
     [[ -e "$required_path" ]] || { echo "Required release payload missing: $required_path" >&2; exit 1; }
 done
+
+# The Node.js runtime is resolved or downloaded at runtime and must never be
+# embedded in the release bundle again.
+[[ ! -e "$app_path/Contents/Resources/AgentCleanup/node" ]] || {
+    echo "Release bundle must not embed a Node.js runtime" >&2
+    exit 1
+}
 
 plutil -lint "$info_plist" "$helper_plist" "$legacy_helper_plist" "$privacy_manifest"
 
@@ -99,12 +108,10 @@ privacy_tracking=$(plutil -extract NSPrivacyTracking raw "$privacy_manifest")
 codesign --verify --deep --strict --verbose=2 "$app_path"
 codesign --verify --strict --verbose=2 "$helper"
 codesign --verify --strict --verbose=2 "$claude_cleanup_helper"
-codesign --verify --strict --verbose=2 "$claude_cleanup_node"
 
 app_signature=$(codesign -dvvv "$app_path" 2>&1)
 helper_signature=$(codesign -dvvv "$helper" 2>&1)
 claude_cleanup_helper_signature=$(codesign -dvvv "$claude_cleanup_helper" 2>&1)
-claude_cleanup_node_signature=$(codesign -dvvv "$claude_cleanup_node" 2>&1)
 team_identifier=$(awk -F= '/^TeamIdentifier=/{print $2}' <<<"$app_signature")
 [[ "$team_identifier" == "Y3A8BJ4475" ]] || {
     echo "Unexpected signing team: ${team_identifier:-missing}" >&2
@@ -113,8 +120,7 @@ team_identifier=$(awk -F= '/^TeamIdentifier=/{print $2}' <<<"$app_signature")
 for signature in \
     "$app_signature" \
     "$helper_signature" \
-    "$claude_cleanup_helper_signature" \
-    "$claude_cleanup_node_signature"; do
+    "$claude_cleanup_helper_signature"; do
     grep -Fq "Authority=Developer ID Application: Jianyin Tang (Y3A8BJ4475)" <<<"$signature" || {
         echo "Release payload is not signed with the expected Developer ID identity" >&2
         exit 1
@@ -224,9 +230,6 @@ plutil -remove 'com\.apple\.application-identifier' \
     plutil -p "$claude_cleanup_helper_entitlements" >&2
     exit 1
 }
-require_empty_entitlements \
-    "$claude_cleanup_node" \
-    "$temporary_directory/claude-cleanup-node-entitlements.plist"
 
 helper_program=$(plutil -extract BundleProgram raw "$helper_plist")
 [[ "$helper_program" == \
@@ -261,7 +264,6 @@ require_universal_binary() {
 require_universal_binary "$app_path/Contents/MacOS/FindDiskKiller"
 require_universal_binary "$helper"
 require_universal_binary "$claude_cleanup_helper"
-require_universal_binary "$claude_cleanup_node"
 
 if [[ -n "$dmg_path" ]]; then
     [[ -f "$dmg_path" ]] || { echo "Disk image not found: $dmg_path" >&2; exit 1; }

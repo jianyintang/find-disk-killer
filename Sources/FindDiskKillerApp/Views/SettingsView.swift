@@ -20,6 +20,7 @@ struct SettingsPage: View {
     @AppStorage(AgentStoragePreferences.hidePrivateDetailsKey)
     private var hidesAgentStoragePrivateDetails = false
     @State private var loginItem = LoginItemSettingsModel()
+    @State private var nodeRuntime = ClaudeNodeRuntimeStatusModel()
     @State private var traceHelperState: TraceHelperServiceState = .notRegistered
     @State private var historyWasCleared = false
     @State private var confirmation: HistorySettingsConfirmation?
@@ -130,6 +131,68 @@ struct SettingsPage: View {
                         .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 3)
+                }
+
+                Section(L10n.text("Claude 官方清理")) {
+                    LabeledContent(L10n.text("Node.js 运行时")) {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(nodeRuntimeStatusColor)
+                                .frame(width: 8, height: 8)
+                                .accessibilityHidden(true)
+                            Text(nodeRuntimeStatusText)
+                                .foregroundStyle(.secondary)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+
+                    if case .available(let availability) = nodeRuntime.phase {
+                        LabeledContent(L10n.text("运行时位置")) {
+                            Text(agentStoragePath(availability.path))
+                                .font(.caption.monospaced())
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+
+                    Text(L10n.text("批量清理 Claude Code 聊天时，需要 Node.js 运行 Anthropic 官方 SDK；会自动复用本机已安装的 Node.js 20 或更高版本。"))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    switch nodeRuntime.phase {
+                    case .missing, .failed:
+                        HStack {
+                            Button {
+                                nodeRuntime.download()
+                            } label: {
+                                Label(
+                                    L10n.format("下载 Node.js v%@", ClaudeNodeRuntime.pinnedVersion),
+                                    systemImage: "arrow.down.circle"
+                                )
+                            }
+                            Spacer()
+                            Button(L10n.text("重新检测")) {
+                                nodeRuntime.refresh()
+                            }
+                        }
+                    case .downloading:
+                        HStack(spacing: 10) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(L10n.text("正在下载并校验官方运行时…"))
+                                .foregroundStyle(.secondary)
+                        }
+                    case .checking, .available:
+                        EmptyView()
+                    }
+
+                    if case .failed(let message) = nodeRuntime.phase {
+                        SettingsInlineStatus(
+                            text: message,
+                            systemImage: "exclamationmark.triangle",
+                            color: .orange
+                        )
+                    }
                 }
             }
             .formStyle(.grouped)
@@ -464,6 +527,35 @@ struct SettingsPage: View {
         )
     }
 
+    private var nodeRuntimeStatusColor: Color {
+        switch nodeRuntime.phase {
+        case .checking: .secondary
+        case .available: .green
+        case .missing: .orange
+        case .downloading: .blue
+        case .failed: .red
+        }
+    }
+
+    private var nodeRuntimeStatusText: String {
+        switch nodeRuntime.phase {
+        case .checking:
+            L10n.text("检测中…")
+        case .available(let availability):
+            if let version = availability.version {
+                "\(version) · \(availability.source.localizedLabel)"
+            } else {
+                availability.source.localizedLabel
+            }
+        case .missing:
+            L10n.text("未检测到可用运行时")
+        case .downloading:
+            L10n.text("正在下载")
+        case .failed:
+            L10n.text("下载失败")
+        }
+    }
+
     private var traceHelperStatusText: String {
         switch traceHelperState {
         case .notRegistered: L10n.text("未启用")
@@ -481,6 +573,7 @@ struct SettingsPage: View {
 
     private func refreshServiceStates() {
         loginItem.refresh()
+        nodeRuntime.refresh()
         let controller = TraceHelperController()
         controller.refreshStatus()
         traceHelperState = controller.state

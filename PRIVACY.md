@@ -70,6 +70,18 @@ link. FindDiskKiller does not prefetch these pages and does not add click
 tracking or UTM parameters. Your default browser and the destination site's
 privacy terms apply after the page opens.
 
+The official Claude session cleanup feature runs Anthropic's Claude Agent SDK,
+which requires a Node.js runtime. FindDiskKiller first reuses a compatible
+Node.js installation already on your Mac. If none is found when you start a
+cleanup, the app downloads the pinned official Node.js build for your
+hardware architecture from nodejs.org once, verifies it against a checksum
+embedded in the app, and stores it in the app's Application Support folder
+for later cleanups. The download request carries no personal data, monitoring
+data, or identifiers; nodejs.org and its content delivery providers will
+ordinarily receive the requesting IP address, request time, and standard
+network headers. Cleanup itself operates only on local files and sends
+nothing to Anthropic or any other server.
+
 ## Data Security
 
 The app uses macOS code signing, Hardened Runtime, XPC code-signing checks,
