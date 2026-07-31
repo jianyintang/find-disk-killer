@@ -290,7 +290,27 @@ enum L10n {
         "正在停止追踪": "Stopping Trace",
         "正在确认追踪已结束": "Confirming Trace Has Stopped",
         "仍可检查更新；如需安装，将在追踪完全停止后自动继续。": "You can still check for updates. Installation will continue automatically after tracing fully stops.",
-        "仍可检查更新；确认后台追踪结束前不会开始安装。": "You can still check for updates. Installation will not start until background tracing is confirmed stopped."
+        "仍可检查更新；确认后台追踪结束前不会开始安装。": "You can still check for updates. Installation will not start until background tracing is confirmed stopped.",
+        "Claude 官方清理": "Official Claude Cleanup",
+        "Node.js 运行时": "Node.js Runtime",
+        "运行时位置": "Runtime Location",
+        "批量清理 Claude Code 聊天时，需要 Node.js 运行 Anthropic 官方 SDK；会自动复用本机已安装的 Node.js 20 或更高版本。": "Batch-cleaning Claude Code chats requires Node.js to run the official Anthropic SDK. A locally installed Node.js 20 or later is reused automatically.",
+        "下载 Node.js v%@": "Download Node.js v%@",
+        "重新检测": "Check Again",
+        "正在下载并校验官方运行时…": "Downloading and verifying the official runtime…",
+        "检测中…": "Checking…",
+        "未检测到可用运行时": "No Usable Runtime Detected",
+        "正在下载": "Downloading",
+        "下载失败": "Download Failed",
+        "环境变量指定": "Set by Environment Variable",
+        "旧版内置": "Bundled in Previous Version",
+        "已下载": "Downloaded",
+        "系统安装": "System Installation",
+        "Node.js 运行时下载失败：%@": "Node.js runtime download failed: %@",
+        "Node.js 运行时校验失败，已放弃安装": "Node.js runtime failed checksum verification, so installation was abandoned.",
+        "Node.js 运行时解压失败：%@": "Node.js runtime extraction failed: %@",
+        "归档中缺少 node 可执行文件": "The archive is missing the node executable",
+        "tar 退出码非零": "tar exited with a non-zero status"
     ]
 }
 

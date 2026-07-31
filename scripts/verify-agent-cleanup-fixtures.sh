@@ -8,6 +8,14 @@ codex_binary="${FDK_CODEX_APP_SERVER:-/Applications/ChatGPT.app/Contents/Resourc
 [[ -x "${claude_helper}" ]] || { echo "Bundled Claude helper not found" >&2; exit 69; }
 [[ -x "${codex_binary}" ]] || { echo "Official Codex app-server not found" >&2; exit 69; }
 
+# The helper no longer embeds a Node.js runtime; pin one explicitly so the
+# fixture run does not depend on the helper's own fallback search.
+if [[ -z "${FDK_NODE_BINARY:-}" ]]; then
+  node_binary="$(command -v node || true)"
+  [[ -x "${node_binary}" ]] || { echo "Node.js runtime not found for fixtures" >&2; exit 69; }
+  export FDK_NODE_BINARY="${node_binary}"
+fi
+
 fixture_root="$(mktemp -d "${TMPDIR%/}/fdk-agent-cleanup-fixtures.XXXXXX")"
 trap '[[ "${fixture_root}" == "${TMPDIR%/}"/fdk-agent-cleanup-fixtures.* ]] && rm -rf "${fixture_root}"' EXIT
 
