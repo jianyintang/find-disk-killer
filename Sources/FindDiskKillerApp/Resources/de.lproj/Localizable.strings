@@ -1,4 +1,6 @@
 "跟随系统" = "Systemeinstellung";
+"包含主聊天及递归子代理的独占文件，以及按 Agent 会话记录归入此聊天的数据库估算。" = "Umfasst exklusive Dateien des Hauptchats und aller Subagents sowie die anhand der Agent-Sitzungsdaten zugeordnete Datenbankschätzung.";
+"数据库记录按 Agent 会话记录估算归入聊天；空闲页、索引、WAL 和无法关联的记录继续保留在共享残差中，物理总量只计算一次。" = "Datensätze werden anhand der Agent-Sitzungsdaten Chats zugeordnet. Freie Seiten, Indizes, WAL und nicht zuordenbare Datensätze verbleiben im gemeinsamen Rest; physischer Speicher wird nur einmal gezählt.";
 "现在" = "Aktuell";
 "磁盘" = "Datenträger";
 "应用" = "Apps";
@@ -491,6 +493,7 @@
 "其他全局数据" = "Andere globale Daten";
 "其他未归属数据" = "Andere nicht zugeordnete Daten";
 "分析 Codex 和 Claude 的聊天、子代理与全局运行时" = "Chats, Sub-Agents und globale Laufzeiten von Codex und Claude analysieren";
+"分析 Codex、Claude 和 OpenCode 的聊天、子代理与全局运行时" = "Chats, Sub-Agents und globale Laufzeiten von Codex, Claude und OpenCode analysieren";
 "分析完全在本机进行；不会上传标题、路径或占用数据。" = "Die Analyse erfolgt vollständig auf diesem Mac. Titel, Pfade und Speicherdaten werden nicht hochgeladen.";
 "切换范围或刷新后再查看" = "Bereich wechseln oder aktualisieren";
 "刷新失败，显示上次结果" = "Aktualisierung fehlgeschlagen; vorherige Ergebnisse werden angezeigt";
@@ -506,6 +509,7 @@
 "尚未分析" = "Noch nicht analysiert";
 "尚未分析 AI Agent 空间" = "AI-Agent-Speicher wurde noch nicht analysiert";
 "未检测到 Codex 或 Claude 数据" = "Keine Codex- oder Claude-Daten erkannt";
+"未检测到 Codex、Claude 或 OpenCode 数据" = "Keine Codex-, Claude- oder OpenCode-Daten erkannt";
 "尚未发现稳定的 thread 所有权证据" = "Keine verlässlichen Nachweise für die Thread-Zuordnung gefunden";
 "尝试清空搜索或更改筛选" = "Suche leeren oder Filter ändern";
 "层级" = "Ebene";
@@ -678,6 +682,7 @@
 "不影响其他 Agent 的分析" = "Andere Agents können weiterhin analysiert werden";
 "未安装或未发现数据" = "Nicht installiert oder keine Daten";
 "未发现 Codex 或 Claude 的 CLI/Desktop 数据目录；其他已安装 Agent 仍可正常分析。" = "Kein CLI-/Desktop-Datenordner von Codex oder Claude gefunden. Andere installierte Agents können weiterhin analysiert werden.";
+"未发现 Codex、Claude 或 OpenCode 的 CLI/Desktop 数据目录；其他已安装 Agent 仍可正常分析。" = "Kein CLI-/Desktop-Datenordner von Codex, Claude oder OpenCode gefunden. Andere installierte Agents können weiterhin analysiert werden.";
 "正在归因数据库记录" = "Datenbanksätze werden zugeordnet";
 "已处理 %d / %d 条日志" = "%d von %d Protokollen verarbeitet";
 "正在准备数据库记录" = "Datenbanksätze werden vorbereitet";
@@ -693,6 +698,7 @@
 "已读取 %d 项聊天索引" = "%d Chat-Indexeinträge gelesen";
 "正在打开当前聊天索引" = "Aktueller Chat-Index wird geöffnet";
 "正在检查 Codex、Claude 与自定义数据位置" = "Codex-, Claude- und benutzerdefinierte Datenorte werden geprüft";
+"正在检查 Codex、Claude、OpenCode 与自定义数据位置" = "Codex-, Claude-, OpenCode- und benutzerdefinierte Datenorte werden geprüft";
 "正在建立主聊天、子代理与项目关系" = "Hauptchats, Subagents und Projekte werden verknüpft";
 "正在读取文件系统分配的实际空间" = "Tatsächlich belegter Dateisystemspeicher wird gelesen";
 "正在确认扫描期间发生的文件变化" = "Während des Scans geänderte Dateien werden geprüft";

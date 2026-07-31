@@ -217,9 +217,13 @@ struct SettingsPage: View {
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                             } label: {
-                                Label(source.displayName, systemImage: source.provider == .codex
-                                    ? "terminal"
-                                    : "sparkles")
+                                Label(source.displayName, systemImage: {
+                                    switch source.provider {
+                                    case .codex: "terminal"
+                                    case .claude: "sparkles"
+                                    case .openCode: "curlybraces"
+                                    }
+                                }())
                             }
                         }
                     }

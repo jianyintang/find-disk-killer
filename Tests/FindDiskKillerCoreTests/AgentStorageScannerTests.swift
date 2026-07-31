@@ -17,6 +17,54 @@ import Testing
     #expect(tracker.count(for: .claude) == 2)
 }
 
+@Test func agentStorageScannerReadsOpenCodeSessionsWithoutMutatingTheDatabase() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let openCode = root.appending(path: ".local/share/opencode", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: openCode, withIntermediateDirectories: true)
+    let databaseURL = openCode.appending(path: "opencode.db")
+
+    do {
+        var database: OpaquePointer?
+        #expect(sqlite3_open(databaseURL.path, &database) == SQLITE_OK)
+        let handle = try #require(database)
+        defer { sqlite3_close_v2(handle) }
+        try executeSQL(handle, """
+            CREATE TABLE session (
+              id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT,
+              title TEXT NOT NULL, directory TEXT NOT NULL, time_updated INTEGER NOT NULL,
+              time_archived INTEGER, metadata TEXT
+            );
+            CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data TEXT NOT NULL);
+            CREATE TABLE part (
+              id TEXT PRIMARY KEY, message_id TEXT NOT NULL,
+              session_id TEXT NOT NULL, data TEXT NOT NULL
+            );
+            INSERT INTO session VALUES
+              ('ses_root', 'project', NULL, '', '/tmp/opencode-project', 1785225600000, 0, '{}'),
+              ('ses_child', 'project', 'ses_root', '', '/tmp/opencode-project', 1785225660000, 0, '{}');
+            INSERT INTO message VALUES ('msg_root', 'ses_root', '{"role":"user"}');
+            INSERT INTO part VALUES ('part_child', 'msg_root', 'ses_child', '{"type":"text"}');
+            """)
+    }
+    let signatureBeforeScan = try fileSystemSignature(databaseURL)
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan()
+
+    #expect(try fileSystemSignature(databaseURL) == signatureBeforeScan)
+    let family = try #require(snapshot.families.first { $0.nativeThreadID == "ses_root" })
+    #expect(family.provider == .openCode)
+    #expect(family.title == "Non-project directory · 2026-07-28")
+    let child = try #require(family.subagents.first { $0.nativeID == "ses_child" })
+    #expect(child.title == "Subagent · 2026-07-28")
+    #expect(family.databaseAttributedBytes > 0)
+    #expect(family.cleanupArtifacts.isEmpty)
+    #expect(snapshot.coverage.reconciliationDelta == 0)
+}
+
 @Test func agentStorageScannerMarksDirectoryChangesDuringScanAsPartial() async throws {
     let root = makeTemporaryRoot()
     defer { try? FileManager.default.removeItem(at: root) }

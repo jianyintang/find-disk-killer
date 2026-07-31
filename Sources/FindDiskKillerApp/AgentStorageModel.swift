@@ -171,7 +171,7 @@ final class AgentStorageModel {
 
     func addCustomRoot(_ url: URL) {
         guard AgentStoragePreferences.recognizedProvider(at: url) != nil else {
-            customRootError = L10n.text("所选目录不是可识别的 Codex 或 Claude Code 数据位置")
+            customRootError = L10n.text("所选目录不是可识别的 Codex、Claude Code 或 OpenCode 数据位置")
             return
         }
         customRootError = nil
@@ -251,6 +251,9 @@ enum AgentStoragePreferences {
         }
         if fileManager.fileExists(atPath: resolved.appending(path: "projects").path) {
             return .claude
+        }
+        if fileManager.fileExists(atPath: resolved.appending(path: "opencode.db").path) {
+            return .openCode
         }
         return nil
     }

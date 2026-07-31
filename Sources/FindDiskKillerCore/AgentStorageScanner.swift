@@ -243,6 +243,8 @@ private struct AgentStorageScanEngine {
     private var claudeSubagentTargets: [String: [String: [String: String]]] = [:]
     private var claudeToolResultTargets: [String: [String: ClaimOwnership]] = [:]
     private var claudeDesktopPathTargets: [String: ThreadTarget] = [:]
+    private var openCodeTargets: [String: [String: ThreadTarget]] = [:]
+    private var openCodeDatabaseEstimates: [String: OpenCodeDatabaseEstimate] = [:]
     private var physicalLedger: [FileIdentity: PhysicalEntry] = [:]
     private var globalAggregates: [String: MutableGlobalAggregate] = [:]
     private var unattributedAggregates: [String: MutableUnattributedAggregate] = [:]
@@ -309,6 +311,7 @@ private struct AgentStorageScanEngine {
         )
         try resolvePhysicalLedger()
         applyDatabaseAttributionProjections()
+        applyOpenCodeDatabaseAttributionProjections()
         reportProgress(
             .organizingResults,
             completedCount: physicalLedger.count,
@@ -334,7 +337,7 @@ private struct AgentStorageScanEngine {
         try Task.checkCancellation()
 
         let metadataScopes = scopes.filter {
-            $0.kind == .codexHome || $0.kind == .claudeCode
+            $0.kind == .codexHome || $0.kind == .claudeCode || $0.kind == .openCode
         }
         reportProgress(
             .readingMetadata,
@@ -359,6 +362,12 @@ private struct AgentStorageScanEngine {
                 )
             case .claudeCode, .claudeDesktopAgent:
                 try loadClaudeMetadata(
+                    from: scope,
+                    completedScopes: index,
+                    totalScopes: metadataScopes.count
+                )
+            case .openCode:
+                try loadOpenCodeMetadata(
                     from: scope,
                     completedScopes: index,
                     totalScopes: metadataScopes.count
@@ -433,6 +442,8 @@ private struct AgentStorageScanEngine {
         claudeSubagentTargets.merge(other.claudeSubagentTargets) { current, _ in current }
         claudeToolResultTargets.merge(other.claudeToolResultTargets) { current, _ in current }
         claudeDesktopPathTargets.merge(other.claudeDesktopPathTargets) { current, _ in current }
+        openCodeTargets.merge(other.openCodeTargets) { current, _ in current }
+        openCodeDatabaseEstimates.merge(other.openCodeDatabaseEstimates) { current, _ in current }
 
         for (identity, incoming) in other.physicalLedger {
             guard var existing = physicalLedger[identity] else {
@@ -511,7 +522,8 @@ private struct AgentStorageScanEngine {
         var candidates: [(URL, AgentStorageProvider, ScanScopeKind, String)] = [
             (home.appending(path: ".codex"), .codex, .codexHome, "Codex Home"),
             (home.appending(path: ".codex-cc"), .codex, .codexHome, "Codex Home"),
-            (home.appending(path: ".claude"), .claude, .claudeCode, "Claude Code")
+            (home.appending(path: ".claude"), .claude, .claudeCode, "Claude Code"),
+            (home.appending(path: ".local/share/opencode"), .openCode, .openCode, "OpenCode")
         ]
 
         if configuration.includesDesktopData {
@@ -547,6 +559,8 @@ private struct AgentStorageScanEngine {
                 candidates.append((standardized, .codex, .codexHome, "Codex Home"))
             } else if fileManager.fileExists(atPath: standardized.appending(path: "projects").path) {
                 candidates.append((standardized, .claude, .claudeCode, "Claude Code"))
+            } else if fileManager.fileExists(atPath: standardized.appending(path: "opencode.db").path) {
+                candidates.append((standardized, .openCode, .openCode, "OpenCode"))
             }
         }
 
@@ -572,6 +586,7 @@ private struct AgentStorageScanEngine {
                 path: resolved.path,
                 isAvailable: true,
                 isSessionSource: kind == .codexHome || kind == .claudeCode
+                    || kind == .openCode
                     || kind == .claudeDesktopAgent,
                 kind: kind.publicKind
             ))
@@ -858,6 +873,208 @@ private struct AgentStorageScanEngine {
             recordMetadataOutcome(.unreadable, provider: .codex)
             recordDiagnostic(
                 provider: .codex,
+                sourceID: scope.id,
+                kind: .sourceUnreadable,
+                area: .dataSource,
+                impact: .chatDiscovery,
+                absolutePath: databaseURL.path
+            )
+        }
+    }
+
+    private mutating func loadOpenCodeMetadata(
+        from scope: ScanScope,
+        completedScopes: Int,
+        totalScopes: Int
+    ) throws {
+        let databaseURL = scope.root.appending(path: "opencode.db")
+        guard fileManager.fileExists(atPath: databaseURL.path) else {
+            recordMetadataOutcome(.unsupported, provider: .openCode)
+            recordDiagnostic(
+                provider: .openCode,
+                sourceID: scope.id,
+                kind: .sourceUnsupportedFormat,
+                area: .dataSource,
+                impact: .chatDiscovery,
+                absolutePath: databaseURL.path
+            )
+            return
+        }
+
+        do {
+            let metadataProgress = AgentStorageMetadataProgressReporter(
+                emitter: progressEmitter,
+                completedScopes: completedScopes,
+                totalScopes: totalScopes,
+                provider: .openCode
+            )
+            let database = try ReadOnlyAgentSQLite(
+                path: databaseURL.path,
+                interruptRegistry: interruptRegistry
+            )
+            let snapshot = try database.openCodeSnapshot { count in
+                metadataProgress.setActivityCount(count)
+            }
+            openCodeDatabaseEstimates[scope.id] = OpenCodeDatabaseEstimate(
+                path: databaseURL.path,
+                bySessionID: snapshot.records.reduce(into: [:]) { result, record in
+                    result[record.id] = record.estimatedBytes
+                },
+                totalEstimatedBytes: snapshot.totalEstimatedBytes,
+                processedRowCount: snapshot.records.count,
+                totalRowCount: snapshot.totalRowCount
+            )
+            guard !snapshot.records.isEmpty else {
+                recordMetadataOutcome(.empty, provider: .openCode)
+                return
+            }
+            recordMetadataOutcome(.supported, provider: .openCode)
+            if snapshot.issueCount > 0 {
+                providerIssueCounts[.openCode, default: 0] += snapshot.issueCount
+                recordDiagnostic(
+                    provider: .openCode,
+                    sourceID: scope.id,
+                    kind: .databaseRecordUnverified,
+                    area: .database,
+                    impact: .chatDiscovery,
+                    affectedEntityCount: snapshot.issueCount,
+                    absolutePath: databaseURL.path,
+                    entityKey: "session-records"
+                )
+            }
+
+            var recordsByID: [String: OpenCodeSessionRecord] = [:]
+            for record in snapshot.records where recordsByID[record.id] == nil {
+                recordsByID[record.id] = record
+            }
+            var parentByChild: [String: String] = [:]
+            for record in recordsByID.values {
+                if let parentID = record.parentID, recordsByID[parentID] != nil {
+                    parentByChild[record.id] = parentID
+                } else if record.parentID != nil {
+                    providerIssueCounts[.openCode, default: 0] += 1
+                    recordDiagnostic(
+                        provider: .openCode,
+                        sourceID: scope.id,
+                        kind: .relationshipConflict,
+                        area: .subagent,
+                        impact: .threadComposition,
+                        absolutePath: databaseURL.path,
+                        entityKey: record.id
+                    )
+                }
+            }
+
+            var rootBySession: [String: String] = [:]
+            var depthBySession: [String: Int] = [:]
+            var invalidIDs: Set<String> = []
+            for record in recordsByID.values {
+                var current = record.id
+                var depth = 0
+                var visited: Set<String> = []
+                var valid = true
+                while let parent = parentByChild[current] {
+                    guard visited.insert(current).inserted,
+                          recordsByID[parent] != nil
+                    else {
+                        valid = false
+                        break
+                    }
+                    current = parent
+                    depth += 1
+                }
+                if valid {
+                    rootBySession[record.id] = current
+                    depthBySession[record.id] = depth
+                } else {
+                    invalidIDs.insert(record.id)
+                }
+            }
+
+            var targets: [String: ThreadTarget] = [:]
+            for rootID in Set(rootBySession.values) {
+                guard let root = recordsByID[rootID], !invalidIDs.contains(rootID) else { continue }
+                let familyID = stableFamilyID(
+                    provider: .openCode,
+                    sourceID: scope.id,
+                    nativeID: rootID
+                )
+                let project = projectResolver.projectName(
+                    cwd: root.directory,
+                    gitOriginURL: nil
+                )
+                let title = normalizedTitleCandidate(root.title, excluding: root.id)
+                    ?? "\(project) · \(storageTitleDate(root.updatedAt))"
+                let rootNodeID = stableNodeID(familyID: familyID, nativeID: rootID)
+                let rootNode = MutableNode(
+                    id: rootNodeID,
+                    nativeID: rootID,
+                    parentNativeID: nil,
+                    depth: 0,
+                    title: title,
+                    updatedAt: root.updatedAt,
+                    path: databaseURL.path
+                )
+                families[familyID] = MutableFamily(
+                    id: familyID,
+                    provider: .openCode,
+                    sourceID: scope.id,
+                    nativeThreadID: rootID,
+                    title: title,
+                    project: project,
+                    projectPath: root.directory,
+                    updatedAt: root.updatedAt,
+                    isArchived: root.isArchived,
+                    mainNodeID: rootNodeID,
+                    path: databaseURL.path,
+                    nodes: [rootNodeID: rootNode]
+                )
+            }
+
+            for record in recordsByID.values {
+                guard !invalidIDs.contains(record.id),
+                      let rootID = rootBySession[record.id]
+                else { continue }
+                let familyID = stableFamilyID(
+                    provider: .openCode,
+                    sourceID: scope.id,
+                    nativeID: rootID
+                )
+                guard var family = families[familyID] else { continue }
+                let nodeID = stableNodeID(familyID: familyID, nativeID: record.id)
+                if record.id != rootID {
+                    family.nodes[nodeID] = MutableNode(
+                        id: nodeID,
+                        nativeID: record.id,
+                        parentNativeID: parentByChild[record.id],
+                        depth: depthBySession[record.id] ?? 1,
+                        title: normalizedTitleCandidate(record.title, excluding: record.id)
+                            ?? "Subagent · \(storageTitleDate(record.updatedAt))",
+                        updatedAt: record.updatedAt,
+                        path: databaseURL.path
+                    )
+                    family.updatedAt = max(family.updatedAt, record.updatedAt)
+                    families[familyID] = family
+                }
+                targets[record.id] = ThreadTarget(familyID: familyID, nodeID: nodeID)
+            }
+            openCodeTargets[scope.id] = targets
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch AgentSQLiteError.unsupportedSchema {
+            recordMetadataOutcome(.unsupported, provider: .openCode)
+            recordDiagnostic(
+                provider: .openCode,
+                sourceID: scope.id,
+                kind: .sourceUnsupportedFormat,
+                area: .dataSource,
+                impact: .chatDiscovery,
+                absolutePath: databaseURL.path
+            )
+        } catch {
+            recordMetadataOutcome(.unreadable, provider: .openCode)
+            recordDiagnostic(
+                provider: .openCode,
                 sourceID: scope.id,
                 kind: .sourceUnreadable,
                 area: .dataSource,
@@ -1578,6 +1795,13 @@ private struct AgentStorageScanEngine {
                 components: components,
                 scope: scope
             )
+        case .openCode:
+            return classifyOpenCode(
+                path: url.path,
+                relativePath: relative,
+                components: components,
+                scope: scope
+            )
         case .codexDesktop:
             return desktopClaim(
                 path: url.path,
@@ -1595,6 +1819,38 @@ private struct AgentStorageScanEngine {
                 isClaude: true
             )
         }
+    }
+
+    private func classifyOpenCode(
+        path: String,
+        relativePath: String,
+        components: [String],
+        scope: ScanScope
+    ) -> PhysicalClaim {
+        let first = components.first ?? ""
+        if first == "opencode.db" || first.hasPrefix("opencode.db-") {
+            return claim(scope, path, .global(.sharedDatabase), .other)
+        }
+        if first == "storage" {
+            if components.count >= 3, components[1] == "session_diff",
+               let nativeID = openCodeSessionID(from: components[2]),
+               let target = openCodeTargets[scope.id]?[nativeID] {
+                return claim(scope, path, .node(target.familyID, target.nodeID), .conversation)
+            }
+            if components.count >= 4, components[1] == "session",
+               let nativeID = openCodeSessionID(from: components[3]),
+               let target = openCodeTargets[scope.id]?[nativeID] {
+                return claim(scope, path, .node(target.familyID, target.nodeID), .conversation)
+            }
+            return claim(scope, path, .global(.sharedAgentData), .other)
+        }
+        if first == "tool-output" {
+            return claim(scope, path, .global(.sharedAgentData), .toolResult)
+        }
+        if ["account.json", "auth.json", "config.json"].contains(first) {
+            return claim(scope, path, .global(.configuration), .other)
+        }
+        return claim(scope, path, .global(relativePath.isEmpty ? .directoryOverhead : .other), .other)
     }
 
     private func classifyCodex(
@@ -2313,6 +2569,83 @@ private struct AgentStorageScanEngine {
         pendingDatabaseProjections.removeAll(keepingCapacity: false)
     }
 
+    private mutating func applyOpenCodeDatabaseAttributionProjections() {
+        let key = "openCode:global:\(AgentStorageGlobalCategory.sharedDatabase.rawValue)"
+        for (sourceID, estimate) in openCodeDatabaseEstimates {
+            let databaseEntries = physicalLedger.values.filter { entry in
+                entry.claims.contains {
+                    $0.sourceID == sourceID && $0.globalCategory == .sharedDatabase
+                }
+            }
+            let physicalBytes = databaseEntries.reduce(UInt64(0)) {
+                $0.addingClamped($1.allocatedBytes)
+            }
+            let targets = openCodeTargets[sourceID] ?? [:]
+            let source = scopes.first { $0.id == sourceID }
+            guard physicalBytes > 0, let source, let aggregate = globalAggregates[key] else {
+                continue
+            }
+
+            var mappedEstimatedBytes: UInt64 = 0
+            var byTarget: [ThreadTarget: UInt64] = [:]
+            for (sessionID, logicalBytes) in estimate.bySessionID {
+                guard let target = targets[sessionID] else { continue }
+                mappedEstimatedBytes = mappedEstimatedBytes.addingClamped(logicalBytes)
+                let scaled = (try? scaledDatabaseBytes(
+                    logicalBytes: logicalBytes,
+                    physicalBytes: physicalBytes,
+                    totalEstimatedBytes: estimate.totalEstimatedBytes
+                )) ?? 0
+                byTarget[target] = byTarget[target, default: 0].addingClamped(scaled)
+            }
+            let attributedBytes = byTarget.values.reduce(UInt64(0)) {
+                $0.addingClamped($1)
+            }
+            let unmappedEstimatedBytes = estimate.totalEstimatedBytes >= mappedEstimatedBytes
+                ? estimate.totalEstimatedBytes - mappedEstimatedBytes
+                : 0
+            var candidateFamilies = families
+            var attributionSucceeded = true
+            for (target, bytes) in byTarget {
+                guard var family = candidateFamilies[target.familyID],
+                      var node = family.nodes[target.nodeID]
+                else {
+                    attributionSucceeded = false
+                    break
+                }
+                node.databaseAttributedBytes = node.databaseAttributedBytes.addingClamped(bytes)
+                family.nodes[target.nodeID] = node
+                candidateFamilies[target.familyID] = family
+            }
+            guard attributionSucceeded else { continue }
+            var updatedAggregate = aggregate
+            updatedAggregate.databaseAttributedBytes = updatedAggregate.databaseAttributedBytes
+                .addingClamped(attributedBytes)
+            updatedAggregate.allocatedBytes = updatedAggregate.allocatedBytes >= attributedBytes
+                ? updatedAggregate.allocatedBytes - attributedBytes
+                : 0
+            families = candidateFamilies
+            globalAggregates[key] = updatedAggregate
+            databaseAttributions.append(AgentStorageDatabaseAttributionSummary(
+                id: "openCode|\(sourceID)|database",
+                provider: .openCode,
+                sourceID: sourceID,
+                path: estimate.path,
+                physicalBundleBytes: physicalBytes,
+                attributedBytes: attributedBytes,
+                residualBytes: physicalBytes >= attributedBytes
+                    ? physicalBytes - attributedBytes : 0,
+                mappedEstimatedBytes: mappedEstimatedBytes,
+                unmappedEstimatedBytes: unmappedEstimatedBytes,
+                processedRowCount: estimate.processedRowCount,
+                totalRowCount: estimate.totalRowCount,
+                status: .completed
+            ))
+            _ = source
+        }
+        openCodeDatabaseEstimates.removeAll(keepingCapacity: false)
+    }
+
     private func databaseBundleIsExclusive(_ bundle: CodexLogDatabaseBundle) -> Bool {
         bundle.memberIdentities.allSatisfy { identity in
             guard let entry = physicalLedger[identity] else { return false }
@@ -2875,6 +3208,7 @@ private enum ScanScopeKind: Sendable {
     case claudeCode
     case claudeDesktop
     case claudeDesktopAgent
+    case openCode
 
     var publicKind: AgentStorageSourceKind {
         switch self {
@@ -2883,6 +3217,7 @@ private enum ScanScopeKind: Sendable {
         case .claudeCode: .claudeCode
         case .claudeDesktop: .claudeDesktop
         case .claudeDesktopAgent: .claudeDesktopAgent
+        case .openCode: .openCode
         }
     }
 }
@@ -3499,6 +3834,31 @@ private struct CodexDatabaseSnapshot: Sendable {
     let issueCount: Int
 }
 
+private struct OpenCodeSessionRecord: Sendable {
+    let id: String
+    let parentID: String?
+    let title: String
+    let directory: String
+    let updatedAt: Date
+    let isArchived: Bool
+    let estimatedBytes: UInt64
+}
+
+private struct OpenCodeDatabaseSnapshot: Sendable {
+    let records: [OpenCodeSessionRecord]
+    let issueCount: Int
+    let totalEstimatedBytes: UInt64
+    let totalRowCount: Int
+}
+
+private struct OpenCodeDatabaseEstimate: Sendable {
+    let path: String
+    let bySessionID: [String: UInt64]
+    let totalEstimatedBytes: UInt64
+    let processedRowCount: Int
+    let totalRowCount: Int
+}
+
 private final class ReadOnlyAgentSQLite {
     private var handle: OpaquePointer?
     private let interruptRegistry: AgentSQLiteInterruptRegistry
@@ -3610,6 +3970,99 @@ private final class ReadOnlyAgentSQLite {
             throw AgentSQLiteError.unsupportedSchema("logs.id")
         }
         return CodexLogScanBounds(minimumID: minimumID, maximumID: maximumID)
+    }
+
+    func openCodeSnapshot(progress: (Int) -> Void = { _ in }) throws -> OpenCodeDatabaseSnapshot {
+        guard let handle else { throw AgentSQLiteError.queryFailed }
+        let sessionColumns = try columnNames(table: "session")
+        let messageColumns = try columnNames(table: "message")
+        let partColumns = try columnNames(table: "part")
+        guard Set([
+            "id", "project_id", "parent_id", "title", "directory", "time_updated",
+            "time_archived", "metadata"
+        ])
+            .isSubset(of: sessionColumns),
+              Set(["id", "session_id", "data"]).isSubset(of: messageColumns),
+              Set(["id", "message_id", "session_id", "data"]).isSubset(of: partColumns)
+        else {
+            throw AgentSQLiteError.unsupportedSchema("session/message/part")
+        }
+
+        try execute("BEGIN DEFERRED TRANSACTION")
+        var committed = false
+        defer {
+            if !committed { try? execute("ROLLBACK") }
+        }
+        let sql = """
+        WITH message_bytes AS (
+            SELECT session_id,
+                   SUM(length(id) + length(session_id) + length(data)) AS bytes
+            FROM message
+            GROUP BY session_id
+        ), part_bytes AS (
+            SELECT session_id,
+                   SUM(length(id) + length(message_id) + length(session_id) + length(data)) AS bytes
+            FROM part
+            GROUP BY session_id
+        )
+        SELECT s.id, s.parent_id, s.title, s.directory, s.time_updated,
+               s.time_archived,
+               length(s.id) + length(s.project_id) + length(s.title) + length(s.directory)
+                   + COALESCE(length(s.metadata), 0)
+                   + COALESCE(message_bytes.bytes, 0)
+                   + COALESCE(part_bytes.bytes, 0)
+        FROM session AS s
+        LEFT JOIN message_bytes ON message_bytes.session_id = s.id
+        LEFT JOIN part_bytes ON part_bytes.session_id = s.id
+        ORDER BY s.time_updated DESC, s.id
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { throw sqliteError() }
+        defer { sqlite3_finalize(statement) }
+
+        var records: [OpenCodeSessionRecord] = []
+        var totalEstimatedBytes: UInt64 = 0
+        var issueCount = 0
+        var rowCount = 0
+        while true {
+            let step = sqlite3_step(statement)
+            if step == SQLITE_DONE { break }
+            guard step == SQLITE_ROW else { throw sqliteError(code: step) }
+            rowCount += 1
+            if rowCount.isMultiple(of: 128) {
+                try Task.checkCancellation()
+                progress(rowCount)
+            }
+            let id = sqliteText(statement, 0).trimmingCharacters(in: .whitespacesAndNewlines)
+            let updatedMilliseconds = sqlite3_column_int64(statement, 4)
+            let archivedMilliseconds = sqlite3_column_int64(statement, 5)
+            let signedEstimatedBytes = sqlite3_column_int64(statement, 6)
+            guard !id.isEmpty, updatedMilliseconds >= 0, signedEstimatedBytes >= 0 else {
+                issueCount += 1
+                continue
+            }
+            let estimatedBytes = UInt64(signedEstimatedBytes)
+            totalEstimatedBytes = try addingExact(totalEstimatedBytes, estimatedBytes)
+            records.append(OpenCodeSessionRecord(
+                id: id,
+                parentID: nonEmptyTrimmed(sqliteText(statement, 1)),
+                title: sqliteText(statement, 2),
+                directory: sqliteText(statement, 3),
+                updatedAt: Date(timeIntervalSince1970: Double(updatedMilliseconds) / 1_000),
+                isArchived: archivedMilliseconds > 0,
+                estimatedBytes: estimatedBytes
+            ))
+        }
+        progress(rowCount)
+        try execute("COMMIT")
+        committed = true
+        return OpenCodeDatabaseSnapshot(
+            records: records,
+            issueCount: issueCount,
+            totalEstimatedBytes: totalEstimatedBytes,
+            totalRowCount: rowCount
+        )
     }
 
     func codexLogEstimates(
@@ -4548,6 +5001,12 @@ private struct AgentStorageProjectResolver: Sendable {
 private func nonEmptyTrimmed(_ value: String) -> String? {
     let result = value.trimmingCharacters(in: .whitespacesAndNewlines)
     return result.isEmpty ? nil : result
+}
+
+private func openCodeSessionID(from value: String) -> String? {
+    let candidate = URL(fileURLWithPath: value).deletingPathExtension().lastPathComponent
+    guard candidate.hasPrefix("ses_"), candidate.count > 4 else { return nil }
+    return candidate
 }
 
 private func decodedClaudeProjectName(_ encoded: String) -> String {

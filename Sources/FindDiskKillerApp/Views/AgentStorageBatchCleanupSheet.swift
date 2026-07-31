@@ -693,7 +693,11 @@ struct AgentStorageBatchCleanupSheet: View {
     }
 
     private var providerSymbol: String {
-        context.provider == .codex ? "terminal" : "bubble.left.and.text.bubble.right"
+        switch context.provider {
+        case .codex: "terminal"
+        case .claude: "bubble.left.and.text.bubble.right"
+        case .openCode: "curlybraces"
+        }
     }
 
     private var protectionSummary: String {

@@ -893,9 +893,9 @@ struct AgentStorageView: View {
             .background(Color(nsColor: .windowBackgroundColor))
         } else if model.snapshot != nil {
             ContentUnavailableView {
-                Label(L10n.text("未检测到 Codex 或 Claude 数据"), systemImage: "externaldrive.badge.questionmark")
+                Label(L10n.text("未检测到 Codex、Claude 或 OpenCode 数据"), systemImage: "externaldrive.badge.questionmark")
             } description: {
-                Text(L10n.text("分析 Codex 和 Claude 的聊天、子代理与全局运行时"))
+                Text(L10n.text("分析 Codex、Claude 和 OpenCode 的聊天、子代理与全局运行时"))
             } actions: {
                 Button(L10n.text("重新分析")) { model.startAnalysis() }
             }
@@ -1750,7 +1750,7 @@ struct AgentStorageView: View {
             ContentUnavailableView {
                 Label(L10n.text("尚未分析 AI Agent 空间"), systemImage: "sparkles")
             } description: {
-                Text(L10n.text("分析 Codex 和 Claude 的聊天、子代理与全局运行时"))
+                Text(L10n.text("分析 Codex、Claude 和 OpenCode 的聊天、子代理与全局运行时"))
             } actions: {
                 Button(L10n.text("开始分析")) { model.startAnalysis() }
             }
@@ -2650,7 +2650,11 @@ private struct AgentStorageProviderOverviewRow: View {
     }
 
     private var brandColor: Color {
-        item.provider == .codex ? Color(red: 0.08, green: 0.55, blue: 0.43) : Color(red: 0.82, green: 0.39, blue: 0.18)
+        switch item.provider {
+        case .codex: Color(red: 0.08, green: 0.55, blue: 0.43)
+        case .claude: Color(red: 0.82, green: 0.39, blue: 0.18)
+        case .openCode: Color(red: 0.30, green: 0.42, blue: 0.82)
+        }
     }
 
     private var statusText: String {
@@ -2706,7 +2710,7 @@ private struct AgentStorageProviderOverviewRow: View {
     private var statusHelp: String {
         switch item.summary.supportStatus {
         case .notInstalled:
-            return L10n.text("未发现 Codex 或 Claude 的 CLI/Desktop 数据目录；其他已安装 Agent 仍可正常分析。")
+            return L10n.text("未发现 Codex、Claude 或 OpenCode 的 CLI/Desktop 数据目录；其他已安装 Agent 仍可正常分析。")
         case .unsupportedFormat:
             return L10n.text("已统计此 Agent 的物理占用，但无法解析当前版本的聊天索引。全局和未归属数据仍可查看。")
         case .partial where item.summary.unsupportedSourceCount > 0:
@@ -3396,7 +3400,7 @@ struct AgentStorageProviderIcon: View {
                     .renderingMode(provider == .codex ? .original : .template)
                     .foregroundStyle(Color(red: 0.82, green: 0.39, blue: 0.18))
             } else {
-                Image(systemName: provider == .codex ? "terminal" : "sparkles")
+                Image(systemName: fallbackSymbol)
                     .resizable()
                     .foregroundStyle(.secondary)
             }
@@ -3407,7 +3411,19 @@ struct AgentStorageProviderIcon: View {
     }
 
     private var providerImage: NSImage? {
-        provider == .codex ? Self.codexImage : Self.claudeImage
+        switch provider {
+        case .codex: Self.codexImage
+        case .claude: Self.claudeImage
+        case .openCode: nil
+        }
+    }
+
+    private var fallbackSymbol: String {
+        switch provider {
+        case .codex: "terminal"
+        case .claude: "sparkles"
+        case .openCode: "curlybraces"
+        }
     }
 
     private static func loadImage(named name: String) -> NSImage? {
@@ -3563,7 +3579,11 @@ private struct AgentStorageCleanupCompletedView: View {
     }
 
     private var providerSymbol: String {
-        completion.provider == .codex ? "terminal" : "bubble.left.and.text.bubble.right"
+        switch completion.provider {
+        case .codex: "terminal"
+        case .claude: "bubble.left.and.text.bubble.right"
+        case .openCode: "curlybraces"
+        }
     }
 }
 
@@ -3647,7 +3667,7 @@ private struct AgentStorageAnalysisInvitation: View {
                 Text(L10n.text("尚未分析 AI Agent 空间"))
                     .font(.title2.weight(.semibold))
                     .multilineTextAlignment(.center)
-                Text(L10n.text("分析 Codex 和 Claude 的聊天、子代理与全局运行时"))
+                Text(L10n.text("分析 Codex、Claude 和 OpenCode 的聊天、子代理与全局运行时"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -4478,7 +4498,7 @@ private struct AgentStorageLiveProgressView: View {
     private var phaseContext: String {
         switch progress.phase {
         case .discoveringSources:
-            L10n.text("正在检查 Codex、Claude 与自定义数据位置")
+            L10n.text("正在检查 Codex、Claude、OpenCode 与自定义数据位置")
         case .readingMetadata:
             L10n.text("正在建立主聊天、子代理与项目关系")
         case .measuringEntries:
@@ -4766,9 +4786,18 @@ private struct AgentStorageDetailView: View {
             id: family.nativeThreadID,
             path: hidesPrivateDetails ? nil : family.path,
             evidence: family.databaseAttributedBytes > 0
-                ? L10n.text("包含主聊天及递归子代理的独占文件，以及按 Codex 日志记录归入此聊天的数据库估算。")
+                ? databaseEvidence(for: family.provider)
                 : L10n.text("主聊天及全部递归子代理的独占文件")
         )
+    }
+
+    private func databaseEvidence(for provider: AgentStorageProvider) -> String {
+        switch provider {
+        case .codex:
+            return L10n.text("包含主聊天及递归子代理的独占文件，以及按 Codex 日志记录归入此聊天的数据库估算。")
+        case .claude, .openCode:
+            return L10n.text("包含主聊天及递归子代理的独占文件，以及按 Agent 会话记录归入此聊天的数据库估算。")
+        }
     }
 
     private func familyStorageHero(_ family: AgentStorageThreadFamily) -> some View {
@@ -5064,14 +5093,20 @@ private struct AgentStorageDetailView: View {
         evidenceSection(
             id: item.id,
             path: hidesPrivateDetails ? nil : item.path,
-            evidence: globalEvidence(item.category)
+            evidence: globalEvidence(item.category, provider: item.provider)
         )
     }
 
-    private func globalEvidence(_ category: AgentStorageGlobalCategory) -> String {
+    private func globalEvidence(
+        _ category: AgentStorageGlobalCategory,
+        provider: AgentStorageProvider?
+    ) -> String {
         switch category {
         case .sharedDatabase:
-            return L10n.text("数据库记录按 Codex 提供的估算归入聊天；空闲页、索引、WAL 和无法关联的记录继续保留在共享残差中，物理总量只计算一次。")
+            if provider == .codex {
+                return L10n.text("数据库记录按 Codex 提供的估算归入聊天；空闲页、索引、WAL 和无法关联的记录继续保留在共享残差中，物理总量只计算一次。")
+            }
+            return L10n.text("数据库记录按 Agent 会话记录估算归入聊天；空闲页、索引、WAL 和无法关联的记录继续保留在共享残差中，物理总量只计算一次。")
         case .sharedAgentData:
             return L10n.text("同一文件由多个聊天引用，因此不分摊到某一个聊天，并且只计算一次。")
         case .crossAgentShared:
@@ -5248,6 +5283,7 @@ extension AgentStorageProvider {
         switch self {
         case .codex: "Codex"
         case .claude: "Claude"
+        case .openCode: "OpenCode"
         }
     }
 }
