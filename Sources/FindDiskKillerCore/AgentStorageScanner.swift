@@ -1004,7 +1004,7 @@ private struct AgentStorageScanEngine {
                     gitOriginURL: nil
                 )
                 let title = normalizedTitleCandidate(root.title, excluding: root.id)
-                    ?? "(project) · (storageTitleDate(root.updatedAt))"
+                    ?? "\(project) · \(storageTitleDate(root.updatedAt))"
                 let rootNodeID = stableNodeID(familyID: familyID, nativeID: rootID)
                 let rootNode = MutableNode(
                     id: rootNodeID,
@@ -1049,7 +1049,7 @@ private struct AgentStorageScanEngine {
                         parentNativeID: parentByChild[record.id],
                         depth: depthBySession[record.id] ?? 1,
                         title: normalizedTitleCandidate(record.title, excluding: record.id)
-                            ?? "Subagent · (storageTitleDate(record.updatedAt))",
+                            ?? "Subagent · \(storageTitleDate(record.updatedAt))",
                         updatedAt: record.updatedAt,
                         path: databaseURL.path
                     )
