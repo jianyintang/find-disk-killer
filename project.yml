@@ -99,6 +99,8 @@ targets:
       - package: FindDiskKillerPackage
         product: FindDiskKillerCore
       - package: FindDiskKillerPackage
+        product: FindDiskKillerNodeRuntime
+      - package: FindDiskKillerPackage
         product: FindDiskKillerTraceProtocol
       - package: Sparkle
         product: Sparkle
@@ -167,3 +169,6 @@ targets:
         PRODUCT_NAME: FindDiskKillerClaudeCleanupHelper
         CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
         SKIP_INSTALL: YES
+    dependencies:
+      - package: FindDiskKillerPackage
+        product: FindDiskKillerNodeRuntime
