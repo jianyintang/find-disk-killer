@@ -175,11 +175,11 @@ struct SettingsPage: View {
                                 nodeRuntime.refresh()
                             }
                         }
-                    case .downloading:
+                    case .downloading, .verifying, .installing:
                         HStack(spacing: 10) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text(L10n.text("正在下载并校验官方运行时…"))
+                            Text(nodeRuntimeStatusText)
                                 .foregroundStyle(.secondary)
                         }
                     case .checking, .available:
@@ -536,7 +536,7 @@ struct SettingsPage: View {
         case .checking: .secondary
         case .available: .green
         case .missing: .orange
-        case .downloading: .blue
+        case .downloading, .verifying, .installing: .blue
         case .failed: .red
         }
     }
@@ -546,17 +546,17 @@ struct SettingsPage: View {
         case .checking:
             L10n.text("检测中…")
         case .available(let availability):
-            if let version = availability.version {
-                "\(version) · \(availability.source.localizedLabel)"
-            } else {
-                availability.source.localizedLabel
-            }
+            "\(availability.version) · \(availability.source.localizedLabel)"
         case .missing:
             L10n.text("未检测到可用运行时")
         case .downloading:
-            L10n.text("正在下载")
+            L10n.text("正在下载官方运行时…")
+        case .verifying:
+            L10n.text("正在校验官方运行时…")
+        case .installing:
+            L10n.text("正在安装官方运行时…")
         case .failed:
-            L10n.text("下载失败")
+            L10n.text("下载或验证失败")
         }
     }
 

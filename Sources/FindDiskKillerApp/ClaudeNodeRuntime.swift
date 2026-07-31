@@ -1,31 +1,82 @@
 import CryptoKit
+import Darwin
+import FindDiskKillerNodeRuntime
 import Foundation
 
-enum ClaudeNodeRuntimeError: LocalizedError {
+enum ClaudeNodeRuntimeError: LocalizedError, Equatable {
     case downloadFailed(String)
     case checksumMismatch
     case extractionFailed(String)
+    case validationFailed(String)
+    case installationFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .downloadFailed(let reason): L10n.format("Node.js 运行时下载失败：%@", reason)
         case .checksumMismatch: L10n.text("Node.js 运行时校验失败，已放弃安装")
         case .extractionFailed(let reason): L10n.format("Node.js 运行时解压失败：%@", reason)
+        case .validationFailed(let reason): L10n.format("Node.js 运行时验证失败：%@", reason)
+        case .installationFailed(let reason): L10n.format("Node.js 运行时安装失败：%@", reason)
         }
     }
 }
 
+enum ClaudeNodeRuntimeProvisioningPhase: Equatable, Sendable {
+    case downloading
+    case verifying
+    case installing
+}
+
+struct ClaudeNodeRuntimeDownload: Sendable {
+    let statusCode: Int
+    let data: Data
+}
+
+protocol ClaudeNodeRuntimeInstallLock: Sendable {
+    func unlock()
+}
+
+protocol ClaudeNodeRuntimeInstallTransaction: Sendable {
+    func commit() throws
+    func rollback() throws
+}
+
+struct ClaudeNodeRuntimeDependencies: @unchecked Sendable {
+    var resolver: NodeRuntimeResolverDependencies
+    var download: @Sendable (URL) async throws -> ClaudeNodeRuntimeDownload
+    var checksum: @Sendable (URL) throws -> String
+    var extract: @Sendable (URL, String, URL) throws -> Void
+    var acquireLock: @Sendable (URL) throws -> any ClaudeNodeRuntimeInstallLock
+    var beginAtomicInstall: @Sendable (URL, URL) throws -> any ClaudeNodeRuntimeInstallTransaction
+
+    static let live = Self(
+        resolver: .live,
+        download: { url in
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForRequest = 60
+            configuration.timeoutIntervalForResource = 600
+            let session = URLSession(configuration: configuration)
+            defer { session.invalidateAndCancel() }
+            let (data, response) = try await session.data(from: url)
+            return ClaudeNodeRuntimeDownload(
+                statusCode: (response as? HTTPURLResponse)?.statusCode ?? -1,
+                data: data
+            )
+        },
+        checksum: ClaudeNodeRuntime.sha256Hex,
+        extract: ClaudeNodeRuntime.extractNodeBinary,
+        acquireLock: { try ClaudeNodeRuntimeFileLock(url: $0) },
+        beginAtomicInstall: { try ClaudeNodeRuntimeAtomicInstall(source: $0, destination: $1) }
+    )
+}
+
 /// Locates or provisions the Node.js runtime that executes the bundled
-/// official Claude Agent SDK. The runtime is not shipped inside the app
-/// bundle: a compatible local installation is reused when present, otherwise
-/// the pinned official build for the current hardware architecture is
-/// downloaded once from nodejs.org, verified against a hard-coded SHA-256,
-/// and stored under Application Support.
+/// official Claude Agent SDK.
 enum ClaudeNodeRuntime {
     static let pinnedVersion = "24.14.1"
     static let minimumSupportedMajor = 20
 
-    enum Architecture: String, CaseIterable {
+    enum Architecture: String, CaseIterable, Sendable {
         case arm64
         case x64
 
@@ -73,70 +124,98 @@ enum ClaudeNodeRuntime {
             .appending(path: "FindDiskKiller", directoryHint: .isDirectory)
     }
 
-    /// Parses `node --version` output such as `v24.14.1` and decides whether
-    /// the runtime is recent enough for the bundled SDK.
     static func isCompatibleVersion(_ output: String) -> Bool {
-        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("v"),
-              let major = Int(trimmed.dropFirst().prefix(while: { $0.isNumber })),
-              major > 0
-        else { return false }
-        return major >= minimumSupportedMajor
+        guard let version = NodeSemanticVersion(string: output, requiresVPrefix: true) else { return false }
+        return version.major >= minimumSupportedMajor
     }
 
-    /// Candidate locations for an already usable runtime, in resolution
-    /// order. The same order is mirrored by FindDiskKillerClaudeCleanupHelper
-    /// so that direct helper invocations resolve identically.
-    static func existingRuntime(
+    static func resolutionContext(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         bundledRuntimePath: String? = bundledRuntimePath(),
         applicationSupport: URL = defaultApplicationSupportRoot(),
-        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
-        versionOutput: (String) -> String? = { measuredVersionOutput(of: $0) }
-    ) -> String? {
-        if let override = environment["FDK_NODE_BINARY"], isExecutable(override) {
-            return override
-        }
-        if let bundled = bundledRuntimePath, isExecutable(bundled) {
-            return bundled
-        }
-        let downloaded = downloadedBinaryURL(
-            for: currentArchitecture(),
-            applicationSupport: applicationSupport
-        ).path
-        if isExecutable(downloaded) {
-            return downloaded
-        }
-        let pathDirectories = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
-        let commonDirectories = ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"]
-        for directory in pathDirectories + commonDirectories {
-            let candidate = URL(fileURLWithPath: directory).appending(path: "node").path
-            guard isExecutable(candidate) else { continue }
-            guard let version = versionOutput(candidate), isCompatibleVersion(version) else { continue }
-            return candidate
-        }
-        return nil
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        architecture: Architecture = currentArchitecture()
+    ) -> NodeRuntimeResolutionContext {
+        NodeRuntimeResolutionContext(
+            environment: environment,
+            bundledRuntimePath: bundledRuntimePath,
+            downloadedRuntimePath: downloadedBinaryURL(
+                for: architecture,
+                applicationSupport: applicationSupport
+            ).path,
+            homeDirectory: homeDirectory,
+            minimumMajor: minimumSupportedMajor
+        )
     }
 
-    /// Returns a usable Node.js binary path, downloading the pinned official
-    /// build when nothing suitable is installed. Concurrent callers share one
-    /// provisioning task.
-    static func ensureAvailable() async throws -> String {
-        try await provisioner.ensure()
+    static func resolvedExistingRuntime(
+        context: NodeRuntimeResolutionContext? = nil,
+        dependencies: NodeRuntimeResolverDependencies = .live
+    ) throws -> ValidatedNodeRuntime? {
+        try NodeRuntimeResolver.resolve(
+            context: context ?? resolutionContext(),
+            dependencies: dependencies
+        )
+    }
+
+    static func existingRuntime(
+        context: NodeRuntimeResolutionContext? = nil,
+        dependencies: NodeRuntimeResolverDependencies = .live
+    ) -> String? {
+        try? resolvedExistingRuntime(context: context, dependencies: dependencies)?.path
+    }
+
+    static func ensureAvailable(
+        onPhase: @escaping @Sendable (ClaudeNodeRuntimeProvisioningPhase) -> Void = { _ in }
+    ) async throws -> String {
+        try await ensureResolved(onPhase: onPhase).path
+    }
+
+    static func ensureResolved(
+        onPhase: @escaping @Sendable (ClaudeNodeRuntimeProvisioningPhase) -> Void = { _ in }
+    ) async throws -> ValidatedNodeRuntime {
+        try await provisioner.ensure(
+            context: resolutionContext(),
+            dependencies: .live,
+            onPhase: onPhase
+        )
     }
 
     private static let provisioner = Provisioner()
 
-    private actor Provisioner {
-        private var inFlight: Task<String, Error>?
+    actor Provisioner {
+        private var inFlight: Task<ValidatedNodeRuntime, Error>?
 
-        func ensure() async throws -> String {
-            if let existing = ClaudeNodeRuntime.existingRuntime() { return existing }
-            if let inFlight { return try await inFlight.value }
-            let task = Task { try await ClaudeNodeRuntime.downloadPinnedRuntime() }
+        func ensure(
+            context: NodeRuntimeResolutionContext,
+            dependencies: ClaudeNodeRuntimeDependencies,
+            onPhase: @escaping @Sendable (ClaudeNodeRuntimeProvisioningPhase) -> Void = { _ in }
+        ) async throws -> ValidatedNodeRuntime {
+            try Task.checkCancellation()
+            if let inFlight {
+                let runtime = try await inFlight.value
+                try Task.checkCancellation()
+                return runtime
+            }
+            if let existing = try NodeRuntimeResolver.resolve(
+                context: context,
+                dependencies: dependencies.resolver
+            ) {
+                return existing
+            }
+
+            let task = Task.detached {
+                try await ClaudeNodeRuntime.downloadPinnedRuntime(
+                    context: context,
+                    dependencies: dependencies,
+                    onPhase: onPhase
+                )
+            }
             inFlight = task
             defer { inFlight = nil }
-            return try await task.value
+            let runtime = try await task.value
+            try Task.checkCancellation()
+            return runtime
         }
     }
 
@@ -145,79 +224,147 @@ enum ClaudeNodeRuntime {
     }
 
     static func measuredVersionOutput(of binary: String) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = ["--version"]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = Pipe()
-        do { try process.run() } catch { return nil }
-        let deadline = Date().addingTimeInterval(4)
-        while process.isRunning, Date() < deadline { usleep(20_000) }
-        if process.isRunning {
-            process.terminate()
-            return nil
-        }
-        guard process.terminationStatus == 0 else { return nil }
-        return String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        guard case .completed(let status, let stdout, _) = NodeRuntimeProcessProbe.run(path: binary, timeout: 4),
+              status == 0
+        else { return nil }
+        return stdout
     }
 
-    private static func downloadPinnedRuntime() async throws -> String {
-        let architecture = currentArchitecture()
-        let destination = downloadedBinaryURL(for: architecture)
+    static func downloadPinnedRuntime(
+        context: NodeRuntimeResolutionContext,
+        dependencies: ClaudeNodeRuntimeDependencies,
+        onPhase: @escaping @Sendable (ClaudeNodeRuntimeProvisioningPhase) -> Void
+    ) async throws -> ValidatedNodeRuntime {
+        let destination = URL(fileURLWithPath: context.downloadedRuntimePath)
+        let cleanupRoot = destination.deletingLastPathComponent().deletingLastPathComponent()
         let fileManager = FileManager.default
-        if fileManager.isExecutableFile(atPath: destination.path) { return destination.path }
+        try fileManager.createDirectory(at: cleanupRoot, withIntermediateDirectories: true)
 
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 60
-        configuration.timeoutIntervalForResource = 600
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-
-        let archiveURL: URL
+        let lock: any ClaudeNodeRuntimeInstallLock
         do {
-            let (temporary, response) = try await session.download(from: downloadURL(for: architecture))
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-                throw ClaudeNodeRuntimeError.downloadFailed("HTTP \(status)")
-            }
-            archiveURL = temporary
-        } catch let error as ClaudeNodeRuntimeError {
-            throw error
+            lock = try await Task.detached {
+                try dependencies.acquireLock(cleanupRoot.appending(path: ".node-install.lock"))
+            }.value
+        } catch {
+            throw ClaudeNodeRuntimeError.installationFailed(error.localizedDescription)
+        }
+        defer { lock.unlock() }
+
+        cleanupAbandonedStaging(in: cleanupRoot, fileManager: fileManager)
+        if let installed = try? NodeRuntimeResolver.validate(
+            path: destination.path,
+            source: .downloaded,
+            minimumMajor: context.minimumMajor,
+            timeout: context.timeout,
+            dependencies: dependencies.resolver
+        ) {
+            return installed
+        }
+
+        let stage = cleanupRoot.appending(
+            path: ".node-staging-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        try fileManager.createDirectory(at: stage, withIntermediateDirectories: false)
+        defer { try? fileManager.removeItem(at: stage) }
+
+        try Task.checkCancellation()
+        onPhase(.downloading)
+        let architecture = currentArchitecture()
+        let payload: ClaudeNodeRuntimeDownload
+        do {
+            payload = try await dependencies.download(downloadURL(for: architecture))
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw ClaudeNodeRuntimeError.downloadFailed(error.localizedDescription)
         }
-        defer { try? fileManager.removeItem(at: archiveURL) }
+        guard payload.statusCode == 200 else {
+            throw ClaudeNodeRuntimeError.downloadFailed("HTTP \(payload.statusCode)")
+        }
+        try Task.checkCancellation()
+        let archive = stage.appending(path: "runtime.tar.gz")
+        try payload.data.write(to: archive, options: .atomic)
 
-        guard try sha256Hex(of: archiveURL) == architecture.expectedSHA256 else {
+        onPhase(.verifying)
+        guard try dependencies.checksum(archive) == architecture.expectedSHA256 else {
             throw ClaudeNodeRuntimeError.checksumMismatch
         }
+        try Task.checkCancellation()
 
-        let stage = fileManager.temporaryDirectory
-            .appending(path: "fdk-node-runtime-\(UUID().uuidString)", directoryHint: .isDirectory)
-        try fileManager.createDirectory(at: stage, withIntermediateDirectories: true)
-        defer { try? fileManager.removeItem(at: stage) }
-        try extractNodeBinary(
-            archive: archiveURL,
-            member: "\(archiveName(for: architecture))/bin/node",
-            into: stage
-        )
-        let staged = stage.appending(path: "node")
-        guard fileManager.isExecutableFile(atPath: staged.path) else {
+        let extracted = stage.appending(path: "extracted", directoryHint: .isDirectory)
+        try fileManager.createDirectory(at: extracted, withIntermediateDirectories: false)
+        do {
+            try dependencies.extract(
+                archive,
+                "\(archiveName(for: architecture))/bin/node",
+                extracted
+            )
+        } catch let error as ClaudeNodeRuntimeError {
+            throw error
+        } catch {
+            throw ClaudeNodeRuntimeError.extractionFailed(error.localizedDescription)
+        }
+        let staged = extracted.appending(path: "node")
+        guard fileManager.fileExists(atPath: staged.path) else {
             throw ClaudeNodeRuntimeError.extractionFailed(L10n.text("归档中缺少 node 可执行文件"))
         }
-
-        let destinationDirectory = destination.deletingLastPathComponent()
-        try fileManager.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
-        if fileManager.fileExists(atPath: destination.path) {
-            try fileManager.removeItem(at: destination)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staged.path)
+        do {
+            _ = try NodeRuntimeResolver.validate(
+                path: staged.path,
+                source: .downloaded,
+                minimumMajor: context.minimumMajor,
+                timeout: context.timeout,
+                dependencies: dependencies.resolver
+            )
+        } catch {
+            throw ClaudeNodeRuntimeError.validationFailed(String(describing: error))
         }
-        try fileManager.moveItem(at: staged, to: destination)
-        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
-        return destination.path
+        try Task.checkCancellation()
+
+        onPhase(.installing)
+        try fileManager.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let transaction: any ClaudeNodeRuntimeInstallTransaction
+        do {
+            transaction = try dependencies.beginAtomicInstall(staged, destination)
+        } catch {
+            throw ClaudeNodeRuntimeError.installationFailed(error.localizedDescription)
+        }
+        do {
+            let installed = try NodeRuntimeResolver.validate(
+                path: destination.path,
+                source: .downloaded,
+                minimumMajor: context.minimumMajor,
+                timeout: context.timeout,
+                dependencies: dependencies.resolver
+            )
+            try transaction.commit()
+            return installed
+        } catch {
+            try? transaction.rollback()
+            if let failure = error as? NodeRuntimeValidationFailure {
+                throw ClaudeNodeRuntimeError.validationFailed(failure.description)
+            }
+            throw ClaudeNodeRuntimeError.installationFailed(error.localizedDescription)
+        }
     }
 
-    private static func extractNodeBinary(archive: URL, member: String, into stage: URL) throws {
+    static func cleanupAbandonedStaging(in root: URL, fileManager: FileManager) {
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: []
+        ) else { return }
+        for entry in entries where entry.lastPathComponent.hasPrefix(".node-staging-") {
+            try? fileManager.removeItem(at: entry)
+        }
+    }
+
+    static func extractNodeBinary(archive: URL, member: String, into stage: URL) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
         process.arguments = [
@@ -240,11 +387,13 @@ enum ClaudeNodeRuntime {
                 decoding: errors.fileHandleForReading.readDataToEndOfFile(),
                 as: UTF8.self
             ).trimmingCharacters(in: .whitespacesAndNewlines)
-            throw ClaudeNodeRuntimeError.extractionFailed(detail.isEmpty ? L10n.text("tar 退出码非零") : detail)
+            throw ClaudeNodeRuntimeError.extractionFailed(
+                detail.isEmpty ? L10n.text("tar 退出码非零") : detail
+            )
         }
     }
 
-    private static func sha256Hex(of file: URL) throws -> String {
+    static func sha256Hex(of file: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
         var hasher = SHA256()
@@ -253,4 +402,72 @@ enum ClaudeNodeRuntime {
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
+}
+
+private final class ClaudeNodeRuntimeFileLock: ClaudeNodeRuntimeInstallLock, @unchecked Sendable {
+    private let descriptor: Int32
+    private let stateLock = NSLock()
+    private var isLocked = true
+
+    init(url: URL) throws {
+        descriptor = open(url.path, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+        while flock(descriptor, LOCK_EX) != 0 {
+            if errno == EINTR { continue }
+            let error = POSIXError(.init(rawValue: errno) ?? .EIO)
+            close(descriptor)
+            throw error
+        }
+    }
+
+    func unlock() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard isLocked else { return }
+        isLocked = false
+        _ = flock(descriptor, LOCK_UN)
+        close(descriptor)
+    }
+
+    deinit { unlock() }
+}
+
+private final class ClaudeNodeRuntimeAtomicInstall: ClaudeNodeRuntimeInstallTransaction, @unchecked Sendable {
+    private let source: URL
+    private let destination: URL
+    private let replacedExisting: Bool
+    private let stateLock = NSLock()
+    private var isActive = true
+
+    init(source: URL, destination: URL) throws {
+        self.source = source
+        self.destination = destination
+        var info = stat()
+        replacedExisting = lstat(destination.path, &info) == 0
+        let result = replacedExisting
+            ? renamex_np(source.path, destination.path, UInt32(RENAME_SWAP))
+            : rename(source.path, destination.path)
+        guard result == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+    }
+
+    func commit() throws {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard isActive else { return }
+        if replacedExisting { try FileManager.default.removeItem(at: source) }
+        isActive = false
+    }
+
+    func rollback() throws {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard isActive else { return }
+        let result = replacedExisting
+            ? renamex_np(source.path, destination.path, UInt32(RENAME_SWAP))
+            : rename(destination.path, source.path)
+        guard result == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+        isActive = false
+    }
+
+    deinit { try? rollback() }
 }

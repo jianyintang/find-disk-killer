@@ -1,3 +1,4 @@
+import FindDiskKillerNodeRuntime
 import Foundation
 import Observation
 
@@ -7,58 +8,85 @@ enum ClaudeNodeRuntimeSource: Equatable, Sendable {
     case downloaded
     case system
 
+    init(_ source: NodeRuntimeSource) {
+        switch source {
+        case .environmentOverride: self = .environmentOverride
+        case .legacyBundled: self = .legacyBundled
+        case .downloaded: self = .downloaded
+        case .system: self = .system
+        }
+    }
+
     var localizedLabel: String {
         switch self {
         case .environmentOverride: L10n.text("环境变量指定")
         case .legacyBundled: L10n.text("旧版内置")
         case .downloaded: L10n.text("已下载")
-        case .system: L10n.text("系统安装")
+        case .system: L10n.text("本机安装")
         }
     }
 }
 
 struct ClaudeNodeRuntimeAvailability: Equatable, Sendable {
     let path: String
-    let version: String?
+    let version: String
     let source: ClaudeNodeRuntimeSource
 }
 
-/// Drives the Node.js runtime status row in Settings: probes the same
-/// resolution order used by the Claude cleanup flow, and lets the user
-/// pre-download the pinned official runtime instead of waiting for the
-/// first cleanup to trigger it.
 @MainActor
 @Observable
 final class ClaudeNodeRuntimeStatusModel {
     typealias Source = ClaudeNodeRuntimeSource
     typealias Availability = ClaudeNodeRuntimeAvailability
+    typealias ProbeOperation = @Sendable () async throws -> ValidatedNodeRuntime?
+    typealias EnsureOperation = @Sendable (
+        @escaping @Sendable (ClaudeNodeRuntimeProvisioningPhase) -> Void
+    ) async throws -> ValidatedNodeRuntime
 
-    enum Phase {
+    enum Phase: Equatable {
         case checking
         case available(Availability)
         case missing
         case downloading
+        case verifying
+        case installing
         case failed(String)
     }
 
     private(set) var phase: Phase = .checking
-    private var refreshTask: Task<Void, Never>?
-    private var isDownloading = false
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var isDownloading = false
+    @ObservationIgnored private let probeOperation: ProbeOperation
+    @ObservationIgnored private let ensureOperation: EnsureOperation
+
+    init(
+        probeOperation: @escaping ProbeOperation = {
+            try await Task.detached { try ClaudeNodeRuntime.resolvedExistingRuntime() }.value
+        },
+        ensureOperation: @escaping EnsureOperation = { onPhase in
+            try await ClaudeNodeRuntime.ensureResolved(onPhase: onPhase)
+        }
+    ) {
+        self.probeOperation = probeOperation
+        self.ensureOperation = ensureOperation
+    }
 
     /// Re-probes in the background; an already displayed result stays
-    /// interactive and is replaced only when the new probe finishes.
+    /// interactive until the new validation has a definitive result.
     func refresh() {
         guard !isDownloading else { return }
         refreshTask?.cancel()
+        let probeOperation = self.probeOperation
         refreshTask = Task { [weak self] in
-            let availability = await Self.probe()
-            guard let self, !Task.isCancelled, !self.isDownloading else { return }
-            if let availability {
-                self.phase = .available(availability)
-            } else if case .failed = self.phase {
-                // Keep the failure visible until the user retries.
-            } else {
-                self.phase = .missing
+            do {
+                let runtime = try await probeOperation()
+                guard let self, !Task.isCancelled, !self.isDownloading else { return }
+                self.phase = runtime.map { .available(Self.availability(from: $0)) } ?? .missing
+            } catch is CancellationError {
+                return
+            } catch {
+                guard let self, !Task.isCancelled, !self.isDownloading else { return }
+                self.phase = .failed(error.localizedDescription)
             }
         }
     }
@@ -68,40 +96,36 @@ final class ClaudeNodeRuntimeStatusModel {
         refreshTask?.cancel()
         isDownloading = true
         phase = .downloading
+        let ensureOperation = self.ensureOperation
         Task { [weak self] in
+            guard let self else { return }
             do {
-                let path = try await ClaudeNodeRuntime.ensureAvailable()
-                let availability = await Self.inspect(path: path)
-                guard let self else { return }
+                let runtime = try await ensureOperation { phase in
+                    Task { @MainActor in self.apply(provisioningPhase: phase) }
+                }
                 self.isDownloading = false
-                self.phase = .available(availability)
+                self.phase = .available(Self.availability(from: runtime))
             } catch {
-                guard let self else { return }
                 self.isDownloading = false
                 self.phase = .failed(error.localizedDescription)
             }
         }
     }
 
-    /// Runs off the main actor: resolution may spawn `node --version`.
-    private nonisolated static func probe() async -> Availability? {
-        guard let path = ClaudeNodeRuntime.existingRuntime() else { return nil }
-        return await inspect(path: path)
+    private func apply(provisioningPhase: ClaudeNodeRuntimeProvisioningPhase) {
+        guard isDownloading else { return }
+        switch provisioningPhase {
+        case .downloading: phase = .downloading
+        case .verifying: phase = .verifying
+        case .installing: phase = .installing
+        }
     }
 
-    private nonisolated static func inspect(path: String) async -> Availability {
-        let version = ClaudeNodeRuntime.measuredVersionOutput(of: path)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return Availability(
-            path: path,
-            version: (version?.isEmpty ?? true) ? nil : version,
-            source: classify(
-                path: path,
-                environmentOverride: ProcessInfo.processInfo.environment["FDK_NODE_BINARY"],
-                bundledPath: ClaudeNodeRuntime.bundledRuntimePath(),
-                downloadRoot: ClaudeNodeRuntime.defaultApplicationSupportRoot()
-                    .appending(path: "AgentCleanup", directoryHint: .isDirectory).path
-            )
+    nonisolated static func availability(from runtime: ValidatedNodeRuntime) -> Availability {
+        Availability(
+            path: runtime.path,
+            version: runtime.version.nodeOutput,
+            source: Source(runtime.source)
         )
     }
 
@@ -111,16 +135,9 @@ final class ClaudeNodeRuntimeStatusModel {
         bundledPath: String?,
         downloadRoot: String
     ) -> Source {
-        if let environmentOverride, environmentOverride == path {
-            return .environmentOverride
-        }
-        if let bundledPath, bundledPath == path {
-            return .legacyBundled
-        }
+        if let environmentOverride, environmentOverride == path { return .environmentOverride }
+        if let bundledPath, bundledPath == path { return .legacyBundled }
         let root = downloadRoot.hasSuffix("/") ? downloadRoot : downloadRoot + "/"
-        if path.hasPrefix(root) {
-            return .downloaded
-        }
-        return .system
+        return path.hasPrefix(root) ? .downloaded : .system
     }
 }
