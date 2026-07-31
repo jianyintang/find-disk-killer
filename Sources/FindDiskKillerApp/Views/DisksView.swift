@@ -1,3 +1,4 @@
+import AppKit
 import FindDiskKillerCore
 import SwiftUI
 
@@ -6,6 +7,7 @@ struct DisksView: View {
     @State private var showHardwareDetails = true
     @State private var selectedMode: DiskPageMode = .activity
     @State private var selectedHealthDisk: String?
+    @State private var volumeTraceStore = VolumeAccessTraceStore()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,6 +54,14 @@ struct DisksView: View {
             }
             await store.diskHealth.refresh(devices: healthDevices)
         }
+        .task(id: processSessionTopology) {
+            volumeTraceStore.setProcessSessions(allProcessSessions)
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didBecomeActiveNotification
+        )) { _ in
+            volumeTraceStore.refreshPermissionStatus()
+        }
     }
 
     private var activityContent: some View {
@@ -95,10 +105,18 @@ struct DisksView: View {
                         VolumeRow(
                             volume: volume,
                             disks: physicalDisks(for: volume),
-                            sharesDevice: sharesPhysicalDevice(volume)
+                            sharesDevice: sharesPhysicalDevice(volume),
+                            traceIsRunning: volumeTraceStore.isRunning,
+                            onTraceAccessSource: {
+                                volumeTraceStore.select(volume, startImmediately: true)
+                            }
                         )
                         Divider()
                     }
+                }
+
+                if volumeTraceStore.selection != nil {
+                    VolumeAccessTracePanel(store: volumeTraceStore)
                 }
 
                 DisclosureGroup(isExpanded: $showHardwareDetails) {
@@ -270,6 +288,17 @@ struct DisksView: View {
             if lhs.isPhysical != rhs.isPhysical { return lhs.isPhysical }
             return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
         }
+    }
+
+    private var allProcessSessions: [ProcessSession] {
+        store.processes.flatMap(\.sessions)
+    }
+
+    private var processSessionTopology: String {
+        allProcessSessions
+            .map { "\($0.pid):\($0.startAbstime)" }
+            .sorted()
+            .joined(separator: "|")
     }
 }
 
@@ -880,6 +909,8 @@ private struct VolumeRow: View {
     let volume: VolumeInfo
     let disks: [DiskActivity]
     let sharesDevice: Bool
+    let traceIsRunning: Bool
+    let onTraceAccessSource: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -897,6 +928,15 @@ private struct VolumeRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Spacer()
+            Button(action: onTraceAccessSource) {
+                Image(systemName: "scope")
+            }
+            .buttonStyle(.borderless)
+            .frame(width: 30, height: 30)
+            .contentShape(Rectangle())
+            .help(L10n.text("追踪访问来源"))
+            .accessibilityLabel(L10n.text("追踪访问来源"))
+            .disabled(traceIsRunning || !volume.isLocal)
             if !volume.isLocal {
                 EvidenceLabel(text: "网络卷", symbol: "network")
             } else if disks.isEmpty {
@@ -945,4 +985,638 @@ private struct VolumeRow: View {
         .frame(width: 102, alignment: .trailing)
     }
 
+}
+
+private struct VolumeAccessTracePanel: View {
+    let store: VolumeAccessTraceStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            header
+            if needsStatusBand { statusBand }
+            metrics
+            HSplitView {
+                VolumeAccessSourceTable(items: store.sources)
+                    .frame(minWidth: 440, idealWidth: 620, minHeight: 300)
+                VolumeAccessEventTable(items: store.events)
+                    .frame(minWidth: 360, idealWidth: 460, minHeight: 300)
+            }
+            .frame(height: 340)
+            semanticsNote
+        }
+        .padding(.top, 4)
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "externaldrive.badge.magnifyingglass")
+                .font(.system(size: 22, weight: .medium))
+                .foregroundStyle(.blue)
+                .frame(width: 42, height: 42)
+                .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(store.selection?.displayName ?? "")
+                        .font(.title3.weight(.semibold))
+                        .lineLimit(1)
+                    VolumeTraceStateLabel(state: store.state)
+                }
+                Text(store.selection?.mountPath ?? "")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(store.selection?.mountPath ?? "")
+            }
+            Spacer(minLength: 12)
+            traceActions
+        }
+    }
+
+    private var traceActions: some View {
+        HStack(spacing: 8) {
+            if store.state == .stopping || store.state == .stopUnconfirmed {
+                ProgressView()
+                    .controlSize(.small)
+                    .help(L10n.text("正在确认追踪已结束"))
+            } else if store.isRunning {
+                Button(role: .destructive, action: store.stop) {
+                    Label(L10n.text("停止追踪"), systemImage: "stop.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+            } else if canStart {
+                Button(action: store.start) {
+                    Label(
+                        L10n.text(store.state == .stopped ? "重新开始" : "开始追踪"),
+                        systemImage: "record.circle"
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+            Menu {
+                Button(action: store.clear) {
+                    Label(L10n.text("清除本次结果"), systemImage: "eraser")
+                }
+                .disabled(store.isRunning || store.startedAt == nil)
+                Button(action: store.removeTarget) {
+                    Label(L10n.text("移除目标"), systemImage: "xmark")
+                }
+                .disabled(store.isRunning)
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 28)
+            .help(L10n.text("更多操作"))
+        }
+    }
+
+    private var statusBand: some View {
+        HStack(spacing: 12) {
+            Image(systemName: statusSymbol)
+                .font(.title3)
+                .foregroundStyle(statusColor)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(statusTitle)
+                    .font(.headline)
+                Text(statusDetail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 16)
+            statusActions
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(statusColor.opacity(0.06))
+        .overlay(alignment: .leading) {
+            Rectangle().fill(statusColor).frame(width: 3)
+        }
+    }
+
+    @ViewBuilder
+    private var statusActions: some View {
+        switch store.state {
+        case .permissionRequired:
+            Button(L10n.text("启用追踪"), action: store.requestPermission)
+                .buttonStyle(.borderedProminent)
+        case .waitingForApproval:
+            Button(action: store.openApprovalSettings) {
+                Label(L10n.text("打开登录项设置"), systemImage: "gearshape")
+            }
+            .buttonStyle(.borderedProminent)
+        case .repairAvailable:
+            Button(action: store.repairAndRetry) {
+                Label(L10n.text("修复并重试"), systemImage: "wrench.and.screwdriver")
+            }
+            .buttonStyle(.borderedProminent)
+        case .installationRequired:
+            Button(action: store.openInstallationLocation) {
+                Label(L10n.text("打开安装窗口"), systemImage: "folder")
+            }
+            .buttonStyle(.borderedProminent)
+        case .repairing, .stopping, .stopUnconfirmed:
+            ProgressView().controlSize(.small)
+        case .failed:
+            Button(action: store.start) {
+                Label(L10n.text("重试"), systemImage: "arrow.clockwise")
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    private var metrics: some View {
+        HStack(spacing: 14) {
+            VolumeTraceMetric(
+                title: "首次观察",
+                value: firstEventText,
+                symbol: "flag.checkered",
+                color: .blue
+            )
+            Divider().frame(height: 42)
+            VolumeTraceMetric(
+                title: "元数据访问",
+                value: store.metadataEventCount.map { $0.formatted() } ?? L10n.text("尚未开始"),
+                symbol: "list.bullet.rectangle",
+                color: .indigo
+            )
+            Divider().frame(height: 42)
+            VolumeTraceMetric(
+                title: "请求读 / 写",
+                value: requestBytesText,
+                symbol: "arrow.left.arrow.right",
+                color: .orange
+            )
+            Divider().frame(height: 42)
+            VolumeTraceMetric(
+                title: "已运行",
+                value: elapsedText,
+                symbol: "timer",
+                color: .teal
+            )
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(Color.secondary.opacity(0.035))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(Color.secondary.opacity(0.14), lineWidth: 0.5)
+        }
+    }
+
+    private var semanticsNote: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: coverageSymbol)
+                .foregroundStyle(coverageColor)
+            Text(coverageText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var canStart: Bool {
+        switch store.state {
+        case .ready, .stopped: true
+        default: false
+        }
+    }
+
+    private var needsStatusBand: Bool {
+        switch store.state {
+        case .permissionRequired, .waitingForApproval, .repairing,
+                .repairAvailable, .installationRequired, .failed, .unsupportedFormat,
+                .stopping, .stopUnconfirmed:
+            true
+        default: false
+        }
+    }
+
+    private var statusTitle: String {
+        switch store.state {
+        case .permissionRequired: L10n.text("需要启用文件访问追踪")
+        case .waitingForApproval: L10n.text("等待你在系统设置中批准")
+        case .repairing: L10n.text("正在更新追踪组件")
+        case .repairAvailable: L10n.text("追踪组件未能启动")
+        case .stopping: L10n.text("正在停止追踪")
+        case .stopUnconfirmed: L10n.text("正在确认追踪已结束")
+        case .installationRequired: L10n.text("需要先安装到应用程序文件夹")
+        case .unsupportedFormat: L10n.text("当前 macOS 输出格式暂不受支持")
+        case .failed(let message): message
+        default: ""
+        }
+    }
+
+    private var statusDetail: String {
+        switch store.state {
+        case .permissionRequired:
+            L10n.text("开始后会进行短时系统级文件访问追踪，只显示命中此卷的事件。")
+        case .waitingForApproval:
+            L10n.text("在“登录项与扩展”中允许 FindDiskKiller 后返回这里，追踪会自动开始。")
+        case .repairing:
+            L10n.text("正在替换旧版追踪组件，完成后会自动继续。")
+        case .repairAvailable:
+            L10n.text("组件已启用但未能启动。请直接修复，无需重复切换系统设置；已有结果会保留。")
+        case .stopping:
+            L10n.text("仍可检查更新；如需安装，将在追踪完全停止后自动继续。")
+        case .stopUnconfirmed:
+            L10n.text("仍可检查更新；确认后台追踪结束前不会开始安装。")
+        case .installationRequired(let isDiskImage):
+            isDiskImage
+                ? L10n.text("请在安装窗口中将 FindDiskKiller 拖入“应用程序”，然后重新打开。")
+                : L10n.text("请将 FindDiskKiller 移入“应用程序”文件夹，然后重新打开。")
+        case .unsupportedFormat:
+            L10n.text("为了避免显示看似精确但含义错误的结果，本次追踪已停止。")
+        case .failed:
+            L10n.text("请检查追踪组件状态后重试；已有结果仍保留在当前会话中。")
+        default:
+            ""
+        }
+    }
+
+    private var statusSymbol: String {
+        switch store.state {
+        case .permissionRequired, .waitingForApproval: "lock.shield"
+        case .repairing, .stopping, .stopUnconfirmed: "arrow.triangle.2.circlepath"
+        case .repairAvailable: "wrench.and.screwdriver"
+        case .installationRequired: "folder.badge.plus"
+        case .unsupportedFormat: "doc.badge.ellipsis"
+        default: "exclamationmark.triangle"
+        }
+    }
+
+    private var statusColor: Color {
+        switch store.state {
+        case .permissionRequired, .waitingForApproval, .repairing, .stopping: .blue
+        default: .orange
+        }
+    }
+
+    private var firstEventText: String {
+        store.firstEventAt?.formatted(date: .omitted, time: .standard)
+            ?? L10n.text("等待访问")
+    }
+
+    private var requestBytesText: String {
+        guard let read = store.requestedReadBytes,
+              let write = store.requestedWriteBytes
+        else { return L10n.text("尚未开始") }
+        return "\(ByteRateFormatter.bytes(read)) / \(ByteRateFormatter.bytes(write))"
+    }
+
+    private var elapsedText: String {
+        guard store.startedAt != nil else { return L10n.text("尚未开始") }
+        let seconds = Int(store.elapsed)
+        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private var coverageText: String {
+        let boundary = L10n.text("结果表示追踪期间最早观察到的卷访问，不等同于硬盘盒物理唤醒的绝对证明。")
+        switch store.coverage {
+        case .complete:
+            return boundary
+        case .partial(let count):
+            return L10n.format("%@ 本次有 %llu 条事件未能完整处理，列表可能遗漏。", boundary, count)
+        case .unsupportedFormat:
+            return L10n.text("当前系统输出格式无法可靠解析，没有生成访问来源结果。")
+        }
+    }
+
+    private var coverageSymbol: String {
+        switch store.coverage {
+        case .complete: "info.circle"
+        case .partial, .unsupportedFormat: "exclamationmark.triangle"
+        }
+    }
+
+    private var coverageColor: Color {
+        switch store.coverage {
+        case .complete: .secondary
+        case .partial, .unsupportedFormat: .orange
+        }
+    }
+}
+
+private struct VolumeTraceMetric: View {
+    let title: String
+    let value: String
+    let symbol: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(color)
+                .frame(width: 28, height: 28)
+                .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(value)
+                    .font(.system(.callout, design: .monospaced, weight: .semibold))
+                    .contentTransition(.numericText())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                Text(L10n.text(title))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct VolumeTraceStateLabel: View {
+    let state: FileAccessTraceRunState
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(title)
+        }
+        .font(.caption.weight(.medium))
+        .foregroundStyle(color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(color.opacity(0.09), in: Capsule())
+    }
+
+    private var title: String {
+        switch state {
+        case .running: L10n.text("追踪中")
+        case .starting: L10n.text("正在开始")
+        case .repairing: L10n.text("正在更新")
+        case .stopped: L10n.text("已停止")
+        case .repairAvailable, .installationRequired, .failed, .unsupportedFormat:
+            L10n.text("需要处理")
+        default: L10n.text("准备就绪")
+        }
+    }
+
+    private var color: Color {
+        switch state {
+        case .running: .green
+        case .starting, .repairing: .blue
+        case .repairAvailable, .installationRequired, .failed, .unsupportedFormat: .orange
+        default: .secondary
+        }
+    }
+}
+
+private struct VolumeAccessSourceRow: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let pid: Int32?
+    let firstEventAt: Date
+    let firstOperation: String
+    let samplePath: String
+    let metadataCount: Int
+    let readCount: Int
+    let writeCount: Int
+    let readBytes: UInt64
+    let writeBytes: UInt64
+
+    init(_ item: VolumeAccessTraceSourceSummary) {
+        id = item.id
+        name = item.process.displayName
+        pid = item.process.pid
+        firstEventAt = item.firstEventAt
+        firstOperation = item.firstOperation
+        samplePath = item.samplePath
+        metadataCount = item.metadataEventCount
+        readCount = item.readEventCount
+        writeCount = item.writeEventCount
+        readBytes = item.requestedReadBytes
+        writeBytes = item.requestedWriteBytes
+    }
+}
+
+private struct VolumeAccessSourceTable: View {
+    let items: [VolumeAccessTraceSourceSummary]
+    @State private var rows: [VolumeAccessSourceRow] = []
+    @State private var sortOrder = [
+        KeyPathComparator(\VolumeAccessSourceRow.firstEventAt, order: .forward)
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            volumeTraceTableHeading("最早访问来源", count: rows.count, symbol: "person.crop.square")
+            Divider()
+            Table(rows, sortOrder: $sortOrder) {
+                TableColumn(L10n.text("应用或进程"), value: \.name) { row in
+                    HStack(spacing: 8) {
+                        VolumeTraceProcessIcon(pid: row.pid)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(row.name).lineLimit(1)
+                            Text(processSubtitle(row))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .width(min: 160, ideal: 210)
+                TableColumn(L10n.text("首次"), value: \.firstEventAt) { row in
+                    Text(row.firstEventAt, format: .dateTime.hour().minute().second())
+                        .monospacedDigit()
+                }
+                .width(min: 82, ideal: 96)
+                TableColumn(L10n.text("证据"), value: \.firstOperation) { row in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(row.firstOperation)
+                            .font(.callout.monospaced())
+                        Text(privateVolumeTracePath(row.samplePath))
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .help(row.samplePath)
+                }
+                .width(min: 200, ideal: 280)
+                TableColumn(L10n.text("读 / 写"), value: \.writeBytes) { row in
+                    Text("\(ByteRateFormatter.bytes(row.readBytes)) / \(ByteRateFormatter.bytes(row.writeBytes))")
+                        .monospacedDigit()
+                }
+                .width(min: 120, ideal: 150)
+            }
+            .overlay {
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        L10n.text("等待这个卷出现访问事件"),
+                        systemImage: "scope"
+                    )
+                    .controlSize(.small)
+                }
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(Color.secondary.opacity(0.16), lineWidth: 0.5)
+        }
+        .onChange(of: items, initial: true) { _, newValue in
+            rows = newValue.map(VolumeAccessSourceRow.init).sorted(using: sortOrder)
+        }
+        .onChange(of: sortOrder) { _, newValue in
+            rows.sort(using: newValue)
+        }
+    }
+
+    private func processSubtitle(_ row: VolumeAccessSourceRow) -> String {
+        if let pid = row.pid {
+            return L10n.format("进程 ID %d · %@ 次事件", pid, eventCount(row).formatted())
+        }
+        return L10n.format("%@ 次事件", eventCount(row).formatted())
+    }
+
+    private func eventCount(_ row: VolumeAccessSourceRow) -> Int {
+        row.metadataCount + row.readCount + row.writeCount
+    }
+}
+
+private struct VolumeAccessEventRow: Identifiable, Equatable {
+    let id: String
+    let timestamp: Date
+    let operation: String
+    let category: VolumeAccessTraceOperationCategory
+    let path: String
+    let processName: String
+
+    init(_ item: VolumeAccessTraceEventSummary) {
+        id = item.id
+        timestamp = item.timestamp
+        operation = item.operation
+        category = item.category
+        path = item.path
+        processName = item.process.displayName
+    }
+}
+
+private struct VolumeAccessEventTable: View {
+    let items: [VolumeAccessTraceEventSummary]
+    @State private var rows: [VolumeAccessEventRow] = []
+    @State private var sortOrder = [
+        KeyPathComparator(\VolumeAccessEventRow.timestamp, order: .forward)
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            volumeTraceTableHeading("访问时间线", count: rows.count, symbol: "clock")
+            Divider()
+            Table(rows, sortOrder: $sortOrder) {
+                TableColumn(L10n.text("时间"), value: \.timestamp) { row in
+                    Text(row.timestamp, format: .dateTime.hour().minute().second())
+                        .monospacedDigit()
+                }
+                .width(min: 82, ideal: 96)
+                TableColumn(L10n.text("操作"), value: \.operation) { row in
+                    Label(row.operation, systemImage: symbol(for: row.category))
+                        .labelStyle(.titleAndIcon)
+                        .foregroundStyle(color(for: row.category))
+                }
+                .width(min: 100, ideal: 120)
+                TableColumn(L10n.text("来源"), value: \.processName) { row in
+                    Text(row.processName).lineLimit(1)
+                }
+                .width(min: 110, ideal: 150)
+                TableColumn(L10n.text("路径"), value: \.path) { row in
+                    Text(privateVolumeTracePath(row.path))
+                        .font(.caption.monospaced())
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(row.path)
+                }
+                .width(min: 180, ideal: 260)
+            }
+            .overlay {
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        L10n.text("还没有命中的访问记录"),
+                        systemImage: "list.bullet.rectangle"
+                    )
+                    .controlSize(.small)
+                }
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(Color.secondary.opacity(0.16), lineWidth: 0.5)
+        }
+        .onChange(of: items, initial: true) { _, newValue in
+            rows = newValue.map(VolumeAccessEventRow.init).sorted(using: sortOrder)
+        }
+        .onChange(of: sortOrder) { _, newValue in
+            rows.sort(using: newValue)
+        }
+    }
+
+    private func symbol(for category: VolumeAccessTraceOperationCategory) -> String {
+        switch category {
+        case .metadata: "list.bullet.rectangle"
+        case .read: "eye"
+        case .write: "pencil.line"
+        }
+    }
+
+    private func color(for category: VolumeAccessTraceOperationCategory) -> Color {
+        switch category {
+        case .metadata: .indigo
+        case .read: .teal
+        case .write: .orange
+        }
+    }
+}
+
+private struct VolumeTraceProcessIcon: View {
+    let pid: Int32?
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image).resizable().scaledToFit()
+            } else {
+                Image(systemName: "terminal")
+                    .resizable()
+                    .scaledToFit()
+                    .padding(5)
+                    .foregroundStyle(.secondary)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+            }
+        }
+        .frame(width: 24, height: 24)
+        .task(id: pid) {
+            guard let pid else { return }
+            image = NSRunningApplication(processIdentifier: pid_t(pid))?.icon
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+@MainActor
+private func volumeTraceTableHeading(_ title: String, count: Int, symbol: String) -> some View {
+    HStack(spacing: 8) {
+        Image(systemName: symbol).foregroundStyle(.secondary)
+        Text(L10n.text(title)).font(.headline)
+        Spacer()
+        Text(count.formatted())
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+    }
+    .padding(.horizontal, 12)
+    .frame(height: 42)
+}
+
+private func privateVolumeTracePath(_ path: String) -> String {
+    let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+    guard path == home || path.hasPrefix(home + "/") else { return path }
+    return "~" + path.dropFirst(home.count)
 }

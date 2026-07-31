@@ -92,6 +92,14 @@ private func start(_ connection: TraceHelperConnection) async -> (String, String
     }
 }
 
+private func startSystem(_ connection: TraceHelperConnection) async -> (String, String) {
+    await withCheckedContinuation { continuation in
+        connection.startSystemTrace(maximumDurationSeconds: 60) { sessionID, status in
+            continuation.resume(returning: (sessionID as String, status as String))
+        }
+    }
+}
+
 private func ping(_ connection: TraceHelperConnection) async -> String {
     await withCheckedContinuation { continuation in
         connection.ping(
@@ -133,6 +141,18 @@ func ownerControlsSession() async throws {
     harness.session?.finish()
     try await Task.sleep(for: .milliseconds(30))
     #expect(await ping(observer) == "ready")
+}
+
+@Test
+func systemTraceStartsWithoutProcessIdentifiers() async throws {
+    let (service, harness) = makeService()
+    let owner = TraceHelperConnection(service: service)
+
+    let started = await startSystem(owner)
+
+    #expect(started.1 == "started")
+    #expect(harness.session != nil)
+    harness.session?.finish()
 }
 
 @Test

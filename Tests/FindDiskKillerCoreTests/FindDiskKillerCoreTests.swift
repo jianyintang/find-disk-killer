@@ -169,6 +169,92 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     ) == .opened(fileDescriptor: 19, path: "/private/tmp/file.bin"))
 }
 
+@Test func volumeAccessTraceParserKeepsMetadataEventsForWakeDiagnosis() throws {
+    let day = try volumeTraceFixtureDate(hour: 10, minute: 42, second: 18)
+    guard case .event(let event) = VolumeAccessTraceParser.parse(
+        line: "10:42:18.104000 getattrlist /Volumes/TimeMachine/.Spotlight-V100 0.000081 mds.91",
+        on: day
+    ) else {
+        Issue.record("Expected metadata access to parse")
+        return
+    }
+
+    #expect(event.operation == "getattrlist")
+    #expect(event.category == VolumeAccessTraceOperationCategory.metadata)
+    #expect(event.requestedBytes == nil)
+    #expect(event.path == "/Volumes/TimeMachine/.Spotlight-V100")
+    #expect(event.processLabel == "mds")
+    #expect(event.threadID == 91)
+}
+
+@Test func volumeAccessTraceAggregatorSortsSourcesByFirstTouch() throws {
+    let startedAt = try volumeTraceFixtureDate(hour: 10, minute: 42, second: 0)
+    var aggregator = VolumeAccessTraceAggregator(
+        target: VolumeAccessTraceTarget(
+            volumeID: "volume-a",
+            name: "TimeMachine",
+            mountPath: "/Volumes/TimeMachine",
+            isCaseSensitive: false
+        ),
+        startedAt: startedAt
+    )
+    let backupd = VolumeAccessTraceProcessReference(
+        pid: 42,
+        startAbstime: 1,
+        displayName: "backupd"
+    )
+    let mds = VolumeAccessTraceProcessReference(
+        pid: 41,
+        startAbstime: 1,
+        displayName: "mds"
+    )
+
+    aggregator.ingest(VolumeAccessTraceEvent(
+        timestamp: try volumeTraceFixtureDate(hour: 10, minute: 42, second: 19),
+        operation: "open",
+        category: .metadata,
+        requestedBytes: nil,
+        path: "/Volumes/TimeMachine/Backups.backupdb",
+        process: backupd
+    ))
+    aggregator.ingest(VolumeAccessTraceEvent(
+        timestamp: try volumeTraceFixtureDate(hour: 10, minute: 42, second: 18),
+        operation: "getattrlist",
+        category: .metadata,
+        requestedBytes: nil,
+        path: "/Volumes/TimeMachine/.Spotlight-V100",
+        process: mds
+    ))
+    aggregator.ingest(VolumeAccessTraceEvent(
+        timestamp: try volumeTraceFixtureDate(hour: 10, minute: 42, second: 20),
+        operation: "read",
+        category: .read,
+        requestedBytes: 4_096,
+        path: "/Volumes/TimeMachine/.Spotlight-V100/store.db",
+        process: mds
+    ))
+
+    let snapshot = aggregator.snapshot()
+    #expect(snapshot.coverage == .complete)
+    #expect(snapshot.metadataEventCount == 2)
+    #expect(snapshot.requestedReadBytes == 4_096)
+    #expect(snapshot.sources.map { $0.process.displayName } == ["mds", "backupd"])
+    #expect(snapshot.sources.first?.firstOperation == "getattrlist")
+}
+
+private func volumeTraceFixtureDate(hour: Int, minute: Int, second: Int) throws -> Date {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try #require(TimeZone(identifier: "Asia/Shanghai"))
+    return try #require(calendar.date(from: DateComponents(
+        year: 2026,
+        month: 7,
+        day: 27,
+        hour: hour,
+        minute: minute,
+        second: second
+    )))
+}
+
 @Test func fileAccessTraceDescriptorIndexIsolatesProcessAndFDReuse() {
     let first = FileAccessTraceProcessIdentity(pid: 42, startAbstime: 100, displayName: "Tool")
     let replacement = FileAccessTraceProcessIdentity(

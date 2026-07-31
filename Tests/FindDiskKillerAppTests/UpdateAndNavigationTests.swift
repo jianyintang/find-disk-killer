@@ -194,6 +194,6 @@ func cancelingPostponedInstallationDoesNotInvokeItsHandler() async throws {
 }
 
 @Test
-func traceHelperProtocolUsesBusyAwareVersionFive() {
-    #expect(TraceHelperProtocolConfiguration.version == 5)
+func traceHelperProtocolUsesExplicitSystemTraceVersion() {
+    #expect(TraceHelperProtocolConfiguration.version == 6)
 }
