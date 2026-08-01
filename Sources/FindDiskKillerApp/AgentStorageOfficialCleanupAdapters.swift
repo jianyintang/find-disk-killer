@@ -3,11 +3,154 @@ import FindDiskKillerCore
 
 struct UnsupportedAgentCleanupAdapter: AgentStorageCleanupCapabilityProviding {
     func availability(for family: AgentStorageThreadFamily) async -> AgentStorageCleanupAvailability {
-        .unsupported("OpenCode 暂不支持安全清理")
+        .unsupported("此来源暂不支持安全清理")
     }
 
     func delete(_ family: AgentStorageThreadFamily) async -> AgentStorageCleanupOutcome {
-        .failed("OpenCode 暂不支持安全清理")
+        .failed("此来源暂不支持安全清理")
+    }
+}
+
+struct OpenCodeCLIAdapter: AgentStorageCleanupCapabilityProviding {
+    private let executableOverride: String?
+
+    init(executableOverride: String? = nil) {
+        self.executableOverride = executableOverride
+    }
+
+    func availability(for family: AgentStorageThreadFamily) async -> AgentStorageCleanupAvailability {
+        guard family.sourceKind == .openCode else {
+            return .unsupported("此 OpenCode 来源不支持安全清理")
+        }
+        guard OpenCodeDataDirectory.environment(for: family.sourcePath) != nil else {
+            return .unsupported("OpenCode 数据目录不是官方默认目录")
+        }
+        guard let executable = executableOverride ?? OpenCodeExecutableLocator.locate() else {
+            return .unsupported("未找到 OpenCode 官方清理命令")
+        }
+        do {
+            let result = try await AgentCleanupProcess.run(
+                executable: executable,
+                arguments: ["--pure", "session", "delete", "--help"],
+                timeoutSeconds: 4
+            )
+            guard result.status == 0 else {
+                return .unsupported("当前 OpenCode 不支持官方 session 删除")
+            }
+            return .ready
+        } catch {
+            return .unsupported(error.localizedDescription)
+        }
+    }
+
+    func delete(_ family: AgentStorageThreadFamily) async -> AgentStorageCleanupOutcome {
+        guard family.sourceKind == .openCode,
+              let environment = OpenCodeDataDirectory.environment(for: family.sourcePath),
+              let executable = executableOverride ?? OpenCodeExecutableLocator.locate()
+        else { return .failed("OpenCode 官方清理入口已不可用") }
+
+        let sessionIDs = family.subagents.map(\.nativeID) + [family.nativeThreadID]
+        var deletedIDs = Set<String>()
+        do {
+            for sessionID in sessionIDs where deletedIDs.insert(sessionID).inserted {
+                let result = try await AgentCleanupProcess.run(
+                    executable: executable,
+                    arguments: ["--pure", "session", "delete", sessionID],
+                    environment: environment,
+                    timeoutSeconds: 20
+                )
+                guard result.status == 0 || Self.isAlreadyAbsent(result) else {
+                    return .failed(Self.failureMessage(from: result))
+                }
+            }
+            let remainingIDs = try await Self.remainingSessionIDs(
+                executable: executable,
+                environment: environment,
+                sessionIDs: Array(deletedIDs)
+            )
+            guard remainingIDs.isEmpty else {
+                return .failed("OpenCode 未确认 session 已删除")
+            }
+            return .succeeded
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    private static func remainingSessionIDs(
+        executable: String,
+        environment: [String: String],
+        sessionIDs: [String]
+    ) async throws -> Set<String> {
+        let quotedIDs = sessionIDs.map {
+            "'\($0.replacingOccurrences(of: "'", with: "''"))'"
+        }.joined(separator: ",")
+        let query = "SELECT id FROM session WHERE id IN (\(quotedIDs))"
+        let result = try await AgentCleanupProcess.run(
+            executable: executable,
+            arguments: ["--pure", "db", "--format", "json", query],
+            environment: environment,
+            timeoutSeconds: 8
+        )
+        guard result.status == 0,
+              let data = result.stdout.data(using: .utf8),
+              let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else {
+            throw AgentStorageCleanupError.invalidProtocol
+        }
+        return Set(rows.compactMap { $0["id"] as? String })
+    }
+
+    private static func isAlreadyAbsent(_ result: AgentCleanupProcess.Result) -> Bool {
+        let output = (result.stdout + "\n" + result.stderr).lowercased()
+        return output.contains("session not found")
+            || output.contains("session does not exist")
+            || output.contains("not found")
+    }
+
+    private static func failureMessage(from result: AgentCleanupProcess.Result) -> String {
+        let message = [result.stderr, result.stdout]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+        return message ?? "OpenCode 未确认 session 已删除"
+    }
+}
+
+enum OpenCodeExecutableLocator {
+    static func locate(environment: [String: String] = ProcessInfo.processInfo.environment) -> String? {
+        if let override = environment["FDK_OPENCODE_CLI"], isExecutable(override) {
+            return override
+        }
+        let fileManager = FileManager.default
+        let pathCandidates = (environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map { URL(fileURLWithPath: String($0)).appending(path: "opencode").path }
+        let home = fileManager.homeDirectoryForCurrentUser.path
+        let fixedCandidates = [
+            "\(home)/.opencode/bin/opencode",
+            "\(home)/.local/bin/opencode",
+            "\(home)/bin/opencode",
+            "/opt/homebrew/bin/opencode",
+            "/usr/local/bin/opencode"
+        ]
+        return (pathCandidates + fixedCandidates).first(where: isExecutable)
+    }
+
+    private static func isExecutable(_ path: String) -> Bool {
+        FileManager.default.isExecutableFile(atPath: path)
+    }
+}
+
+enum OpenCodeDataDirectory {
+    static func environment(for sourcePath: String?) -> [String: String]? {
+        guard let sourcePath else { return nil }
+        let source = URL(fileURLWithPath: sourcePath).resolvingSymlinksInPath().standardizedFileURL
+        guard source.lastPathComponent == "opencode" else { return nil }
+        let dataHome = source.deletingLastPathComponent()
+        guard dataHome.lastPathComponent == "share",
+              dataHome.deletingLastPathComponent().lastPathComponent == ".local"
+        else { return nil }
+        return ["XDG_DATA_HOME": dataHome.path]
     }
 }
 

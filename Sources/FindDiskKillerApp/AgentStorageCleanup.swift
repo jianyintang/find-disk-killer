@@ -148,7 +148,17 @@ enum AgentStorageCleanupValidator {
             return canonicalMain.contains(family.nativeThreadID)
                 && family.projectPath?.hasPrefix("/") == true
         }
-        if family.provider == .openCode { return false }
+        if family.provider == .openCode {
+            guard family.sourceKind == .openCode,
+                  OpenCodeDataDirectory.environment(for: canonicalSource) != nil,
+                  canonicalMain == URL(fileURLWithPath: canonicalSource)
+                      .appending(path: "opencode.db")
+                      .standardizedFileURL.path
+            else { return false }
+            var value = stat()
+            return lstat(canonicalMain, &value) == 0
+                && (value.st_mode & S_IFMT) == S_IFREG
+        }
         return family.sourceKind == .codexHome
     }
 
@@ -156,7 +166,26 @@ enum AgentStorageCleanupValidator {
         _ family: AgentStorageThreadFamily,
         artifacts: [AgentStorageCleanupArtifact]
     ) -> Bool {
-        guard family.provider == .claude else { return family.provider != .openCode }
+        if family.provider == .openCode {
+            guard family.sourceKind == .openCode,
+                  let sourcePath = family.sourcePath,
+                  let mainPath = family.path,
+                  OpenCodeDataDirectory.environment(for: sourcePath) != nil
+            else { return false }
+            let expectedMain = URL(fileURLWithPath: sourcePath)
+                .resolvingSymlinksInPath()
+                .standardizedFileURL
+                .appending(path: "opencode.db")
+                .standardizedFileURL.path
+            var value = stat()
+            return URL(fileURLWithPath: mainPath)
+                .resolvingSymlinksInPath()
+                .standardizedFileURL.path == expectedMain
+                && lstat(expectedMain, &value) == 0
+                && (value.st_mode & S_IFMT) == S_IFREG
+                && artifacts.isEmpty
+        }
+        guard family.provider == .claude else { return family.sourceKind == .codexHome }
         guard family.sourceKind == .claudeCode, let mainPath = family.path else { return false }
         let main = URL(fileURLWithPath: mainPath).standardizedFileURL
         let sessionDirectory = main.deletingLastPathComponent()
@@ -202,6 +231,9 @@ struct AgentStorageLsofActivityInspector: AgentStorageCleanupActivityInspecting 
         family: AgentStorageThreadFamily,
         artifacts: [AgentStorageCleanupArtifact]
     ) async throws -> Bool {
+        if family.provider == .openCode, let databasePath = family.path {
+            return try await hasOpenHandle(for: [databasePath])
+        }
         if try await hasOpenWriter(for: artifacts) { return true }
         guard family.sourceKind == .claudeCode, let projectPath = family.projectPath else {
             return false
@@ -211,7 +243,10 @@ struct AgentStorageLsofActivityInspector: AgentStorageCleanupActivityInspecting 
 
     func hasOpenWriter(for artifacts: [AgentStorageCleanupArtifact]) async throws -> Bool {
         guard !artifacts.isEmpty else { return false }
-        let paths = artifacts.map(\.path)
+        return try await hasOpenWriter(for: artifacts.map(\.path))
+    }
+
+    private func hasOpenWriter(for paths: [String]) async throws -> Bool {
         return try await Task.detached(priority: .userInitiated) {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
@@ -228,6 +263,26 @@ struct AgentStorageLsofActivityInspector: AgentStorageCleanupActivityInspecting 
             return String(decoding: data, as: UTF8.self)
                 .split(separator: "\n")
                 .contains { $0 == "aw" || $0 == "au" }
+        }.value
+    }
+
+    private func hasOpenHandle(for paths: [String]) async throws -> Bool {
+        try await Task.detached(priority: .userInitiated) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+            process.arguments = ["-Fpa", "-w"] + paths
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = Pipe()
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 || process.terminationStatus == 1 else {
+                throw AgentStorageCleanupError.activityInspectionUnavailable
+            }
+            return String(decoding: data, as: UTF8.self)
+                .split(separator: "\n")
+                .contains { $0.first == "p" }
         }.value
     }
 
@@ -323,7 +378,7 @@ actor AgentStorageCleanupCoordinator {
     init(
         codex: any AgentStorageCleanupCapabilityProviding = CodexAppServerCleanupAdapter(),
         claude: any AgentStorageCleanupCapabilityProviding = ClaudeSDKCleanupAdapter(),
-        openCode: any AgentStorageCleanupCapabilityProviding = UnsupportedAgentCleanupAdapter(),
+        openCode: any AgentStorageCleanupCapabilityProviding = OpenCodeCLIAdapter(),
         activityInspector: any AgentStorageCleanupActivityInspecting = AgentStorageLsofActivityInspector()
     ) {
         self.codex = codex

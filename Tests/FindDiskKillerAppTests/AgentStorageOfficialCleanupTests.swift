@@ -319,6 +319,49 @@ private actor CancellationGate {
     #expect(outcome == .succeeded)
 }
 
+@Test func openCodeCleanupAcceptsOfficialXDGDataLayout() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "fdk-opencode-cleanup-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = root.appending(path: ".local/share/opencode", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    try Data("placeholder".utf8).write(to: source.appending(path: "opencode.db"))
+
+    let adapter = FakeCleanupAdapter()
+    let coordinator = AgentStorageCleanupCoordinator(
+        openCode: adapter,
+        activityInspector: FakeActivityInspector(hasWriter: false)
+    )
+    let family = openCodeFamily(source: source)
+    let prepared = await coordinator.prepare(AgentStorageCleanupReview(families: [family]))
+    #expect(prepared.first?.availability == .ready)
+
+    let result = await coordinator.execute(prepared, shouldCancel: { false }, didUpdate: { _ in })
+    #expect(result.succeededCount == 1)
+    #expect(await adapter.deletedIDs == [family.nativeThreadID])
+}
+
+@Test func openCodeCleanupRejectsArbitraryOpencodeNamedDirectory() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "fdk-opencode-cleanup-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = root.appending(path: "custom/opencode", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    try Data("placeholder".utf8).write(to: source.appending(path: "opencode.db"))
+
+    let adapter = FakeCleanupAdapter()
+    let coordinator = AgentStorageCleanupCoordinator(
+        openCode: adapter,
+        activityInspector: FakeActivityInspector(hasWriter: false)
+    )
+    let prepared = await coordinator.prepare(
+        AgentStorageCleanupReview(families: [openCodeFamily(source: source)])
+    )
+
+    #expect(prepared.first?.availability == .changed)
+    #expect(await adapter.deletedIDs.isEmpty)
+}
+
 private final class CleanupFixture {
     let root: URL
     let contents = Data(repeating: 0x41, count: 4_096)
@@ -372,6 +415,30 @@ private final class CleanupFixture {
     }
 
     func destroy() { try? FileManager.default.removeItem(at: root) }
+}
+
+private func openCodeFamily(source: URL) -> AgentStorageThreadFamily {
+    AgentStorageThreadFamily(
+        id: "opencode-family",
+        provider: .openCode,
+        sourceID: "openCode:\(source.path)",
+        nativeThreadID: "ses_root",
+        title: "OpenCode Session",
+        project: "Project",
+        updatedAt: Date(timeIntervalSince1970: 1),
+        isArchived: false,
+        mainAllocatedBytes: 128,
+        subagentAllocatedBytes: 0,
+        familyOtherAllocatedBytes: 0,
+        artifactCount: 0,
+        path: source.appending(path: "opencode.db").path,
+        subagents: [],
+        composition: [.conversation: 128],
+        cleanupArtifacts: [],
+        sourceKind: .openCode,
+        sourcePath: source.path,
+        projectPath: "/tmp/opencode-project"
+    )
 }
 
 private func cleanupArtifactForOfficialTest(
