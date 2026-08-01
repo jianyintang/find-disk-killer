@@ -13,7 +13,7 @@ test:
 test-ci:
 	@echo "Running the fast CI suite. Scanner integration, timing, and filesystem-event tests run locally via make test."
 	# Keep CI's Swift frontend memory usage deterministic on hosted macOS runners.
-	@if [ "$(SWIFT_BUILD_SYSTEM)" = "swiftbuild" ]; then \
+	@if [ "$(SWIFT_BUILD_SYSTEM)" = "swiftbuild" ] || [ "$(SWIFT_BUILD_SYSTEM)" = "next" ]; then \
 		mkdir -p .build/out/Products/Debug/PackageFrameworks; \
 		ln -sfn ../Sparkle.framework .build/out/Products/Debug/PackageFrameworks/Sparkle.framework; \
 	fi
