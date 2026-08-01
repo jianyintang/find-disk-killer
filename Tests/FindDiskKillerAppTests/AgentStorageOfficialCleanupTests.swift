@@ -8,6 +8,7 @@ private actor FakeCleanupAdapter: AgentStorageCleanupCapabilityProviding {
     let availabilityValue: AgentStorageCleanupAvailability
     let outcomes: [AgentStorageCleanupOutcome]
     private(set) var deletedIDs: [String] = []
+    private(set) var availabilityCallCount = 0
 
     init(
         availability: AgentStorageCleanupAvailability = .ready,
@@ -18,12 +19,39 @@ private actor FakeCleanupAdapter: AgentStorageCleanupCapabilityProviding {
     }
 
     func availability(for family: AgentStorageThreadFamily) -> AgentStorageCleanupAvailability {
-        availabilityValue
+        availabilityCallCount += 1
+        return availabilityValue
     }
 
     func delete(_ family: AgentStorageThreadFamily) -> AgentStorageCleanupOutcome {
         deletedIDs.append(family.nativeThreadID)
         return outcomes[min(deletedIDs.count - 1, outcomes.count - 1)]
+    }
+}
+
+private actor TrackingActivityInspector: AgentStorageCleanupActivityInspecting {
+    private(set) var callCount = 0
+    private(set) var maximumConcurrentCallCount = 0
+    private var activeCallCount = 0
+
+    func isActive(
+        family: AgentStorageThreadFamily,
+        artifacts: [AgentStorageCleanupArtifact]
+    ) async throws -> Bool {
+        callCount += 1
+        activeCallCount += 1
+        maximumConcurrentCallCount = max(maximumConcurrentCallCount, activeCallCount)
+        try await Task.sleep(for: .milliseconds(30))
+        activeCallCount -= 1
+        return false
+    }
+}
+
+private actor PreparationUpdateRecorder {
+    private(set) var updates: [[AgentStorageCleanupTarget]] = []
+
+    func record(_ targets: [AgentStorageCleanupTarget]) {
+        updates.append(targets)
     }
 }
 
@@ -106,6 +134,52 @@ private actor CancellationGate {
     )
     #expect(changed.first?.availability == .changed)
     #expect(await adapter.deletedIDs.isEmpty)
+}
+
+@Test func cleanupPreflightsOnceAndShortCircuitsActivityForUnsupportedSources() async throws {
+    let fixture = try CleanupFixture(provider: .codex, count: 4)
+    defer { fixture.destroy() }
+    let adapter = FakeCleanupAdapter(availability: .unsupported("unsupported"))
+    let inspector = TrackingActivityInspector()
+    let coordinator = AgentStorageCleanupCoordinator(
+        codex: adapter,
+        activityInspector: inspector
+    )
+
+    let prepared = await coordinator.prepare(AgentStorageCleanupReview(families: fixture.families))
+
+    #expect(prepared.allSatisfy { $0.availability == .unsupported("unsupported") })
+    #expect(await adapter.availabilityCallCount == 1)
+    #expect(await inspector.callCount == 0)
+}
+
+@Test func cleanupPreparesActivityChecksConcurrentlyAndReportsIncrementalProgress() async throws {
+    let fixture = try CleanupFixture(provider: .codex, count: 8)
+    defer { fixture.destroy() }
+    let adapter = FakeCleanupAdapter()
+    let inspector = TrackingActivityInspector()
+    let recorder = PreparationUpdateRecorder()
+    let coordinator = AgentStorageCleanupCoordinator(
+        codex: adapter,
+        activityInspector: inspector
+    )
+
+    let prepared = await coordinator.prepare(
+        AgentStorageCleanupReview(families: fixture.families),
+        didUpdate: { targets in await recorder.record(targets) }
+    )
+    let updates = await recorder.updates
+
+    #expect(prepared.allSatisfy { $0.availability == .ready })
+    #expect(await adapter.availabilityCallCount == 1)
+    #expect(await inspector.callCount == fixture.families.count)
+    #expect(await inspector.maximumConcurrentCallCount > 1)
+    #expect(updates.first?.count == fixture.families.count)
+    #expect(updates.first?.allSatisfy { $0.availability == .checking } == true)
+    #expect(updates.contains { targets in
+        let checkedCount = targets.count { $0.availability != .checking }
+        return checkedCount > 0 && checkedCount < targets.count
+    })
 }
 
 @Test func cleanupDetectsARealOpenWriterWithoutWaitingOrTakingALock() async throws {
@@ -267,9 +341,11 @@ private actor CancellationGate {
     #expect(review.retainedBytes == retained.allocatedBytes)
 }
 
-@Test func codexVersionGateRejectsIncompatibleProtocol() {
+@Test func codexVersionGateAllowsPrereleasesWhenTheProtocolCanBeProbed() {
     #expect(CodexExecutableLocator.supportsThreadDelete("codex-cli 0.146.0"))
-    #expect(!CodexExecutableLocator.supportsThreadDelete("codex-cli 0.146.0-alpha.3.1"))
+    #expect(CodexExecutableLocator.supportsThreadDelete("codex-cli 0.146.0-alpha.3.1"))
+    #expect(CodexExecutableLocator.supportsThreadDelete("codex-cli 0.146.0-beta.2"))
+    #expect(CodexExecutableLocator.supportsThreadDelete("codex-cli 0.146.0-rc.1"))
     #expect(!CodexExecutableLocator.supportsThreadDelete("codex-cli 0.145.9"))
     #expect(!CodexExecutableLocator.supportsThreadDelete("unexpected"))
 }
@@ -283,7 +359,7 @@ private actor CancellationGate {
     #!/usr/bin/ruby
     require 'json'
     if ARGV == ['--version']
-      puts 'codex-cli 0.146.0'
+      puts 'codex-cli 0.146.0-alpha.3.1'
       exit 0
     end
     reads = 0
