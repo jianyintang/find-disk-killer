@@ -10,7 +10,8 @@ test:
 	swift test --no-parallel
 
 test-ci:
-	CI_LOCAL_ONLY_TESTS='$(CI_LOCAL_ONLY_TESTS)' bash scripts/test-ci.sh
+	@echo "Running the fast CI suite. Scanner integration, timing, and filesystem-event tests run locally via make test."
+	swift test --no-parallel --jobs 1 --skip '$(CI_LOCAL_ONLY_TESTS)'
 
 test-agent-cleanup-fixtures:
 	/bin/zsh scripts/verify-agent-cleanup-fixtures.sh
@@ -22,7 +23,7 @@ test-privileged:
 lint:
 	plutil -lint Sources/FindDiskKillerApp/Resources/PrivacyInfo.xcprivacy
 	@for file in Sources/FindDiskKillerApp/Resources/*.lproj/Localizable.strings; do plutil -lint "$$file"; done
-	bash -n scripts/create-dmg.sh scripts/prepare-claude-cleanup-runtime.sh scripts/release.sh scripts/test-ci.sh scripts/verify-release.sh scripts/verify-installed-trace-helper.sh
+	bash -n scripts/create-dmg.sh scripts/prepare-claude-cleanup-runtime.sh scripts/release.sh scripts/verify-release.sh scripts/verify-installed-trace-helper.sh
 	xcrun swiftc -typecheck scripts/render-dmg-background.swift
 
 release:
