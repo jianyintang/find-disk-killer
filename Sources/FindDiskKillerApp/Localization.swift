@@ -96,11 +96,20 @@ enum L10n {
     }
 
     static func text(_ key: String) -> String {
-        let localized = languageBundle.localizedString(forKey: key, value: key, table: nil)
-        guard localized == key, effectiveLanguage != .simplifiedChinese else {
+        text(key, language: effectiveLanguage)
+    }
+
+    static func text(_ key: String, language: AppLanguage) -> String {
+        let resolvedLanguage = language == .system ? preferredLanguage : language
+        let localized = languageBundle(for: resolvedLanguage)
+            .localizedString(forKey: key, value: key, table: nil)
+        guard localized == key, resolvedLanguage != .simplifiedChinese else {
             return localized
         }
-        return historyEnglishFallbacks[key] ?? storageMapEnglishFallbacks[key] ?? localized
+        return recentEnglishFallbacks[key]
+            ?? historyEnglishFallbacks[key]
+            ?? storageMapEnglishFallbacks[key]
+            ?? localized
     }
 
     static func format(_ key: String, _ arguments: CVarArg...) -> String {
@@ -122,8 +131,8 @@ enum L10n {
         )
     }
 
-    private static var languageBundle: Bundle {
-        languageBundles[effectiveLanguage.rawValue.lowercased()] ?? AppResourceBundle.value
+    private static func languageBundle(for language: AppLanguage) -> Bundle {
+        languageBundles[language.rawValue.lowercased()] ?? AppResourceBundle.value
     }
 
     private static let languageBundles: [String: Bundle] = {
@@ -137,6 +146,111 @@ enum L10n {
             return (resourceName, bundle)
         })
     }()
+
+    // Recently added surfaces use English as the common fallback until every
+    // shipped locale receives a native translation. Non-Chinese interfaces
+    // must never fall back to the Simplified Chinese lookup key itself.
+    private static let recentEnglishFallbacks: [String: String] = [
+        "%@ 以前的应用明细已精简": "Application details before %@ have been compacted",
+        "%@ 本次有 %llu 条事件未能完整处理，列表可能遗漏。": "%@ %llu events could not be fully processed, so some entries may be missing.",
+        "%@ 次事件": "%@ events",
+        "Claude SDK 未确认 session 已删除": "Claude SDK could not confirm that the session was deleted",
+        "Claude SDK 版本不兼容": "The Claude SDK version is incompatible",
+        "Codex 未确认 thread 已删除": "Codex could not confirm that the thread was deleted",
+        "Codex 版本不支持安全清理": "This Codex version does not support safe cleanup",
+        "Codex 返回了不匹配的 thread": "Codex returned a different thread",
+        "Docker Volume · 通过 Docker 命令删除": "Docker Volume · Deleted with Docker",
+        "Docker 容器 · 通过 Docker 命令删除": "Docker Container · Deleted with Docker",
+        "Docker 镜像 · 通过 Docker 命令删除": "Docker Image · Deleted with Docker",
+        "Node.js 运行时安装失败：%@": "Node.js runtime installation failed: %@",
+        "Node.js 运行时验证失败：%@": "Node.js runtime validation failed: %@",
+        "OpenCode 官方清理入口已不可用": "The official OpenCode cleanup command is no longer available",
+        "OpenCode 数据目录不是官方默认目录": "The OpenCode data directory is not an official default location",
+        "OpenCode 未确认 session 已删除": "OpenCode could not confirm that the session was deleted",
+        "Podman Volume · 通过 Podman 命令删除": "Podman Volume · Deleted with Podman",
+        "Podman 容器 · 通过 Podman 命令删除": "Podman Container · Deleted with Podman",
+        "Podman 镜像 · 通过 Podman 命令删除": "Podman Image · Deleted with Podman",
+        "Worktree · 保留主仓库": "Worktree · Main Repository Preserved",
+        "上级目录 · %@": "Parent Folder · %@",
+        "下载或验证失败": "Download or Verification Failed",
+        "不完整": "Incomplete",
+        "中止当前空间扫描": "Stop the Current Storage Scan",
+        "中止本次扫描": "Stop This Scan",
+        "为了避免显示看似精确但含义错误的结果，本次追踪已停止。": "Tracing stopped to avoid presenting precise-looking but misleading results.",
+        "主仓库 · 整个目录移入废纸篓": "Main Repository · Move Entire Folder to Trash",
+        "主仓库仍有关联的 Worktree，请先移除这些 Worktree 后再删除主仓库。": "The main repository still has linked worktrees. Remove them before deleting the main repository.",
+        "停止本次扫描": "Stop This Scan",
+        "元数据访问": "Metadata Accesses",
+        "删除尚未安装的模拟器运行时下载包": "Delete downloaded Simulator runtimes that are not installed",
+        "压缩后约 %@ – %@": "Approximately %@ – %@ after compression",
+        "可重建缓存 · 移入废纸篓后自动重建目录": "Rebuildable Cache · Folder Recreated After Moving to Trash",
+        "官方 Claude SDK 清理组件不可用": "The official Claude SDK cleanup component is unavailable",
+        "官方 Codex 清理入口已不可用": "The official Codex cleanup command is no longer available",
+        "官方服务的数据目录与扫描来源不一致": "The official service data directory does not match the scanned source",
+        "官方清理协议不兼容": "The official cleanup protocol is incompatible",
+        "官方清理服务响应超时": "The official cleanup service timed out",
+        "将删除超出 %@ 的聚合数据，此操作无法撤销。": "Aggregated data beyond %@ will be deleted. This cannot be undone.",
+        "将整个主仓库移入废纸篓；不会删除同目录下的其它仓库": "Move the entire main repository to Trash without deleting other repositories in the same folder",
+        "展开子代理": "Expand Subagents",
+        "开始后会进行短时系统级文件访问追踪，只显示命中此卷的事件。": "A short system-level file access trace will begin and show only events that reach this volume.",
+        "当前 OpenCode 不支持官方 session 删除": "This OpenCode version does not support official session deletion",
+        "当前占用 %@。降至 %@ 后，较早的应用趋势和日排名可能并入“其他”且无法恢复；若仍无法满足预算，历史保存会暂停。": "Current usage is %@. Reducing it to %@ may permanently merge older application trends and daily rankings into Other. History saving will pause if the budget still cannot be met.",
+        "当前系统输出格式无法可靠解析，没有生成访问来源结果。": "The current system output could not be parsed reliably, so no access-source results were produced.",
+        "当前采样存在计数缺口；可用指标仍按实测展示，缺失指标不会以零值参与判断。": "The current sample has counting gaps. Available metrics still show measured values, and missing metrics are never treated as zero.",
+        "所选目录不是可识别的 Codex、Claude Code 或 OpenCode 数据位置": "The selected folder is not a recognized Codex, Claude Code, or OpenCode data location",
+        "折叠子代理": "Collapse Subagents",
+        "操作": "Operation",
+        "文件身份已变化": "File identity changed",
+        "无法确认文件是否正在写入": "Unable to determine whether the file is being written",
+        "无法确认活动状态": "Unable to determine activity status",
+        "更新空间占用": "Update Storage Usage",
+        "最早访问来源": "Earliest Access Sources",
+        "未安装运行时下载包 · 移入废纸篓": "Uninstalled Runtime Download · Move to Trash",
+        "未找到 OpenCode 官方清理命令": "The official OpenCode cleanup command was not found",
+        "未找到兼容的官方清理入口": "No compatible official cleanup command was found",
+        "未找到支持 thread/delete 的 Codex": "No Codex installation with thread/delete support was found",
+        "本机安装": "Installed on This Mac",
+        "模拟器设备 · 通过 Xcode Simulator 删除": "Simulator Device · Deleted with Xcode Simulator",
+        "模拟器运行时 · 通过 Xcode Simulator 删除": "Simulator Runtime · Deleted with Xcode Simulator",
+        "正在准备应用分析": "Preparing App Analysis",
+        "正在准备清理项目": "Preparing Cleanup Items",
+        "正在准备资源明细": "Preparing Resource Details",
+        "正在安装官方运行时…": "Installing the Official Runtime…",
+        "正在校验官方运行时…": "Verifying the Official Runtime…",
+        "此 Claude 来源不支持安全清理": "This Claude source does not support safe cleanup",
+        "此 Codex 来源不支持安全清理": "This Codex source does not support safe cleanup",
+        "此 OpenCode 来源不支持安全清理": "This OpenCode source does not support safe cleanup",
+        "此来源暂不支持安全清理": "This source does not currently support safe cleanup",
+        "添加": "Add",
+        "移除这个 Worktree，并保留主仓库": "Remove this worktree and preserve the main repository",
+        "等待访问": "Waiting for Access",
+        "等待这个卷出现访问事件": "Waiting for an access event on this volume",
+        "结果表示追踪期间最早观察到的卷访问，不等同于硬盘盒物理唤醒的绝对证明。": "Results show the earliest observed volume access during tracing and do not prove the exact physical wake time of the drive enclosure.",
+        "聊天仍在活动": "The chat is still active",
+        "能力检查尚未完成": "Capability check is not complete",
+        "自动（%@）": "Automatic (%@)",
+        "访问时间线": "Access Timeline",
+        "证据": "Evidence",
+        "请在 Claude Desktop 中删除": "Delete this in Claude Desktop",
+        "请求读 / 写": "Requested Read / Write",
+        "读 / 写": "Read / Write",
+        "路径": "Path",
+        "还没有命中的访问记录": "No matching access events yet",
+        "进程 ID %d · %@ 次事件": "Process ID %d · %@ events",
+        "追踪访问来源": "Trace Access Sources",
+        "选择 AI Agent 数据位置": "Choose an AI Agent Data Location",
+        "选择此资源进行清理": "Select this resource for cleanup",
+        "通过 Podman 删除此已停止容器": "Delete this stopped container with Podman",
+        "通过 Podman 删除此未被容器引用的 Volume": "Delete this volume, which is not referenced by any container, with Podman",
+        "通过 Podman 删除此镜像；执行前会再次检查容器引用": "Delete this image with Podman after checking container references again",
+        "通过 Xcode Simulator 删除此设备及其数据": "Delete this device and its data with Xcode Simulator",
+        "通过 Xcode Simulator 删除此运行时": "Delete this runtime with Xcode Simulator",
+        "部分指标暂不可用": "Some Metrics Are Temporarily Unavailable",
+        "重新分析空间地图": "Analyze Storage Map Again",
+        "重新扫描已识别的应用、工具和数据位置": "Rescan recognized apps, tools, and data locations",
+        "首次": "First",
+        "首次观察": "First Observed"
+    ]
 
     // New history surfaces fall back to English until each existing localization
     // receives a native translation; this avoids mixed Chinese UI in non-Chinese locales.

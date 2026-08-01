@@ -279,7 +279,7 @@ struct HistoryApplicationTable: View {
             metricText("000 GB", width: 92)
             if !compact {
                 metricText("000 GB", width: 92)
-                metricText("00小时", width: 86)
+                metricText("00:00", width: 86)
                 metricText("000 GB", width: 96)
             }
         }
@@ -432,7 +432,7 @@ struct HistoryApplicationTable: View {
     private var loadingDetailMetrics: some View {
         detailMetric(L10n.text("写入"), "000 GB", "square.and.arrow.down")
         detailMetric(L10n.text("读取"), "000 GB", "square.and.arrow.up")
-        detailMetric("CPU", "00小时", "cpu")
+        detailMetric("CPU", "00:00", "cpu")
         detailMetric(L10n.text("网络"), "000 GB", "network")
         detailMetric(L10n.text("写入占比"), "00%", "chart.bar.fill")
     }

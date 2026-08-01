@@ -445,7 +445,7 @@ enum StorageResourceTreeProjection {
                 id: "workspace.parent.\(stablePathHash(parentPath))",
                 kind: .location,
                 title: URL(fileURLWithPath: parentPath).lastPathComponent,
-                detail: "上级目录 · \(parentPath)",
+                detail: L10n.format("上级目录 · %@", parentPath),
                 symbol: "folder.fill",
                 allocatedBytes: sortedChildren.reduce(UInt64.zero) {
                     let sum = $0.addingReportingOverflow($1.allocatedBytes)

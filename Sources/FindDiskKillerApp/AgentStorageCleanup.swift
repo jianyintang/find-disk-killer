@@ -365,11 +365,11 @@ enum AgentStorageCleanupError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .activityInspectionUnavailable: "无法确认文件是否正在写入"
-        case .helperUnavailable: "未找到兼容的官方清理入口"
-        case .invalidProtocol: "官方清理协议不兼容"
-        case .providerHomeMismatch: "官方服务的数据目录与扫描来源不一致"
-        case .timedOut: "官方清理服务响应超时"
+        case .activityInspectionUnavailable: L10n.text("无法确认文件是否正在写入")
+        case .helperUnavailable: L10n.text("未找到兼容的官方清理入口")
+        case .invalidProtocol: L10n.text("官方清理协议不兼容")
+        case .providerHomeMismatch: L10n.text("官方服务的数据目录与扫描来源不一致")
+        case .timedOut: L10n.text("官方清理服务响应超时")
         }
     }
 }
@@ -837,8 +837,8 @@ struct AgentStorageCleanupReviewView: View {
             switch outcome {
             case .succeeded: return L10n.text("已删除")
             case .cancelled: return L10n.text("已取消")
-            case .skipped(let reason): return reason
-            case .failed(let reason): return reason
+            case .skipped(let reason): return L10n.text(reason)
+            case .failed(let reason): return L10n.text(reason)
             }
         }
         switch target.availability {
@@ -846,7 +846,7 @@ struct AgentStorageCleanupReviewView: View {
         case .ready: return L10n.text("可安全删除")
         case .active: return L10n.text("活动中，跳过")
         case .changed: return L10n.text("数据已变化，跳过")
-        case .unsupported(let reason): return reason
+        case .unsupported(let reason): return L10n.text(reason)
         }
     }
 
