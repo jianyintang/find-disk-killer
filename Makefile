@@ -1,6 +1,7 @@
 .PHONY: project test test-ci test-agent-cleanup-fixtures test-privileged lint release
 
 CI_LOCAL_ONLY_TESTS = FindDiskKillerCoreTests\.agentStorage|FindDiskKillerAppTests\.codexJSONRPCUsesOfficialDeleteAndVerifiesNotFound|recorder(RetriesABucketAfterATransactionLockFailure|AcceptsTheNextMinuteWhileThePreviousMinuteAwaitsRetry|BoundsPendingMinutesDuringASustainedWriteFailure)|fileChangeWatcherReportsChangesWithoutProcessAttribution|forceStopPrecedesReply
+SWIFT_BUILD_SYSTEM ?= native
 
 project:
 	SWIFT_DETERMINISTIC_HASHING=1 xcodegen generate
@@ -12,7 +13,11 @@ test:
 test-ci:
 	@echo "Running the fast CI suite. Scanner integration, timing, and filesystem-event tests run locally via make test."
 	# Keep CI's Swift frontend memory usage deterministic on hosted macOS runners.
-	swift test --no-parallel --jobs 1 --skip '$(CI_LOCAL_ONLY_TESTS)'
+	@if [ "$(SWIFT_BUILD_SYSTEM)" = "swiftbuild" ]; then \
+		mkdir -p .build/out/Products/Debug/PackageFrameworks; \
+		ln -sfn ../Sparkle.framework .build/out/Products/Debug/PackageFrameworks/Sparkle.framework; \
+	fi
+	swift test --build-system "$(SWIFT_BUILD_SYSTEM)" --no-parallel --jobs 1 --skip '$(CI_LOCAL_ONLY_TESTS)'
 
 test-agent-cleanup-fixtures:
 	/bin/zsh scripts/verify-agent-cleanup-fixtures.sh
