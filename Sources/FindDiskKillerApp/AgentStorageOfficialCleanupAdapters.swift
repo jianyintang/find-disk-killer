@@ -223,11 +223,6 @@ enum CodexExecutableLocator {
         guard let match = output.range(of: #"\d+\.\d+\.\d+"#, options: .regularExpression) else {
             return false
         }
-        let suffix = output[match.upperBound...].lowercased()
-        guard !suffix.hasPrefix("-alpha"),
-              !suffix.hasPrefix("-beta"),
-              !suffix.hasPrefix("-rc")
-        else { return false }
         let parts = output[match].split(separator: ".").compactMap { Int($0) }
         guard parts.count == 3 else { return false }
         return parts[0] > 0 || parts[1] > 146 || (parts[1] == 146 && parts[2] >= 0)

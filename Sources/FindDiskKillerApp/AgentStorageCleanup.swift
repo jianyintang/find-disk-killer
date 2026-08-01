@@ -375,6 +375,8 @@ enum AgentStorageCleanupError: LocalizedError {
 }
 
 actor AgentStorageCleanupCoordinator {
+    private static let maximumConcurrentPreparationChecks = 6
+
     private let codex: any AgentStorageCleanupCapabilityProviding
     private let claude: any AgentStorageCleanupCapabilityProviding
     private let openCode: any AgentStorageCleanupCapabilityProviding
@@ -393,53 +395,100 @@ actor AgentStorageCleanupCoordinator {
         self.activityInspector = activityInspector
     }
 
-    func prepare(_ review: AgentStorageCleanupReview) async -> [AgentStorageCleanupTarget] {
-        var targets: [AgentStorageCleanupTarget] = []
-        for family in review.families {
-            let artifacts = AgentStorageCleanupValidator.officialArtifacts(for: family)
-            var target = AgentStorageCleanupTarget(
-                family: family,
-                immediateArtifacts: artifacts,
-                availability: .checking,
-                outcome: nil
-            )
-            guard AgentStorageCleanupValidator.sourceIdentityIsValid(family) else {
-                target.availability = .changed
-                targets.append(target)
-                continue
+    func prepare(
+        _ review: AgentStorageCleanupReview,
+        didUpdate: @Sendable ([AgentStorageCleanupTarget]) async -> Void = { _ in }
+    ) async -> [AgentStorageCleanupTarget] {
+        var targets = review.families.map(Self.checkingTarget)
+        await didUpdate(targets)
+
+        let validationIndices = Array(targets.indices)
+        await withTaskGroup(of: (Int, Bool).self) { group in
+            var iterator = validationIndices.makeIterator()
+
+            func submit(_ index: Int) {
+                let target = targets[index]
+                group.addTask {
+                    let isValid = AgentStorageCleanupValidator.sourceIdentityIsValid(target.family)
+                        && target.immediateArtifacts.allSatisfy(AgentStorageCleanupValidator.isStillEligible)
+                        && AgentStorageCleanupValidator.deletionScopeMatchesSnapshot(
+                            target.family,
+                            artifacts: target.immediateArtifacts
+                        )
+                    return (index, isValid)
+                }
             }
-            guard artifacts.allSatisfy(AgentStorageCleanupValidator.isStillEligible) else {
-                target.availability = .changed
-                targets.append(target)
-                continue
+
+            for _ in 0..<min(Self.maximumConcurrentPreparationChecks, validationIndices.count) {
+                if let index = iterator.next() { submit(index) }
             }
-            guard AgentStorageCleanupValidator.deletionScopeMatchesSnapshot(
-                family,
-                artifacts: artifacts
-            ) else {
-                target.availability = .changed
-                targets.append(target)
-                continue
+            while let (index, isValid) = await group.next() {
+                if !isValid { targets[index].availability = .changed }
+                await didUpdate(targets)
+                if let nextIndex = iterator.next() { submit(nextIndex) }
             }
-            do {
-                if try await activityInspector.isActive(family: family, artifacts: artifacts) {
-                    target.availability = .active
-                } else {
-                    let key = capabilityKey(for: family)
-                    if let cached = capabilityCache[key] {
-                        target.availability = cached
-                    } else {
-                        let availability = await adapter(for: family).availability(for: family)
-                        capabilityCache[key] = availability
-                        target.availability = availability
+        }
+
+        var representativeByCapabilityKey: [String: Int] = [:]
+        for index in targets.indices where targets[index].availability == .checking {
+            let key = capabilityKey(for: targets[index].family)
+            representativeByCapabilityKey[key] = representativeByCapabilityKey[key] ?? index
+        }
+        for (key, representativeIndex) in representativeByCapabilityKey {
+            let availability: AgentStorageCleanupAvailability
+            if let cached = capabilityCache[key] {
+                availability = cached
+            } else {
+                let family = targets[representativeIndex].family
+                availability = await adapter(for: family).availability(for: family)
+                capabilityCache[key] = availability
+            }
+            guard availability != .ready else { continue }
+            for index in targets.indices
+            where targets[index].availability == .checking
+                && capabilityKey(for: targets[index].family) == key {
+                targets[index].availability = availability
+            }
+            await didUpdate(targets)
+        }
+
+        let pendingIndices = targets.indices.filter { targets[$0].availability == .checking }
+        let inspector = activityInspector
+        await withTaskGroup(of: (Int, AgentStorageCleanupAvailability).self) { group in
+            var iterator = pendingIndices.makeIterator()
+
+            func submit(_ index: Int) {
+                let family = targets[index].family
+                let artifacts = targets[index].immediateArtifacts
+                group.addTask {
+                    do {
+                        let isActive = try await inspector.isActive(family: family, artifacts: artifacts)
+                        return (index, isActive ? .active : .ready)
+                    } catch {
+                        return (index, .active)
                     }
                 }
-            } catch {
-                target.availability = .active
             }
-            targets.append(target)
+
+            for _ in 0..<min(Self.maximumConcurrentPreparationChecks, pendingIndices.count) {
+                if let index = iterator.next() { submit(index) }
+            }
+            while let (index, availability) = await group.next() {
+                targets[index].availability = availability
+                await didUpdate(targets)
+                if let nextIndex = iterator.next() { submit(nextIndex) }
+            }
         }
         return targets
+    }
+
+    private static func checkingTarget(for family: AgentStorageThreadFamily) -> AgentStorageCleanupTarget {
+        AgentStorageCleanupTarget(
+            family: family,
+            immediateArtifacts: AgentStorageCleanupValidator.officialArtifacts(for: family),
+            availability: .checking,
+            outcome: nil
+        )
     }
 
     func execute(
@@ -564,9 +613,18 @@ final class AgentStorageCleanupSession: ObservableObject, Identifiable {
     ) {
         self.review = review
         self.coordinator = coordinator
+        targets = review.families.map { family in
+            AgentStorageCleanupTarget(
+                family: family,
+                immediateArtifacts: AgentStorageCleanupValidator.officialArtifacts(for: family),
+                availability: .checking,
+                outcome: nil
+            )
+        }
     }
 
     var readyCount: Int { targets.count(where: { $0.availability == .ready }) }
+    var checkedCount: Int { targets.count(where: { $0.availability != .checking }) }
     var immediateBytes: UInt64 {
         targets.filter { $0.availability == .ready }.reduce(0) {
             $0.addingClamped($1.immediateBytes)
@@ -583,7 +641,12 @@ final class AgentStorageCleanupSession: ObservableObject, Identifiable {
 
     func prepare() async {
         guard phase == .checking else { return }
-        targets = await coordinator.prepare(review)
+        targets = await coordinator.prepare(
+            review,
+            didUpdate: { [weak self] updated in
+                await MainActor.run { self?.targets = updated }
+            }
+        )
         phase = .ready
     }
 
@@ -661,7 +724,8 @@ struct AgentStorageCleanupReviewView: View {
 
     private var headerSubtitle: String {
         switch session.phase {
-        case .checking: L10n.text("正在核验官方能力与聊天活动状态")
+        case .checking:
+            "\(L10n.text("正在核验官方能力与聊天活动状态")) · \(session.checkedCount)/\(session.targets.count)"
         case .ready: L10n.format("%d 个聊天可安全提交给官方清理", session.readyCount)
         case .deleting: L10n.text("正在串行提交；可取消尚未开始的聊天")
         case .finished: L10n.format("成功 %d · 跳过 %d · 失败 %d", session.result?.succeededCount ?? 0, session.result?.skippedCount ?? 0, session.result?.failedCount ?? 0)
@@ -726,7 +790,13 @@ struct AgentStorageCleanupReviewView: View {
                 }
             }
             if session.phase == .checking {
-                HStack(spacing: 10) { ProgressView().controlSize(.small); Text(L10n.text("正在逐项核验…")).foregroundStyle(.secondary) }
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text(L10n.text("正在逐项核验…")).foregroundStyle(.secondary)
+                    Text("\(session.checkedCount)/\(session.targets.count)")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
                     .frame(maxWidth: .infinity, minHeight: 80)
             }
         }
