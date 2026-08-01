@@ -990,43 +990,37 @@ import Testing
     #expect(source.contains("model.phase == .ready"))
 }
 
-@Test func storageMapResultsWaitForEveryDetectedAgentDeepAnalysis() {
+@Test func storageMapResultAccessDependsOnlyOnTheSelectedSource() {
     let storageSnapshot = storageMapAccessSnapshot(sourceIDs: [.chrome, .codex, .claude, .openCode])
-    let requiredProviders: Set<AgentStorageProvider> = [.codex, .claude, .openCode]
 
-    #expect(!StorageSourceResultAccess.canPresent(
+    #expect(StorageSourceResultAccess.resolve(
         sourceID: .chrome,
         storageSnapshot: storageSnapshot,
-        agentSnapshot: nil,
-        requiredAgentProviders: requiredProviders
-    ))
-    #expect(!StorageSourceResultAccess.canPresent(
+        agentSnapshot: nil
+    ) == .available)
+    #expect(StorageSourceResultAccess.resolve(
         sourceID: .codex,
         storageSnapshot: storageSnapshot,
-        agentSnapshot: storageMapAgentSnapshot(providers: [.codex]),
-        requiredAgentProviders: requiredProviders
-    ))
-    #expect(!StorageSourceResultAccess.canPresent(
+        agentSnapshot: storageMapAgentSnapshot(providers: [.codex])
+    ) == .available)
+    #expect(StorageSourceResultAccess.resolve(
         sourceID: .claude,
         storageSnapshot: storageSnapshot,
-        agentSnapshot: storageMapAgentSnapshot(providers: [.claude]),
-        requiredAgentProviders: requiredProviders
-    ))
-    #expect(!StorageSourceResultAccess.canPresent(
+        agentSnapshot: storageMapAgentSnapshot(providers: [.codex])
+    ) == .agentResultRequired(.claude))
+    #expect(StorageSourceResultAccess.resolve(
         sourceID: .openCode,
         storageSnapshot: storageSnapshot,
-        agentSnapshot: storageMapAgentSnapshot(providers: [.codex, .claude]),
-        requiredAgentProviders: requiredProviders
-    ))
+        agentSnapshot: nil
+    ) == .agentResultRequired(.openCode))
 
     let completeAgentSnapshot = storageMapAgentSnapshot(providers: [.codex, .claude, .openCode])
     for sourceID in [StorageSourceID.chrome, .codex, .claude, .openCode] {
-        #expect(StorageSourceResultAccess.canPresent(
+        #expect(StorageSourceResultAccess.resolve(
             sourceID: sourceID,
             storageSnapshot: storageSnapshot,
-            agentSnapshot: completeAgentSnapshot,
-            requiredAgentProviders: requiredProviders
-        ))
+            agentSnapshot: completeAgentSnapshot
+        ) == .available)
     }
 }
 
@@ -1092,12 +1086,11 @@ import Testing
 }
 
 @Test func storageMapDoesNotPresentAResultMissingFromTheUnifiedStorageSnapshot() {
-    #expect(!StorageSourceResultAccess.canPresent(
+    #expect(StorageSourceResultAccess.resolve(
         sourceID: .claude,
         storageSnapshot: storageMapAccessSnapshot(sourceIDs: [.codex]),
-        agentSnapshot: storageMapAgentSnapshot(providers: [.codex, .claude]),
-        requiredAgentProviders: [.codex, .claude]
-    ))
+        agentSnapshot: storageMapAgentSnapshot(providers: [.codex, .claude])
+    ) == .storageResultRequired)
 }
 
 @Test func storageMapDetailRoutingNeverStartsAnalysis() throws {
@@ -1111,12 +1104,28 @@ import Testing
     let source = try String(contentsOf: sourceURL, encoding: .utf8)
     let openSourceBody = try #require(
         source.split(separator: "private func openSource", maxSplits: 1).last?
-            .split(separator: "private func canPresentResult", maxSplits: 1).first
+            .split(separator: "private func resultAccess", maxSplits: 1).first
     )
 
     #expect(!openSourceBody.contains("startAnalysis"))
     #expect(!openSourceBody.contains("startFullAnalysis"))
     #expect(!openSourceBody.contains("agentStorage"))
+}
+
+@Test func storageMapSourceRowsKeepNavigationResponsiveAndExplainUnavailableDetails() throws {
+    let source = try storageMapViewSource()
+    let row = try #require(
+        source.split(separator: "private struct StorageSourceWorkbenchRow", maxSplits: 1).last?
+            .split(separator: "private struct StorageSourceBrandIcon", maxSplits: 1).first
+    )
+
+    #expect(row.contains("Button(action: requestOpen)"))
+    #expect(row.contains(".overlay(alignment: .trailing)"))
+    #expect(row.contains("await Task.yield()"))
+    #expect(row.contains("presentAccessFeedback(unavailableMessage)"))
+    #expect(row.contains("accessibilityHint(openAvailability.canPresent"))
+    #expect(row.components(separatedBy: ".allowsHitTesting(false)").count >= 3)
+    #expect(!row.contains(".disabled(isOpening)"))
 }
 
 @Test func storageMapDetailsUseOneNativeBackControlAndOfficialBrandIcon() throws {

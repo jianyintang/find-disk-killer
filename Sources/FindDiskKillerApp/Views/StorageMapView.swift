@@ -266,6 +266,7 @@ struct StorageMapView: View {
         return LazyVStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                 if index > 0 { Divider().padding(.leading, 72) }
+                let openAvailability = resultAccess(for: item.id)
                 StorageSourceWorkbenchRow(
                     item: item,
                     activity: item.activity,
@@ -273,6 +274,11 @@ struct StorageMapView: View {
                     safeCleanupBytes: safeBytesBySource[item.id] ?? 0,
                     usesCompactLayout: width < 820,
                     canReanalyze: canReanalyze(item.id),
+                    openAvailability: openAvailability,
+                    unavailableMessage: unavailableMessage(
+                        for: item.id,
+                        access: openAvailability
+                    ),
                     open: { openSource(item.id) },
                     reanalyze: { reanalyze(item.id) }
                 )
@@ -361,27 +367,51 @@ struct StorageMapView: View {
         )
     }
 
-    private func openSource(_ sourceID: StorageSourceID) {
-        guard canPresentResult(sourceID) else { return }
+    @discardableResult
+    private func openSource(_ sourceID: StorageSourceID) -> String? {
+        let access = resultAccess(for: sourceID)
+        guard access.canPresent else {
+            return unavailableMessage(for: sourceID, access: access)
+        }
         switch StorageSourceDestination.destination(for: sourceID) {
         case .tailoredAnalysis:
             route = .source(sourceID)
         case .agentAnalysis(let provider):
             route = .agentAnalysis(provider)
         }
+        return nil
     }
 
-    private func canPresentResult(_ sourceID: StorageSourceID) -> Bool {
+    private func resultAccess(for sourceID: StorageSourceID) -> StorageSourceResultAccess {
         if sourceID == .workspace,
            model.candidates.contains(where: { $0.id == .workspace }) {
-            return true
+            return .available
         }
-        return StorageSourceResultAccess.canPresent(
+        return StorageSourceResultAccess.resolve(
             sourceID: sourceID,
             storageSnapshot: model.snapshot,
-            agentSnapshot: agentStorage.snapshot,
-            requiredAgentProviders: requiredAgentProviders
+            agentSnapshot: agentStorage.snapshot
         )
+    }
+
+    private func unavailableMessage(
+        for sourceID: StorageSourceID,
+        access: StorageSourceResultAccess
+    ) -> String {
+        let reason: String
+        switch access {
+        case .available:
+            return L10n.text("查看专属分析")
+        case .storageResultRequired:
+            reason = model.isAnalyzingSource(sourceID)
+                ? L10n.text("正在测量文件分配")
+                : L10n.text("当前分析没有此来源的结果")
+        case .agentResultRequired(let provider):
+            reason = agentStorage.isAnalyzing(provider)
+                ? L10n.format("正在等待 %@ 深度分析", provider.displayName)
+                : L10n.text("当前分析没有此来源的结果")
+        }
+        return L10n.format("详情尚未就绪：%@", reason)
     }
 
     private var requiredAgentProviders: Set<AgentStorageProvider> {
@@ -897,24 +927,20 @@ private struct StorageSourceWorkbenchRow: View {
     let safeCleanupBytes: UInt64
     let usesCompactLayout: Bool
     let canReanalyze: Bool
-    let open: () -> Void
+    let openAvailability: StorageSourceResultAccess
+    let unavailableMessage: String
+    let open: () -> String?
     let reanalyze: () -> Void
 
     @State private var isHovering = false
     @State private var isOpening = false
+    @State private var accessFeedback: String?
+    @State private var openTask: Task<Void, Never>?
+    @State private var feedbackTask: Task<Void, Never>?
 
     var body: some View {
-        HStack(spacing: 10) {
-            Button {
-                guard !isOpening else { return }
-                isOpening = true
-                Task { @MainActor in
-                    await Task.yield()
-                    guard !Task.isCancelled else { return }
-                    open()
-                    isOpening = false
-                }
-            } label: {
+        Button(action: requestOpen) {
+            HStack(spacing: 10) {
                 Group {
                     if usesCompactLayout {
                         compactContent
@@ -923,33 +949,52 @@ private struct StorageSourceWorkbenchRow: View {
                     }
                 }
                 .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(isOpening)
-            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-            .clipped()
-            .accessibilityHint(L10n.text("查看专属分析"))
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .clipped()
 
-            reanalysisControl
+                Color.clear
+                    .frame(width: 28, height: 28)
+                    .accessibilityHidden(true)
 
-            Group {
-                if isOpening {
-                    ProgressView().controlSize(.mini)
-                } else {
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
+                Group {
+                    if isOpening {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
                 }
+                .frame(width: 12, height: 16)
             }
-            .frame(width: 12, height: 16)
+            .padding(.horizontal, 14)
+            .frame(minHeight: usesCompactLayout ? 94 : 76)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 14)
-        .frame(minHeight: usesCompactLayout ? 94 : 76)
-        .frame(maxWidth: .infinity)
+        .buttonStyle(.plain)
+        .accessibilityHint(openAvailability.canPresent
+            ? L10n.text("查看专属分析")
+            : unavailableMessage)
         .background(rowBackground)
-        .clipped()
-        .contentShape(Rectangle())
+        .overlay(alignment: .trailing) {
+            reanalysisControl
+                .padding(.trailing, 36)
+        }
         .onHover { isHovering = $0 }
+        .onChange(of: openAvailability) { _, access in
+            if access.canPresent {
+                feedbackTask?.cancel()
+                accessFeedback = nil
+            }
+        }
+        .onChange(of: unavailableMessage) { _, message in
+            if accessFeedback != nil { accessFeedback = message }
+        }
+        .onDisappear {
+            openTask?.cancel()
+            feedbackTask?.cancel()
+        }
         .accessibilityElement(children: .contain)
     }
 
@@ -1002,7 +1047,13 @@ private struct StorageSourceWorkbenchRow: View {
 
     private var activityContent: some View {
         VStack(alignment: .leading, spacing: 5) {
-            if activity.state == .active || activity.state == .queued || activity.state == .ready {
+            if let accessFeedback {
+                Label(accessFeedback, systemImage: "exclamationmark.circle.fill")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+                    .transition(.opacity)
+            } else if activity.state == .active || activity.state == .queued || activity.state == .ready {
                 HStack(spacing: 7) {
                     if activity.state == .active {
                         ProgressView().controlSize(.mini)
@@ -1018,7 +1069,9 @@ private struct StorageSourceWorkbenchRow: View {
                         .truncationMode(.tail)
                 }
             }
-            if let composition = completedComposition {
+            if accessFeedback != nil {
+                EmptyView()
+            } else if let composition = completedComposition {
                 Text(composition)
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.primary)
@@ -1033,7 +1086,7 @@ private struct StorageSourceWorkbenchRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            if let supportingDetail = activity.supportingDetail {
+            if accessFeedback == nil, let supportingDetail = activity.supportingDetail {
                 Text(supportingDetail)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -1092,16 +1145,55 @@ private struct StorageSourceWorkbenchRow: View {
                 )
                 .help(L10n.text("正在分析"))
                 .accessibilityLabel(L10n.text("正在分析"))
+                .allowsHitTesting(false)
         case .hidden:
             Color.clear
                 .frame(width: 28, height: 28)
                 .accessibilityHidden(true)
+                .allowsHitTesting(false)
         }
     }
 
     private var rowBackground: Color {
+        if isOpening { return Color.accentColor.opacity(0.1) }
+        if accessFeedback != nil { return Color.orange.opacity(0.075) }
         if isHovering { return Color.primary.opacity(0.055) }
         return .clear
+    }
+
+    private func requestOpen() {
+        guard openTask == nil else { return }
+        guard openAvailability.canPresent else {
+            presentAccessFeedback(unavailableMessage)
+            return
+        }
+
+        feedbackTask?.cancel()
+        accessFeedback = nil
+        isOpening = true
+        openTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            guard let failureMessage = open() else { return }
+            isOpening = false
+            openTask = nil
+            presentAccessFeedback(failureMessage)
+        }
+    }
+
+    private func presentAccessFeedback(_ message: String) {
+        feedbackTask?.cancel()
+        withAnimation(.easeOut(duration: 0.16)) {
+            accessFeedback = message
+        }
+        feedbackTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.18)) {
+                accessFeedback = nil
+            }
+            feedbackTask = nil
+        }
     }
 
     private var stateColor: Color {

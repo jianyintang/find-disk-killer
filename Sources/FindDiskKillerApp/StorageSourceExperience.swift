@@ -31,22 +31,30 @@ extension AgentStorageProvider {
     }
 }
 
-enum StorageSourceResultAccess {
-    static func canPresent(
+enum StorageSourceResultAccess: Equatable {
+    case available
+    case storageResultRequired
+    case agentResultRequired(AgentStorageProvider)
+
+    var canPresent: Bool { self == .available }
+
+    static func resolve(
         sourceID: StorageSourceID,
         storageSnapshot: StorageAnalysisSnapshot?,
-        agentSnapshot: AgentStorageSnapshot?,
-        requiredAgentProviders: Set<AgentStorageProvider>
-    ) -> Bool {
+        agentSnapshot: AgentStorageSnapshot?
+    ) -> Self {
         guard storageSnapshot?.result(for: sourceID) != nil else {
-            return false
+            return .storageResultRequired
         }
-        let completedProviders = Set(agentSnapshot?.providers.map(\.provider) ?? [])
-        guard requiredAgentProviders.isSubset(of: completedProviders) else { return false }
         if let provider = sourceID.agentStorageProvider {
-            return completedProviders.contains(provider)
+            guard agentSnapshot?.providers.contains(where: { summary in
+                summary.provider == provider && summary.supportStatus != .notInstalled
+            }) == true,
+            agentSnapshot?.dataset(for: provider) != nil else {
+                return .agentResultRequired(provider)
+            }
         }
-        return true
+        return .available
     }
 }
 

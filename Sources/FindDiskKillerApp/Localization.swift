@@ -440,6 +440,7 @@ enum L10n {
         "增大窗口以查看空间地图": "Make the Window Wider to View Storage Map",
         "当前选择已保留。折叠侧栏可获得更多内容空间。": "Your selection is preserved. Collapse the sidebar for more content space.",
         "来源不可用": "Source Unavailable",
+        "详情尚未就绪：%@": "Details aren't ready yet: %@",
         "AI 工具深度分析": "AI Tools Deep Analysis",
         "已分析空间": "Analyzed Storage",
         "已发现来源": "Discovered Sources",
