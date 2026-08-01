@@ -55,7 +55,10 @@ public actor AgentStorageScanner {
     public struct Configuration: Sendable {
         public let homeDirectory: URL
         public let additionalRoots: [URL]
+        public let agentDataLocations: [AgentDataLocation]?
         public let includesDesktopData: Bool
+        public let environment: [String: String]
+        public let providers: Set<AgentStorageProvider>
         let beforePhysicalValidation: (@Sendable () -> Void)?
         let databaseReadConcurrency: Int
         let databaseShardDidStart: (@Sendable (String) -> Void)?
@@ -63,11 +66,17 @@ public actor AgentStorageScanner {
         public init(
             homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
             additionalRoots: [URL] = [],
-            includesDesktopData: Bool = true
+            includesDesktopData: Bool = true,
+            providers: Set<AgentStorageProvider> = Set(AgentStorageProvider.allCases),
+            agentDataLocations: [AgentDataLocation]? = nil,
+            environment: [String: String]? = nil
         ) {
             self.homeDirectory = homeDirectory
             self.additionalRoots = additionalRoots
+            self.agentDataLocations = agentDataLocations
             self.includesDesktopData = includesDesktopData
+            self.environment = Self.environment(environment, for: homeDirectory)
+            self.providers = providers
             beforePhysicalValidation = nil
             databaseReadConcurrency = Self.defaultDatabaseReadConcurrency
             databaseShardDidStart = nil
@@ -77,11 +86,16 @@ public actor AgentStorageScanner {
             homeDirectory: URL,
             additionalRoots: [URL] = [],
             includesDesktopData: Bool,
-            beforePhysicalValidation: @escaping @Sendable () -> Void
+            beforePhysicalValidation: @escaping @Sendable () -> Void,
+            agentDataLocations: [AgentDataLocation]? = nil,
+            environment: [String: String]? = nil
         ) {
             self.homeDirectory = homeDirectory
             self.additionalRoots = additionalRoots
+            self.agentDataLocations = agentDataLocations
             self.includesDesktopData = includesDesktopData
+            self.environment = Self.environment(environment, for: homeDirectory)
+            providers = Set(AgentStorageProvider.allCases)
             self.beforePhysicalValidation = beforePhysicalValidation
             databaseReadConcurrency = Self.defaultDatabaseReadConcurrency
             databaseShardDidStart = nil
@@ -92,11 +106,16 @@ public actor AgentStorageScanner {
             additionalRoots: [URL] = [],
             includesDesktopData: Bool,
             databaseReadConcurrency: Int,
-            databaseShardDidStart: @escaping @Sendable (String) -> Void
+            databaseShardDidStart: @escaping @Sendable (String) -> Void,
+            agentDataLocations: [AgentDataLocation]? = nil,
+            environment: [String: String]? = nil
         ) {
             self.homeDirectory = homeDirectory
             self.additionalRoots = additionalRoots
+            self.agentDataLocations = agentDataLocations
             self.includesDesktopData = includesDesktopData
+            self.environment = Self.environment(environment, for: homeDirectory)
+            providers = Set(AgentStorageProvider.allCases)
             beforePhysicalValidation = nil
             self.databaseReadConcurrency = max(1, databaseReadConcurrency)
             self.databaseShardDidStart = databaseShardDidStart
@@ -106,6 +125,17 @@ public actor AgentStorageScanner {
             4,
             max(1, ProcessInfo.processInfo.activeProcessorCount / 2)
         )
+
+        private static func environment(
+            _ explicit: [String: String]?,
+            for homeDirectory: URL
+        ) -> [String: String] {
+            if let explicit { return explicit }
+            let requested = homeDirectory.resolvingSymlinksInPath().standardizedFileURL.path
+            let current = FileManager.default.homeDirectoryForCurrentUser
+                .resolvingSymlinksInPath().standardizedFileURL.path
+            return requested == current ? ProcessInfo.processInfo.environment : [:]
+        }
     }
 
     private let configuration: Configuration
@@ -137,6 +167,7 @@ public actor AgentStorageScanner {
 }
 
 private final class AgentStorageProgressEmitter: @unchecked Sendable {
+    private let minimumEmissionInterval: Duration = .seconds(1)
     private let handler: (@Sendable (AgentStorageScanProgress) -> Void)?
     private let clock = ContinuousClock()
     private let lock = NSLock()
@@ -150,7 +181,7 @@ private final class AgentStorageProgressEmitter: @unchecked Sendable {
         let now = clock.now
         lock.lock()
         if !force, let lastEmission = lastEmissionByProvider[progress.provider],
-           lastEmission.duration(to: now) < .milliseconds(100) {
+           lastEmission.duration(to: now) < minimumEmissionInterval {
             lock.unlock()
             return
         }
@@ -280,7 +311,7 @@ private struct AgentStorageScanEngine {
         )
 
         try await withThrowingTaskGroup(of: AgentStorageProviderScanResult.self) { group in
-            for provider in AgentStorageProvider.allCases {
+            for provider in AgentStorageProvider.allCases where configuration.providers.contains(provider) {
                 group.addTask {
                     var providerEngine = AgentStorageScanEngine(
                         configuration: configuration,
@@ -519,125 +550,46 @@ private struct AgentStorageScanEngine {
 
     private mutating func discoverScopes(for requestedProvider: AgentStorageProvider) -> [ScanScope] {
         let home = configuration.homeDirectory.standardizedFileURL
-        var candidates: [(URL, AgentStorageProvider, ScanScopeKind, String)] = [
-            (home.appending(path: ".codex"), .codex, .codexHome, "Codex Home"),
-            (home.appending(path: ".codex-cc"), .codex, .codexHome, "Codex Home"),
-            (home.appending(path: ".claude"), .claude, .claudeCode, "Claude Code"),
-            (home.appending(path: ".local/share/opencode"), .openCode, .openCode, "OpenCode")
-        ]
-
-        if configuration.includesDesktopData {
-            let applicationSupport = home.appending(
-                path: "Library/Application Support",
-                directoryHint: .isDirectory
-            )
-            candidates.append(contentsOf: [
-                (applicationSupport.appending(path: "Codex"), .codex, .codexDesktop, "Codex Desktop"),
-                (applicationSupport.appending(path: "com.openai.codex"), .codex, .codexDesktop, "Codex Desktop"),
-                (applicationSupport.appending(path: "com.openai.chat"), .codex, .codexDesktop, "Codex Desktop"),
-                (applicationSupport.appending(path: "Claude-3p"), .claude, .claudeDesktop, "Claude Desktop"),
-                (applicationSupport.appending(path: "Claude"), .claude, .claudeDesktop, "Claude Desktop")
-            ])
-
-            if requestedProvider == .claude {
-                for desktopRoot in [
-                    applicationSupport.appending(path: "Claude-3p"),
-                    applicationSupport.appending(path: "Claude")
-                ] where fileManager.fileExists(atPath: desktopRoot.path) {
-                    let nestedHomes = discoverNestedClaudeHomes(in: desktopRoot)
-                    candidates.append(contentsOf: nestedHomes.map {
-                        ($0, .claude, .claudeDesktopAgent, "Claude Desktop Agent")
-                    })
-                }
-            }
-        }
-
-        for root in configuration.additionalRoots {
-            let standardized = root.standardizedFileURL
-            if fileManager.fileExists(atPath: standardized.appending(path: "state_5.sqlite").path)
-                || fileManager.fileExists(atPath: standardized.appending(path: "sessions").path) {
-                candidates.append((standardized, .codex, .codexHome, "Codex Home"))
-            } else if fileManager.fileExists(atPath: standardized.appending(path: "projects").path) {
-                candidates.append((standardized, .claude, .claudeCode, "Claude Code"))
-            } else if fileManager.fileExists(atPath: standardized.appending(path: "opencode.db").path) {
-                candidates.append((standardized, .openCode, .openCode, "OpenCode"))
-            }
-        }
-
-        var seenPaths: Set<String> = []
+        let locations = configuration.agentDataLocations ?? AgentDataLocationDiscovery(
+            configuration: .init(
+                homeDirectory: home,
+                additionalRoots: configuration.additionalRoots,
+                includesDesktopData: configuration.includesDesktopData,
+                environment: configuration.environment
+            ),
+            fileManager: fileManager
+        ).discover()
         var result: [ScanScope] = []
-        for (candidate, provider, kind, displayName) in candidates
-        where provider == requestedProvider {
-            guard fileManager.fileExists(atPath: candidate.path) else { continue }
-            let resolved = canonicalURL(candidate)
-            guard seenPaths.insert(resolved.path).inserted else { continue }
-            let id = "\(provider.rawValue):\(resolved.path)"
+        for location in locations where location.provider == requestedProvider {
+            let resolved = URL(fileURLWithPath: location.resolvedPath, isDirectory: true)
+            guard fileManager.fileExists(atPath: resolved.path) else { continue }
             result.append(ScanScope(
-                id: id,
-                provider: provider,
-                kind: kind,
+                id: location.id,
+                provider: requestedProvider,
+                kind: ScanScopeKind(location.kind),
                 root: resolved,
-                displayName: displayName
+                displayName: location.displayName
             ))
             sources.append(AgentStorageSource(
-                id: id,
-                provider: provider,
-                displayName: displayName,
-                path: resolved.path,
-                isAvailable: true,
-                isSessionSource: kind == .codexHome || kind == .claudeCode
-                    || kind == .openCode
-                    || kind == .claudeDesktopAgent,
-                kind: kind.publicKind
+                id: location.id,
+                provider: requestedProvider,
+                displayName: location.displayName,
+                path: location.resolvedPath,
+                isAvailable: location.availability == .readable,
+                isSessionSource: location.kind == .codexHome || location.kind == .claudeCode
+                    || location.kind == .openCode || location.kind == .claudeDesktopAgent,
+                kind: location.kind,
+                configuredPath: location.configuredPath,
+                resolvedPath: location.resolvedPath,
+                discoverySource: location.origins.first?.kind,
+                discoveryIdentifier: location.origins.first?.identifier,
+                volumeID: location.volumeID,
+                volumeName: location.volumeName,
+                volumeMountPath: location.volumeMountPath,
+                alternateConfiguredPaths: location.origins.map(\.configuredPath).filter { $0 != location.configuredPath }
             ))
         }
         return result.sorted { $0.root.path < $1.root.path }
-    }
-
-    private mutating func discoverNestedClaudeHomes(in desktopRoot: URL) -> [URL] {
-        let sessionsRoot = desktopRoot.appending(
-            path: "local-agent-mode-sessions",
-            directoryHint: .isDirectory
-        )
-        guard fileManager.fileExists(atPath: sessionsRoot.path) else { return [] }
-        let enumerationErrors = ScanErrorCounter()
-        guard let enumerator = fileManager.enumerator(
-            at: sessionsRoot,
-            includingPropertiesForKeys: nil,
-            options: [],
-            errorHandler: { _, _ in
-                enumerationErrors.value += 1
-                return true
-            }
-        ) else {
-            recordSkipped(provider: .claude)
-            return []
-        }
-
-        var result: [URL] = []
-        var count = 0
-        for case let url as URL in enumerator {
-            count += 1
-            if count.isMultiple(of: 128), Task.isCancelled { return result }
-            var fileStat = stat()
-            guard lstat(url.path, &fileStat) == 0 else {
-                recordSkipped(provider: .claude)
-                continue
-            }
-            let type = fileStat.st_mode & S_IFMT
-            if type == S_IFLNK {
-                enumerator.skipDescendants()
-                continue
-            }
-            guard type == S_IFDIR, url.lastPathComponent == ".claude" else { continue }
-            let projects = url.appending(path: "projects", directoryHint: .isDirectory)
-            if fileManager.fileExists(atPath: projects.path) { result.append(url) }
-            enumerator.skipDescendants()
-        }
-        if enumerationErrors.value > 0 {
-            recordSkipped(provider: .claude, count: enumerationErrors.value)
-        }
-        return result
     }
 
     private func exclusionsByScope() -> [String: Set<String>] {
@@ -2912,7 +2864,9 @@ private struct AgentStorageScanEngine {
             item.provider.map { ($0, item) }
         }, by: \.0)
         let unattributedByProvider = Dictionary(grouping: finalUnattributed, by: \.provider)
-        let providerDatasets = AgentStorageProvider.allCases.map { provider in
+        let providerDatasets = AgentStorageProvider.allCases
+            .filter { configuration.providers.contains($0) }
+            .map { provider in
             AgentStorageProviderDataset(
                 provider: provider,
                 families: familiesByProvider[provider] ?? [],
@@ -2997,13 +2951,23 @@ private struct AgentStorageScanEngine {
             )
         }
 
+        let bytesBySource = physicalLedger.values.reduce(into: [String: UInt64]()) { result, entry in
+            let sourceIDs = Set(entry.claims.map(\.sourceID))
+            guard sourceIDs.count == 1, let sourceID = sourceIDs.first else { return }
+            result[sourceID, default: 0] = result[sourceID, default: 0]
+                .addingClamped(entry.allocatedBytes)
+        }
+        let finalSources = sources.map {
+            $0.withAllocatedBytes(bytesBySource[$0.id, default: 0])
+        }
+
         return AgentStorageSnapshot(
             scannedAt: Date(),
             families: finalFamilies,
             globalItems: finalGlobals,
             unattributedItems: finalUnattributed,
             providers: providerSummaries,
-            sources: sources,
+            sources: finalSources,
             coverage: coverage,
             crossAgentSharedBytes: finalGlobals
                 .filter { $0.category == .crossAgentShared }
@@ -3230,6 +3194,17 @@ private enum ScanScopeKind: Sendable {
     case claudeDesktop
     case claudeDesktopAgent
     case openCode
+
+    init(_ kind: AgentStorageSourceKind) {
+        switch kind {
+        case .codexHome: self = .codexHome
+        case .codexDesktop: self = .codexDesktop
+        case .claudeCode: self = .claudeCode
+        case .claudeDesktop: self = .claudeDesktop
+        case .claudeDesktopAgent: self = .claudeDesktopAgent
+        case .openCode: self = .openCode
+        }
+    }
 
     var publicKind: AgentStorageSourceKind {
         switch self {

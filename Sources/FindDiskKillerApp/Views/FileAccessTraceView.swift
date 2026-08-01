@@ -130,6 +130,7 @@ struct FileAccessTraceView: View {
                 Button(action: chooseTarget) {
                     Label(L10n.text("更换目标"), systemImage: "folder.badge.gearshape")
                 }
+                .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .compact))
                 .disabled(store.isRunning)
             }
 
@@ -141,8 +142,7 @@ struct FileAccessTraceView: View {
                 Button(role: .destructive, action: store.stop) {
                     Label(L10n.text("停止追踪"), systemImage: "stop.fill")
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
+                .buttonStyle(AppActionButtonStyle(kind: .destructive))
             } else if canStart {
                 Button(action: store.start) {
                     Label(
@@ -150,7 +150,7 @@ struct FileAccessTraceView: View {
                         systemImage: "record.circle"
                     )
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(AppActionButtonStyle(kind: .primary))
             }
 
             Menu {
@@ -203,23 +203,23 @@ struct FileAccessTraceView: View {
         switch store.state {
         case .permissionRequired:
             Button(L10n.text("启用追踪"), action: store.requestPermission)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(AppActionButtonStyle(kind: .primary))
         case .waitingForApproval:
             Button(action: store.openApprovalSettings) {
                 Label(L10n.text("打开登录项设置"), systemImage: "gearshape")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(AppActionButtonStyle(kind: .primary))
         case .repairAvailable:
             Button(action: store.repairAndRetry) {
                 Label(L10n.text("修复并重试"), systemImage: "wrench.and.screwdriver")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(AppActionButtonStyle(kind: .primary))
             .accessibilityIdentifier("trace.repairAndRetry")
         case .installationRequired:
             Button(action: store.openInstallationLocation) {
                 Label(L10n.text("打开安装窗口"), systemImage: "folder")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(AppActionButtonStyle(kind: .primary))
         case .repairing:
             ProgressView()
                 .controlSize(.small)
@@ -230,6 +230,7 @@ struct FileAccessTraceView: View {
             Button(action: store.start) {
                 Label(L10n.text("重试"), systemImage: "arrow.clockwise")
             }
+            .buttonStyle(AppActionButtonStyle(kind: .secondary))
         default:
             EmptyView()
         }
@@ -478,8 +479,7 @@ private struct TraceTargetPicker: View {
                 Button(action: onChoose) {
                     Label(L10n.text("选择文件或目录"), systemImage: "folder.badge.plus")
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .buttonStyle(AppActionButtonStyle(kind: .primary, size: .large))
             }
 
             Divider()
@@ -824,12 +824,9 @@ private struct TraceFileIdentityCell: View {
 
             Button(action: copyPath) {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(copied ? Color.green : Color.secondary)
-                    .frame(width: 26, height: 26)
-                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(AppIconButtonStyle(size: 28, isFramed: false))
             .opacity(isHovered || copied ? 1 : 0.48)
             .help(L10n.text("复制路径"))
             .accessibilityLabel(L10n.text("复制路径"))

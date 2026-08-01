@@ -93,6 +93,7 @@ struct OverviewView: View {
             } label: {
                 Image(systemName: store.isFollowingLive ? "pause.fill" : "play.fill")
             }
+            .buttonStyle(AppIconButtonStyle(size: 32))
             .help(L10n.text(store.isFollowingLive ? "暂停实时跟随" : "返回实时"))
         }
     }
@@ -1469,6 +1470,7 @@ struct ProcessDetailSheet: View {
                         } label: {
                             Label(L10n.text("复制路径"), systemImage: "doc.on.doc")
                         }
+                        .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .compact))
                     }
                     }
                     .padding(18)
@@ -1695,12 +1697,8 @@ private struct ProcessFileActivityView: View {
                         isFileActivityHelpPresented.toggle()
                     } label: {
                         Image(systemName: "questionmark.circle")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 20, height: 20)
-                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(AppIconButtonStyle(size: 28, isFramed: false))
                     .onHover { isInside in
                         if isInside { isFileActivityHelpPresented = true }
                     }
@@ -1975,8 +1973,7 @@ private struct ProcessFileActivityView: View {
                                 systemImage: "scope"
                             )
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
+                        .buttonStyle(AppActionButtonStyle(kind: .primary, size: .compact))
                         .disabled(!canOpenTrace(selectedRow))
                         .help(L10n.text(
                             canOpenTrace(selectedRow)
@@ -1988,12 +1985,14 @@ private struct ProcessFileActivityView: View {
                         } label: {
                             Image(systemName: "doc.on.doc")
                         }
+                        .buttonStyle(AppIconButtonStyle(size: 30))
                         .help(L10n.text("复制路径"))
                         Button {
                             revealInFinder(selectedRow.path)
                         } label: {
                             Image(systemName: "folder")
                         }
+                        .buttonStyle(AppIconButtonStyle(size: 30))
                         .help(L10n.text("在 Finder 中显示"))
                     }
 

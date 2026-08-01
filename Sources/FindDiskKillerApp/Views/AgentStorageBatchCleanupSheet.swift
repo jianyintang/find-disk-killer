@@ -153,9 +153,8 @@ struct AgentStorageBatchCleanupSheet: View {
                 .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
             Button(action: close) {
                 Image(systemName: "xmark")
-                    .frame(width: 24, height: 24)
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(AppIconButtonStyle(size: 30, isFramed: false))
             .help(L10n.text("关闭"))
             .accessibilityLabel(L10n.text("关闭批量清理"))
         }
@@ -648,6 +647,7 @@ struct AgentStorageBatchCleanupSheet: View {
     private var footerActions: some View {
         HStack(spacing: 10) {
             Button(L10n.text("取消"), action: close)
+                .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .large))
                 .keyboardShortcut(.cancelAction)
             Button {
                 guard let selectedReview else { return }
@@ -655,12 +655,11 @@ struct AgentStorageBatchCleanupSheet: View {
             } label: {
                 Label(L10n.text("检查并清理"), systemImage: "arrow.right")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(AppActionButtonStyle(kind: .primary, size: .large))
             .disabled(selectedFamilies.isEmpty || isReviewUpdating || selectedReview == nil)
             .keyboardShortcut(.defaultAction)
             .accessibilityIdentifier("agent-storage-review-cleanup")
         }
-        .controlSize(.large)
         .fixedSize(horizontal: true, vertical: false)
     }
 

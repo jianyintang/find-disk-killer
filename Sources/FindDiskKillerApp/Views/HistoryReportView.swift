@@ -73,7 +73,7 @@ struct HistoryReportView: View {
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(AppIconButtonStyle(size: 30))
             .help(L10n.text("刷新分析"))
             .accessibilityLabel(L10n.text("刷新分析"))
         }
@@ -95,6 +95,7 @@ struct HistoryReportView: View {
                 Button(L10n.text("重试")) {
                     Task { await history.loadReport(range: range) }
                 }
+                .buttonStyle(AppActionButtonStyle(kind: .primary))
             }
         case .loaded(let report):
             if report.trend.isEmpty {
@@ -126,6 +127,7 @@ struct HistoryReportView: View {
             Button(action: openDataSettings) {
                 Label(L10n.text("打开数据设置"), systemImage: "gear")
             }
+            .buttonStyle(AppActionButtonStyle(kind: .primary))
         }
     }
 

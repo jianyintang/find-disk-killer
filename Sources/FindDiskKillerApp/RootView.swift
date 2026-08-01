@@ -4,7 +4,7 @@ import SwiftUI
 enum AppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
     case overview = "现在"
     case processes = "应用"
-    case agentStorage = "AI 空间"
+    case agentStorage = "空间地图"
     case disks = "磁盘"
     case reports = "历史分析"
 
@@ -16,7 +16,7 @@ enum AppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .overview: "gauge.with.dots.needle.67percent"
         case .disks: "internaldrive"
         case .processes: "square.stack.3d.up"
-        case .agentStorage: "sparkles"
+        case .agentStorage: "square.grid.3x3.square"
         case .reports: "chart.xyaxis.line"
         }
     }
@@ -50,6 +50,8 @@ struct RootView: View {
     let navigation: AppNavigationCoordinator
     let updates: UpdateCoordinator
     let agentStorage: AgentStorageModel
+    let storageMap: StorageMapModel
+    let claudeNodeRuntime: ClaudeNodeRuntimeStatusModel
     @State private var requestedSection: AppSection
     @State private var loadedSection: AppSection
     @State private var sectionSnapshots: [AppSection: SectionPreviewSnapshot] = [:]
@@ -60,6 +62,8 @@ struct RootView: View {
         processDetailWindows: ProcessDetailWindowCoordinator,
         history: HistoryModel,
         agentStorage: AgentStorageModel,
+        storageMap: StorageMapModel,
+        claudeNodeRuntime: ClaudeNodeRuntimeStatusModel,
         navigation: AppNavigationCoordinator,
         updates: UpdateCoordinator
     ) {
@@ -67,6 +71,8 @@ struct RootView: View {
         self.processDetailWindows = processDetailWindows
         self.history = history
         self.agentStorage = agentStorage
+        self.storageMap = storageMap
+        self.claudeNodeRuntime = claudeNodeRuntime
         self.navigation = navigation
         self.updates = updates
         _requestedSection = State(initialValue: navigation.lastMonitoringDestination)
@@ -130,7 +136,8 @@ struct RootView: View {
                 history: history,
                 navigation: navigation,
                 updates: updates,
-                agentStorage: agentStorage
+                agentStorage: agentStorage,
+                nodeRuntime: claudeNodeRuntime
             )
         case .about:
             AboutPage()
@@ -179,7 +186,11 @@ struct RootView: View {
                 processDetailWindows: processDetailWindows
             )
         case .agentStorage:
-            AgentStorageView(model: agentStorage)
+            StorageMapView(
+                model: storageMap,
+                agentStorage: agentStorage,
+                nodeRuntime: claudeNodeRuntime
+            )
         case .reports:
             HistoryReportView(history: history) {
                 navigation.showSettings(.dataAndPrivacy)

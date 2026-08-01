@@ -95,6 +95,7 @@ struct MenuBarPanel: View {
                 } label: {
                     Label(L10n.text("打开 FindDiskKiller"), systemImage: "macwindow")
                 }
+                .buttonStyle(AppActionButtonStyle(kind: .primary, size: .compact))
 
                 Spacer()
 
@@ -103,6 +104,7 @@ struct MenuBarPanel: View {
                 } label: {
                     Image(systemName: store.isCollecting ? "stop.fill" : "play.fill")
                 }
+                .buttonStyle(AppIconButtonStyle(size: 30))
                 .help(L10n.text(store.isCollecting ? "停止采集" : "开始采集"))
             }
             .padding(12)

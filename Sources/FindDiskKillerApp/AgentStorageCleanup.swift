@@ -636,7 +636,7 @@ struct AgentStorageCleanupReviewView: View {
             Spacer()
             if session.phase != .deleting {
                 Button(action: dismissReview) { Image(systemName: "xmark") }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(AppIconButtonStyle(size: 30, isFramed: false))
                     .help(L10n.text("关闭"))
             }
         }
@@ -809,21 +809,28 @@ struct AgentStorageCleanupReviewView: View {
             Spacer(minLength: 12)
             if session.phase == .deleting {
                 Button(L10n.text("取消剩余任务")) { session.cancelRemaining() }
+                    .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .large))
             } else if session.phase == .finished {
-                Button(L10n.text("完成"), action: dismissReview).keyboardShortcut(.defaultAction)
+                Button(L10n.text("完成"), action: dismissReview)
+                    .buttonStyle(AppActionButtonStyle(kind: .primary, size: .large))
+                    .keyboardShortcut(.defaultAction)
             } else {
-                Button(L10n.text("取消"), action: close).keyboardShortcut(.cancelAction)
+                Button(L10n.text("取消"), action: close)
+                    .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .large))
+                    .keyboardShortcut(.cancelAction)
                 Button {
                     Task { await session.execute() }
                 } label: {
                     Label(L10n.text("永久删除"), systemImage: "trash")
                 }
-                .buttonStyle(.borderedProminent).tint(.red)
+                .buttonStyle(AppActionButtonStyle(kind: .destructive, size: .large))
                 .disabled(session.phase != .ready || session.readyCount == 0)
                 .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(.horizontal, 20).frame(height: 66).background(.bar)
+        .padding(.horizontal, 20)
+        .frame(height: 74)
+        .background(.bar)
     }
 
     private func dismissReview() {

@@ -10,6 +10,8 @@ final class AppRuntime {
     let store: MonitorStore
     let history: HistoryModel
     let agentStorage: AgentStorageModel
+    let storageMap: StorageMapModel
+    let claudeNodeRuntime: ClaudeNodeRuntimeStatusModel
     let processDetailWindows: ProcessDetailWindowCoordinator
     let navigation: AppNavigationCoordinator
     let traceActivityRegistry: TraceActivityRegistry
@@ -26,16 +28,24 @@ final class AppRuntime {
     init(
         store: MonitorStore = MonitorStore(),
         history: HistoryModel = HistoryModel(),
-        agentStorage: AgentStorageModel = AgentStorageModel(),
+        agentStorage: AgentStorageModel? = nil,
+        storageMap: StorageMapModel? = nil,
+        claudeNodeRuntime: ClaudeNodeRuntimeStatusModel = ClaudeNodeRuntimeStatusModel(),
         processDetailWindows: ProcessDetailWindowCoordinator = ProcessDetailWindowCoordinator(),
         navigation: AppNavigationCoordinator = AppNavigationCoordinator(),
         traceActivityRegistry: TraceActivityRegistry = TraceActivityRegistry(),
         defaults: UserDefaults = .standard,
         flushHistory: (@MainActor () async -> Void)? = nil
     ) {
+        let locationRepository = AgentDataLocationRepository(defaults: defaults)
         self.store = store
         self.history = history
-        self.agentStorage = agentStorage
+        self.agentStorage = agentStorage ?? AgentStorageModel(
+            defaults: defaults,
+            locationRepository: locationRepository
+        )
+        self.storageMap = storageMap ?? StorageMapModel(locationRepository: locationRepository)
+        self.claudeNodeRuntime = claudeNodeRuntime
         self.processDetailWindows = processDetailWindows
         self.navigation = navigation
         self.traceActivityRegistry = traceActivityRegistry
@@ -73,6 +83,7 @@ final class AppRuntime {
             store.resetCounterBaselines()
         }
         await agentStorage.prepareForSleep()
+        storageMap.prepareForSleep()
         await flushHistoryAction()
     }
 
@@ -94,9 +105,11 @@ final class AppRuntime {
         store.stop()
         let completion = FirstLifecycleCompletion()
         let agentStorage = self.agentStorage
+        let storageMap = self.storageMap
         let flushHistoryAction = self.flushHistoryAction
         let shutdownTask = Task { @MainActor in
             async let stopAgentStorage: Void = agentStorage.prepareForTermination()
+            storageMap.prepareForTermination()
             async let flushHistory: Void = flushHistoryAction()
             _ = await (stopAgentStorage, flushHistory)
             await completion.resolve(true)

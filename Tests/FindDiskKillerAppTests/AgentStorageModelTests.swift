@@ -266,6 +266,27 @@ import Testing
     ) == previousPageSelection)
 }
 
+@Test func agentStorageCurrentPageSelectionReportsEmptyPartialAndCompleteStates() {
+    let page: Set<String> = ["family-1", "family-2", "family-3"]
+
+    #expect(AgentStorageBatchSelectionEngine.pageSelectionState(
+        selectedIDs: ["family-on-another-page"],
+        pageFamilyIDs: page
+    ) == .none)
+    #expect(AgentStorageBatchSelectionEngine.pageSelectionState(
+        selectedIDs: ["family-2", "family-on-another-page"],
+        pageFamilyIDs: page
+    ) == .partial)
+    #expect(AgentStorageBatchSelectionEngine.pageSelectionState(
+        selectedIDs: page.union(["family-on-another-page"]),
+        pageFamilyIDs: page
+    ) == .all)
+    #expect(AgentStorageBatchSelectionEngine.pageSelectionState(
+        selectedIDs: [],
+        pageFamilyIDs: []
+    ) == .none)
+}
+
 @Test func agentStorageProjectionKeepsSearchedSubagentsUniqueWhenExpanded() throws {
     let date = Date(timeIntervalSince1970: 1_000)
     let family = AgentStorageThreadFamily(
@@ -602,7 +623,7 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
     defaults.set(true, forKey: AgentStoragePreferences.analysisConsentKey)
     defaults.set(true, forKey: AgentStoragePreferences.autoScanKey)
     let probe = ImmediateAgentStorageScanProbe()
-    let model = AgentStorageModel(defaults: defaults) { configuration in
+    let model = AgentStorageModel(defaults: defaults, cacheURL: nil) { configuration in
         await probe.scan(configuration)
     }
 
@@ -723,11 +744,39 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
 
     model.startAnalysis()
     try await waitUntil { model.state == .ready }
+    let discoveredLocations = await probe.lastLocations
+    #expect(discoveredLocations.contains { location in
+        location.resolvedPath == agentStorageCanonicalPath(root)
+            && location.origins.contains { $0.kind == .userAdded }
+    })
     model.removeCustomRoot(root)
     model.enterFeature()
     try await Task.sleep(for: .milliseconds(80))
     #expect(model.snapshot == nil)
     #expect(await probe.callCount == 1)
+}
+
+@MainActor
+@Test func agentStorageCustomRootPreservesItsConfiguredSymlinkPath() throws {
+    let suiteName = "AgentStorageLogicalCustomRootTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    let target = base.appending(path: "target", directoryHint: .isDirectory)
+    let link = base.appending(path: "configured-codex", directoryHint: .isDirectory)
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: base)
+    }
+    try FileManager.default.createDirectory(
+        at: target.appending(path: "sessions", directoryHint: .isDirectory),
+        withIntermediateDirectories: true
+    )
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+    let model = AgentStorageModel(defaults: defaults, cacheURL: nil)
+
+    model.addCustomRoot(link)
+
+    #expect(model.customRoots.map(\.path) == [link.standardizedFileURL.path])
 }
 
 @MainActor
@@ -800,7 +849,10 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
     let defaults = UserDefaults(suiteName: suiteName)!
     defer { defaults.removePersistentDomain(forName: suiteName) }
     let probe = LateAgentStorageProgressProbe()
-    let model = AgentStorageModel(defaults: defaults) { configuration, progress in
+    let model = AgentStorageModel(
+        defaults: defaults,
+        cacheURL: nil
+    ) { configuration, progress in
         try await probe.scan(configuration, progress: progress)
     }
 
@@ -822,7 +874,10 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
     let defaults = UserDefaults(suiteName: suiteName)!
     defer { defaults.removePersistentDomain(forName: suiteName) }
     let probe = LateAgentStorageProgressProbe()
-    let model = AgentStorageModel(defaults: defaults) { configuration, progress in
+    let model = AgentStorageModel(
+        defaults: defaults,
+        cacheURL: nil
+    ) { configuration, progress in
         try await probe.scan(configuration, progress: progress)
     }
 
@@ -913,6 +968,124 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
 }
 
 @MainActor
+@Test func agentStorageReanalyzesOnlyTheSelectedProviderAndPreservesTheOther() async throws {
+    let suiteName = "AgentStorageProviderRefreshTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let initial = agentStorageProviderSnapshot(codexBytes: 100, claudeBytes: 200)
+    let replacement = agentStorageProviderSnapshot(codexBytes: 150, claudeBytes: nil)
+    let probe = AgentStorageProviderRefreshProbe(result: replacement)
+    let model = AgentStorageModel(
+        defaults: defaults,
+        initialSnapshot: initial,
+        cacheURL: nil
+    ) { configuration, progress in
+        try await probe.scan(configuration: configuration, progress: progress)
+    }
+
+    model.startAnalysis(provider: .codex)
+    try await waitUntil {
+        model.reanalyzingProviders.contains(.codex)
+            && model.progressByProvider[.codex]?.completedCount == 4
+    }
+
+    #expect(model.snapshot == initial)
+    #expect(!model.reanalyzingProviders.contains(.claude))
+    #expect(model.progressByProvider[.claude] == nil)
+
+    try await waitUntil { !model.reanalyzingProviders.contains(.codex) }
+    #expect(await probe.providerSets == [Set([.codex])])
+    #expect(model.snapshot?.providers.first { $0.provider == .codex }?.exclusiveBytes == 150)
+    #expect(model.snapshot?.providers.first { $0.provider == .claude }?.exclusiveBytes == 200)
+    #expect(model.snapshot?.coverage.measuredBytes == 350)
+}
+
+@MainActor
+@Test func agentStorageFullAnalysisCancelsAnActiveProviderReanalysis() async throws {
+    let suiteName = "AgentStorageProviderCancellationTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let initial = agentStorageProviderSnapshot(codexBytes: 100, claudeBytes: 200)
+    let probe = AgentStorageProviderRefreshProbe(result: initial, partialDelay: .seconds(60))
+    let model = AgentStorageModel(
+        defaults: defaults,
+        initialSnapshot: initial,
+        cacheURL: nil
+    ) { configuration, progress in
+        try await probe.scan(configuration: configuration, progress: progress)
+    }
+
+    model.startAnalysis(provider: .claude)
+    try await waitUntil { model.reanalyzingProviders.contains(.claude) }
+    model.startAnalysis()
+    try await waitUntil { model.state == .ready && model.reanalyzingProviders.isEmpty }
+
+    let providerSets = await probe.providerSets
+    #expect(providerSets.first == Set([.claude]))
+    #expect(providerSets.last == Set(AgentStorageProvider.allCases))
+    #expect(model.snapshot == initial)
+}
+
+@MainActor
+@Test func agentStoragePersistsAndRestoresDeepAnalysisWithoutScanning() async throws {
+    let suiteName = "AgentStorageCacheTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    let cacheURL = FileManager.default.temporaryDirectory
+        .appending(path: "AgentStorageCache-\(UUID().uuidString).json")
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: cacheURL)
+    }
+    let expected = emptySnapshot(scannedAt: Date(timeIntervalSince1970: 456))
+    let firstProbe = ImmediateAgentStorageScanProbe()
+    let first = AgentStorageModel(
+        defaults: defaults,
+        cacheURL: cacheURL
+    ) { configuration in
+        _ = await firstProbe.scan(configuration)
+        return expected
+    }
+
+    first.startAnalysis()
+    try await waitUntil { first.state == .ready && FileManager.default.fileExists(atPath: cacheURL.path) }
+
+    let secondProbe = ImmediateAgentStorageScanProbe()
+    let restored = AgentStorageModel(
+        defaults: defaults,
+        cacheURL: cacheURL
+    ) { configuration in
+        await secondProbe.scan(configuration)
+    }
+    try await waitUntil { restored.snapshot == expected }
+
+    #expect(restored.state == .ready)
+    #expect(await secondProbe.callCount == 0)
+}
+
+@MainActor
+@Test func agentStorageInvalidationRemovesPersistedDeepAnalysis() async throws {
+    let suiteName = "AgentStorageCacheInvalidationTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    let cacheURL = FileManager.default.temporaryDirectory
+        .appending(path: "AgentStorageCache-\(UUID().uuidString).json")
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: cacheURL)
+    }
+    try JSONEncoder().encode(emptySnapshot()).write(to: cacheURL, options: .atomic)
+    let model = AgentStorageModel(defaults: defaults, cacheURL: cacheURL) { _ in
+        emptySnapshot()
+    }
+    try await waitUntil { model.snapshot != nil }
+
+    model.invalidateCachedResults()
+    try await waitUntil { !FileManager.default.fileExists(atPath: cacheURL.path) }
+
+    #expect(model.snapshot == nil)
+    #expect(model.state == .idle)
+}
+
+@MainActor
 private func waitUntil(
     timeout: Duration = .seconds(2),
     condition: @escaping () async -> Bool
@@ -955,9 +1128,11 @@ private actor AgentStorageScanProbe {
 
 private actor ImmediateAgentStorageScanProbe {
     private(set) var callCount = 0
+    private(set) var lastLocations: [AgentDataLocation] = []
 
     func scan(_ configuration: AgentStorageScanner.Configuration) -> AgentStorageSnapshot {
         callCount += 1
+        lastLocations = configuration.agentDataLocations ?? []
         return emptySnapshot()
     }
 }
@@ -978,6 +1153,39 @@ private actor ControlledAgentStorageScanProbe {
     func finish() {
         continuation?.resume()
         continuation = nil
+    }
+}
+
+private actor AgentStorageProviderRefreshProbe {
+    private(set) var providerSets: [Set<AgentStorageProvider>] = []
+    private let result: AgentStorageSnapshot
+    private let partialDelay: Duration
+
+    init(
+        result: AgentStorageSnapshot,
+        partialDelay: Duration = .milliseconds(80)
+    ) {
+        self.result = result
+        self.partialDelay = partialDelay
+    }
+
+    func scan(
+        configuration: AgentStorageScanner.Configuration,
+        progress: @escaping @Sendable (AgentStorageScanProgress) -> Void
+    ) async throws -> AgentStorageSnapshot {
+        providerSets.append(configuration.providers)
+        if configuration.providers.count == 1,
+           let provider = configuration.providers.first {
+            progress(.init(
+                phase: .measuringEntries,
+                completedCount: 4,
+                totalCount: 10,
+                provider: provider,
+                processedBytes: 40
+            ))
+            try await Task.sleep(for: partialDelay)
+        }
+        return result
     }
 }
 
@@ -1034,6 +1242,63 @@ private func emptySnapshot(scannedAt: Date = Date()) -> AgentStorageSnapshot {
     )
 }
 
+private func agentStorageProviderSnapshot(
+    codexBytes: UInt64?,
+    claudeBytes: UInt64?
+) -> AgentStorageSnapshot {
+    let providers = [
+        codexBytes.map { agentStorageProviderSummary(.codex, bytes: $0) },
+        claudeBytes.map { agentStorageProviderSummary(.claude, bytes: $0) }
+    ].compactMap { $0 }
+    let measuredBytes = providers.reduce(UInt64(0)) { $0 + $1.exclusiveBytes }
+    return AgentStorageSnapshot(
+        scannedAt: Date(timeIntervalSince1970: Double(measuredBytes)),
+        families: [],
+        globalItems: [],
+        unattributedItems: [],
+        providers: providers,
+        sources: [],
+        coverage: AgentStorageCoverage(
+            measuredBytes: measuredBytes,
+            classifiedBytes: measuredBytes,
+            measuredEntryCount: providers.count,
+            skippedEntryCount: 0,
+            unstableEntryCount: 0,
+            overflowed: false,
+            reconciliationDelta: 0,
+            isComplete: true
+        ),
+        crossAgentSharedBytes: 0
+    )
+}
+
+private func agentStorageProviderSummary(
+    _ provider: AgentStorageProvider,
+    bytes: UInt64
+) -> AgentStorageProviderSummary {
+    AgentStorageProviderSummary(
+        provider: provider,
+        exclusiveBytes: bytes,
+        chatBytes: bytes,
+        globalBytes: 0,
+        unattributedBytes: 0,
+        mainThreadBytes: bytes,
+        subagentBytes: 0,
+        familyOtherBytes: 0,
+        threadCount: 1,
+        subagentCount: 0,
+        sourceCount: 1,
+        issueCount: 0
+    )
+}
+
 private enum AgentStorageModelTestError: Error {
     case timeout
+}
+
+private func agentStorageCanonicalPath(_ url: URL) -> String {
+    var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+    guard realpath(url.path, &buffer) != nil else { return url.standardizedFileURL.path }
+    let terminator = buffer.firstIndex(of: 0) ?? buffer.endIndex
+    return String(decoding: buffer[..<terminator].map { UInt8(bitPattern: $0) }, as: UTF8.self)
 }

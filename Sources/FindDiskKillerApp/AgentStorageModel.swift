@@ -19,18 +19,26 @@ final class AgentStorageModel {
     private(set) var state: AgentStorageLoadState
     private(set) var progress = AgentStorageScanProgress(phase: .discoveringSources)
     private(set) var progressByProvider: [AgentStorageProvider: AgentStorageScanProgress] = [:]
+    private(set) var reanalyzingProviders: Set<AgentStorageProvider> = []
     private(set) var generation = 0
     private(set) var customRootError: String?
 
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let locationRepository: AgentDataLocationRepository
+    @ObservationIgnored private let cacheURL: URL?
     @ObservationIgnored private let scanAction: @Sendable (
         AgentStorageScanner.Configuration,
         @escaping @Sendable (AgentStorageScanProgress) -> Void
     ) async throws -> AgentStorageSnapshot
     @ObservationIgnored private var scanTask: Task<Void, Never>?
+    @ObservationIgnored private var providerScanTasks: [AgentStorageProvider: Task<Void, Never>] = [:]
+    @ObservationIgnored private var providerGenerations: [AgentStorageProvider: Int] = [:]
+    @ObservationIgnored private var cacheLoadTask: Task<Void, Never>?
     init(
         defaults: UserDefaults = .standard,
         initialSnapshot: AgentStorageSnapshot? = nil,
+        cacheURL: URL? = AgentStorageModel.defaultCacheURL,
+        locationRepository: AgentDataLocationRepository? = nil,
         scanAction: @escaping @Sendable (
             AgentStorageScanner.Configuration,
             @escaping @Sendable (AgentStorageScanProgress) -> Void
@@ -39,18 +47,37 @@ final class AgentStorageModel {
             }
     ) {
         self.defaults = defaults
+        self.locationRepository = locationRepository ?? AgentDataLocationRepository(defaults: defaults)
+        self.cacheURL = cacheURL
         snapshot = initialSnapshot
         state = initialSnapshot == nil ? .idle : .ready
         self.scanAction = scanAction
+        if initialSnapshot == nil, cacheURL != nil {
+            cacheLoadTask = Task { [weak self] in
+                guard let cached = await Self.loadSnapshot(from: cacheURL),
+                      let self, self.snapshot == nil, !self.isScanning else { return }
+                self.snapshot = cached
+                self.snapshotRevision &+= 1
+                self.state = .ready
+                self.cacheLoadTask = nil
+            }
+        }
     }
 
     convenience init(
         defaults: UserDefaults = .standard,
         initialSnapshot: AgentStorageSnapshot? = nil,
+        cacheURL: URL? = AgentStorageModel.defaultCacheURL,
+        locationRepository: AgentDataLocationRepository? = nil,
         scanAction: @escaping @Sendable (AgentStorageScanner.Configuration) async throws
             -> AgentStorageSnapshot
     ) {
-        self.init(defaults: defaults, initialSnapshot: initialSnapshot) { configuration, _ in
+        self.init(
+            defaults: defaults,
+            initialSnapshot: initialSnapshot,
+            cacheURL: cacheURL,
+            locationRepository: locationRepository
+        ) { configuration, _ in
             try await scanAction(configuration)
         }
     }
@@ -78,13 +105,17 @@ final class AgentStorageModel {
     }
 
     func startAnalysis() {
+        cancelProviderAnalyses()
+        cacheLoadTask?.cancel()
+        cacheLoadTask = nil
         let previousTask = scanTask
         previousTask?.cancel()
         generation += 1
         let requestedGeneration = generation
         let configuration = AgentStorageScanner.Configuration(
             additionalRoots: customRoots,
-            includesDesktopData: true
+            includesDesktopData: true,
+            agentDataLocations: locationRepository.locations()
         )
         progress = AgentStorageScanProgress(phase: .discoveringSources)
         progressByProvider = Dictionary(uniqueKeysWithValues: AgentStorageProvider.allCases.map {
@@ -109,6 +140,7 @@ final class AgentStorageModel {
                 self.snapshotRevision &+= 1
                 self.state = .ready
                 self.scanTask = nil
+                await Self.saveSnapshot(snapshot, to: self.cacheURL)
             } catch is CancellationError {
                 guard self.generation == requestedGeneration else { return }
                 self.state = self.snapshot == nil ? .stopped : .stale
@@ -121,7 +153,62 @@ final class AgentStorageModel {
         }
     }
 
+    func startAnalysis(provider: AgentStorageProvider) {
+        guard !isScanning,
+              snapshot?.providers.contains(where: { $0.provider == provider }) == true,
+              !reanalyzingProviders.contains(provider) else { return }
+        let requestedGeneration = providerGenerations[provider, default: 0] + 1
+        providerGenerations[provider] = requestedGeneration
+        reanalyzingProviders.insert(provider)
+        progressByProvider[provider] = AgentStorageScanProgress(
+            phase: .discoveringSources,
+            provider: provider
+        )
+        let configuration = AgentStorageScanner.Configuration(
+            additionalRoots: customRoots,
+            includesDesktopData: true,
+            providers: [provider],
+            agentDataLocations: locationRepository.locations()
+        )
+        providerScanTasks[provider] = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let partial = try await self.scanAction(configuration) { [weak self] progress in
+                    Task { @MainActor [weak self] in
+                        guard let self,
+                              self.providerGenerations[provider] == requestedGeneration,
+                              self.reanalyzingProviders.contains(provider),
+                              progress.provider == provider else { return }
+                        self.progressByProvider[provider] = progress
+                    }
+                }
+                guard !Task.isCancelled,
+                      self.providerGenerations[provider] == requestedGeneration else { return }
+                self.snapshot = Self.merging(
+                    previous: self.snapshot,
+                    partial: partial,
+                    provider: provider
+                )
+                self.snapshotRevision &+= 1
+                self.finishProviderAnalysis(provider, generation: requestedGeneration)
+                if let snapshot = self.snapshot {
+                    await Self.saveSnapshot(snapshot, to: self.cacheURL)
+                }
+            } catch is CancellationError {
+                self.finishProviderAnalysis(provider, generation: requestedGeneration)
+            } catch {
+                self.finishProviderAnalysis(provider, generation: requestedGeneration)
+                self.state = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func isAnalyzing(_ provider: AgentStorageProvider) -> Bool {
+        isScanning || reanalyzingProviders.contains(provider)
+    }
+
     func stop() {
+        cancelProviderAnalyses()
         generation += 1
         scanTask?.cancel()
         state = snapshot == nil ? .stopped : .stale
@@ -177,15 +264,24 @@ final class AgentStorageModel {
         customRootError = nil
         AgentStoragePreferences.add(url, defaults: defaults)
         invalidateCachedResults()
+        NotificationCenter.default.post(
+            name: .agentDataLocationsDidChange,
+            object: locationRepository
+        )
     }
 
     func removeCustomRoot(_ url: URL) {
         customRootError = nil
         AgentStoragePreferences.remove(url, defaults: defaults)
         invalidateCachedResults()
+        NotificationCenter.default.post(
+            name: .agentDataLocationsDidChange,
+            object: locationRepository
+        )
     }
 
     func invalidateCachedResults() {
+        cancelProviderAnalyses()
         generation += 1
         scanTask?.cancel()
         snapshot = nil
@@ -193,13 +289,90 @@ final class AgentStorageModel {
         progress = AgentStorageScanProgress(phase: .discoveringSources)
         progressByProvider = [:]
         state = .idle
+        cacheLoadTask?.cancel()
+        cacheLoadTask = nil
+        let cacheURL = self.cacheURL
+        Task { await Self.removeSnapshot(at: cacheURL) }
     }
 
     func prepareForSleep() async {
+        cancelProviderAnalyses()
         guard isScanning else { return }
         stop()
         await scanTask?.value
         scanTask = nil
+    }
+
+    private func finishProviderAnalysis(_ provider: AgentStorageProvider, generation: Int) {
+        guard providerGenerations[provider] == generation else { return }
+        reanalyzingProviders.remove(provider)
+        progressByProvider.removeValue(forKey: provider)
+        providerScanTasks.removeValue(forKey: provider)
+    }
+
+    private func cancelProviderAnalyses() {
+        for task in providerScanTasks.values { task.cancel() }
+        providerScanTasks = [:]
+        reanalyzingProviders = []
+        providerGenerations = providerGenerations.mapValues { $0 + 1 }
+    }
+
+    private static func merging(
+        previous: AgentStorageSnapshot?,
+        partial: AgentStorageSnapshot,
+        provider: AgentStorageProvider
+    ) -> AgentStorageSnapshot {
+        guard let previous else { return partial }
+        let families = previous.families.filter { $0.provider != provider }
+            + partial.families.filter { $0.provider == provider }
+        let globalItems = previous.globalItems.filter { $0.provider != provider }
+            + partial.globalItems.filter { $0.provider == provider }
+        let unattributedItems = previous.unattributedItems.filter { $0.provider != provider }
+            + partial.unattributedItems.filter { $0.provider == provider }
+        let providers = previous.providers.filter { $0.provider != provider }
+            + partial.providers.filter { $0.provider == provider }
+        let sources = previous.sources.filter { $0.provider != provider }
+            + partial.sources.filter { $0.provider == provider }
+        let datasets = previous.providerDatasets.filter { $0.provider != provider }
+            + partial.providerDatasets.filter { $0.provider == provider }
+        let attributions = previous.databaseAttributions.filter { $0.provider != provider }
+            + partial.databaseAttributions.filter { $0.provider == provider }
+        let diagnostics = previous.diagnostics.filter { $0.provider != provider }
+            + partial.diagnostics.filter { $0.provider == provider }
+        let oldBytes = previous.providers.first { $0.provider == provider }?.exclusiveBytes ?? 0
+        let newBytes = partial.providers.first { $0.provider == provider }?.exclusiveBytes ?? 0
+        let retainedBytes = previous.coverage.measuredBytes > oldBytes
+            ? previous.coverage.measuredBytes - oldBytes
+            : 0
+        let measuredBytes = Self.addingClamped(retainedBytes, newBytes)
+        let coverage = AgentStorageCoverage(
+            measuredBytes: measuredBytes,
+            classifiedBytes: measuredBytes,
+            measuredEntryCount: previous.coverage.measuredEntryCount,
+            skippedEntryCount: previous.coverage.skippedEntryCount,
+            unstableEntryCount: previous.coverage.unstableEntryCount,
+            overflowed: previous.coverage.overflowed,
+            reconciliationDelta: 0,
+            isComplete: previous.coverage.isComplete && partial.coverage.isComplete
+        )
+        return AgentStorageSnapshot(
+            scannedAt: partial.scannedAt,
+            families: families,
+            globalItems: globalItems,
+            unattributedItems: unattributedItems,
+            providers: providers.sorted { $0.provider.rawValue < $1.provider.rawValue },
+            sources: sources.sorted { $0.id < $1.id },
+            coverage: coverage,
+            crossAgentSharedBytes: previous.crossAgentSharedBytes,
+            providerDatasets: datasets.sorted { $0.provider.rawValue < $1.provider.rawValue },
+            databaseAttributions: attributions,
+            diagnostics: diagnostics
+        )
+    }
+
+    nonisolated private static func addingClamped(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
+        let result = lhs.addingReportingOverflow(rhs)
+        return result.overflow ? .max : result.partialValue
     }
 
     func resumeAfterWake() {
@@ -207,10 +380,46 @@ final class AgentStorageModel {
     }
 
     func prepareForTermination() async {
+        cancelProviderAnalyses()
         generation += 1
+        cacheLoadTask?.cancel()
+        cacheLoadTask = nil
         scanTask?.cancel()
         await scanTask?.value
         scanTask = nil
+    }
+
+    nonisolated static var defaultCacheURL: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appending(path: "FindDiskKiller", directoryHint: .isDirectory)
+            .appending(path: "agent-storage-v2.json", directoryHint: .notDirectory)
+    }
+
+    nonisolated private static func loadSnapshot(from url: URL?) async -> AgentStorageSnapshot? {
+        guard let url, let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(AgentStorageSnapshot.self, from: data)
+    }
+
+    nonisolated private static func saveSnapshot(
+        _ snapshot: AgentStorageSnapshot,
+        to url: URL?
+    ) async {
+        guard let url, let data = try? JSONEncoder().encode(snapshot) else { return }
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try data.write(to: url, options: .atomic)
+        } catch {
+            return
+        }
+    }
+
+    nonisolated private static func removeSnapshot(at url: URL?) async {
+        guard let url else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 }
 
@@ -227,7 +436,7 @@ enum AgentStoragePreferences {
     }
 
     static func add(_ url: URL, defaults: UserDefaults = .standard) {
-        let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+        let path = url.standardizedFileURL.path
         var paths = defaults.stringArray(forKey: customRootsKey) ?? []
         guard !paths.contains(path) else { return }
         paths.append(path)
@@ -235,26 +444,12 @@ enum AgentStoragePreferences {
     }
 
     static func remove(_ url: URL, defaults: UserDefaults = .standard) {
-        let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+        let path = url.standardizedFileURL.path
         let paths = (defaults.stringArray(forKey: customRootsKey) ?? []).filter { $0 != path }
         defaults.set(paths, forKey: customRootsKey)
     }
 
     static func recognizedProvider(at url: URL) -> AgentStorageProvider? {
-        let resolved = url.resolvingSymlinksInPath().standardizedFileURL
-        let values = try? resolved.resourceValues(forKeys: [.isDirectoryKey])
-        guard values?.isDirectory == true else { return nil }
-        let fileManager = FileManager.default
-        if fileManager.fileExists(atPath: resolved.appending(path: "state_5.sqlite").path)
-            || fileManager.fileExists(atPath: resolved.appending(path: "sessions").path) {
-            return .codex
-        }
-        if fileManager.fileExists(atPath: resolved.appending(path: "projects").path) {
-            return .claude
-        }
-        if fileManager.fileExists(atPath: resolved.appending(path: "opencode.db").path) {
-            return .openCode
-        }
-        return nil
+        AgentDataLocationDiscovery.recognizedProvider(at: url)
     }
 }

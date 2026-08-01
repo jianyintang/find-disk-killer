@@ -35,6 +35,7 @@ struct UpdaterSettingsSection: View {
                             Button(L10n.text("在 Finder 中打开")) {
                                 updates.openInstallationLocation()
                             }
+                            .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .compact))
                         }
                     }
                 }
@@ -54,6 +55,7 @@ struct UpdaterSettingsSection: View {
                             )
                         }
                     }
+                    .buttonStyle(AppActionButtonStyle(kind: .primary))
                     .disabled(!updates.canCheckForUpdates)
                 }
             }

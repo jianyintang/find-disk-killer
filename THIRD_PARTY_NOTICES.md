@@ -1,10 +1,19 @@
 # Third-Party Notices
 
 FindDiskKiller includes selected identification marks from `glincker/thesvg`,
-pinned at commit `9d06a7e32a6403de34378a64fc000fe75da43518`:
+pinned at commit `0d98403375efc0700fdbc89c0627b02da7376e28`:
 
 - `codex-openai` (MIT)
 - `claude-code` (MIT)
+- `go` (CC0-1.0)
+- `pnpm` (CC0-1.0)
+- `npm` (CC0-1.0)
+- `bun` (CC0-1.0)
+- `python` (CC0-1.0)
+- `podman` (CC0-1.0)
+- `xcode` (CC0-1.0)
+- `docker` (CC0-1.0)
+- `google-chrome` (CC0-1.0)
 
 The MIT License
 

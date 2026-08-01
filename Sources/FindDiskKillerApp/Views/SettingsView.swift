@@ -13,6 +13,7 @@ struct SettingsPage: View {
     let navigation: AppNavigationCoordinator
     let updates: UpdateCoordinator
     let agentStorage: AgentStorageModel
+    let nodeRuntime: ClaudeNodeRuntimeStatusModel
     @AppStorage("showRateInMenuBar") private var showRateInMenuBar = true
     @AppStorage("sampleInterval") private var sampleInterval = MonitorStore.defaultSamplingInterval
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.system.rawValue
@@ -20,7 +21,6 @@ struct SettingsPage: View {
     @AppStorage(AgentStoragePreferences.hidePrivateDetailsKey)
     private var hidesAgentStoragePrivateDetails = false
     @State private var loginItem = LoginItemSettingsModel()
-    @State private var nodeRuntime = ClaudeNodeRuntimeStatusModel()
     @State private var traceHelperState: TraceHelperServiceState = .notRegistered
     @State private var historyWasCleared = false
     @State private var confirmation: HistorySettingsConfirmation?
@@ -170,10 +170,12 @@ struct SettingsPage: View {
                                     systemImage: "arrow.down.circle"
                                 )
                             }
+                            .buttonStyle(AppActionButtonStyle(kind: .primary))
                             Spacer()
                             Button(L10n.text("重新检测")) {
                                 nodeRuntime.refresh()
                             }
+                            .buttonStyle(AppActionButtonStyle(kind: .secondary))
                         }
                     case .downloading, .verifying, .installing:
                         HStack(spacing: 10) {
@@ -212,10 +214,26 @@ struct SettingsPage: View {
                     if let sources = agentStorage.snapshot?.sources, !sources.isEmpty {
                         ForEach(sources) { source in
                             LabeledContent {
-                                Text(agentStoragePath(source.path))
-                                    .font(.caption.monospaced())
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
+                                VStack(alignment: .trailing, spacing: 3) {
+                                    Text(agentStoragePath(source.configuredPath))
+                                        .font(.caption.monospaced())
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    if source.configuredPath != source.resolvedPath {
+                                        Text(agentStoragePath(source.resolvedPath))
+                                            .font(.caption2.monospaced())
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                    }
+                                    HStack(spacing: 5) {
+                                        Text(source.volumeName ?? L10n.text("未知磁盘"))
+                                        Text("·")
+                                        Text(AgentStorageSizeFormatter.string(source.allocatedBytes))
+                                    }
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                }
                             } label: {
                                 Label(source.displayName, systemImage: {
                                     switch source.provider {
@@ -242,7 +260,7 @@ struct SettingsPage: View {
                             } label: {
                                 Image(systemName: "minus.circle")
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(AppIconButtonStyle(size: 28, isFramed: false))
                             .help(L10n.text("移除数据位置"))
                         }
                     }
@@ -251,6 +269,7 @@ struct SettingsPage: View {
                         Button(action: addAgentStorageLocation) {
                             Label(L10n.text("添加数据位置"), systemImage: "folder.badge.plus")
                         }
+                        .buttonStyle(AppActionButtonStyle(kind: .secondary))
                         Spacer()
                         Button {
                             agentStorage.isScanning ? agentStorage.stop() : agentStorage.startAnalysis()
@@ -262,6 +281,9 @@ struct SettingsPage: View {
                                 systemImage: agentStorage.isScanning ? "stop.fill" : "arrow.clockwise"
                             )
                         }
+                        .buttonStyle(AppActionButtonStyle(
+                            kind: agentStorage.isScanning ? .destructive : .primary
+                        ))
                     }
 
                     if let error = agentStorage.customRootError {
@@ -372,6 +394,7 @@ struct SettingsPage: View {
                     } label: {
                         Label(L10n.text("清除已保存历史"), systemImage: "trash")
                     }
+                    .buttonStyle(AppActionButtonStyle(kind: .destructive))
                     .disabled(history.isClearing || history.storageInfo.totalBytes == 0)
 
                     if let databaseURL = history.databaseURL {
@@ -383,6 +406,7 @@ struct SettingsPage: View {
                         } label: {
                             Label(L10n.text("在 Finder 中显示数据文件"), systemImage: "folder")
                         }
+                        .buttonStyle(AppActionButtonStyle(kind: .secondary))
                     }
                 }
 
@@ -397,6 +421,7 @@ struct SettingsPage: View {
                     } label: {
                         Label(L10n.text("清除实时会话数据"), systemImage: "trash")
                     }
+                    .buttonStyle(AppActionButtonStyle(kind: .destructive))
 
                     if historyWasCleared {
                         Label(L10n.text("本次监控数据已清除"), systemImage: "checkmark.circle.fill")
@@ -416,6 +441,7 @@ struct SettingsPage: View {
                         Button(role: .destructive, action: removeTraceHelper) {
                             Label(L10n.text("停用并移除追踪组件"), systemImage: "xmark.shield")
                         }
+                        .buttonStyle(AppActionButtonStyle(kind: .destructive))
                     }
 
                     if case .operationFailed(let message) = traceHelperState {
@@ -762,6 +788,7 @@ private struct SettingsInlineStatus: View {
             Spacer(minLength: 8)
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
+                    .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .compact))
             }
         }
     }

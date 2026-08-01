@@ -32,6 +32,7 @@ struct DisksView: View {
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
+                    .buttonStyle(AppIconButtonStyle(size: 32))
                     .help(L10n.text("重新读取健康数据"))
                     .disabled(healthRefreshInProgress)
                 }
@@ -931,8 +932,7 @@ private struct VolumeRow: View {
             Button(action: onTraceAccessSource) {
                 Image(systemName: "scope")
             }
-            .buttonStyle(.borderless)
-            .frame(width: 30, height: 30)
+            .buttonStyle(AppIconButtonStyle(size: 30, isFramed: false))
             .contentShape(Rectangle())
             .help(L10n.text("追踪访问来源"))
             .accessibilityLabel(L10n.text("追踪访问来源"))
@@ -1043,8 +1043,7 @@ private struct VolumeAccessTracePanel: View {
                 Button(role: .destructive, action: store.stop) {
                     Label(L10n.text("停止追踪"), systemImage: "stop.fill")
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
+                .buttonStyle(AppActionButtonStyle(kind: .destructive))
             } else if canStart {
                 Button(action: store.start) {
                     Label(
@@ -1052,7 +1051,7 @@ private struct VolumeAccessTracePanel: View {
                         systemImage: "record.circle"
                     )
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(AppActionButtonStyle(kind: .primary))
             }
 
             Menu {
@@ -1103,28 +1102,29 @@ private struct VolumeAccessTracePanel: View {
         switch store.state {
         case .permissionRequired:
             Button(L10n.text("启用追踪"), action: store.requestPermission)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(AppActionButtonStyle(kind: .primary))
         case .waitingForApproval:
             Button(action: store.openApprovalSettings) {
                 Label(L10n.text("打开登录项设置"), systemImage: "gearshape")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(AppActionButtonStyle(kind: .primary))
         case .repairAvailable:
             Button(action: store.repairAndRetry) {
                 Label(L10n.text("修复并重试"), systemImage: "wrench.and.screwdriver")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(AppActionButtonStyle(kind: .primary))
         case .installationRequired:
             Button(action: store.openInstallationLocation) {
                 Label(L10n.text("打开安装窗口"), systemImage: "folder")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(AppActionButtonStyle(kind: .primary))
         case .repairing, .stopping, .stopUnconfirmed:
             ProgressView().controlSize(.small)
         case .failed:
             Button(action: store.start) {
                 Label(L10n.text("重试"), systemImage: "arrow.clockwise")
             }
+            .buttonStyle(AppActionButtonStyle(kind: .secondary))
         default:
             EmptyView()
         }

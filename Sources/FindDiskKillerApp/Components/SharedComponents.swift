@@ -1,6 +1,188 @@
 import FindDiskKillerCore
 import SwiftUI
 
+enum AppActionButtonKind {
+    case primary
+    case secondary
+    case destructive
+}
+
+enum AppActionButtonSize {
+    case compact
+    case regular
+    case large
+
+    var minimumHeight: CGFloat {
+        switch self {
+        case .compact: 30
+        case .regular: 34
+        case .large: 38
+        }
+    }
+
+    fileprivate var horizontalPadding: CGFloat {
+        switch self {
+        case .compact: 10
+        case .regular: 13
+        case .large: 16
+        }
+    }
+
+    fileprivate var font: Font {
+        switch self {
+        case .compact: .caption.weight(.semibold)
+        case .regular: .callout.weight(.semibold)
+        case .large: .body.weight(.semibold)
+        }
+    }
+
+    fileprivate var cornerRadius: CGFloat {
+        self == .compact ? 6 : 7
+    }
+}
+
+struct AppActionButtonStyle: ButtonStyle {
+    let kind: AppActionButtonKind
+    var size: AppActionButtonSize = .regular
+
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        AppActionButtonBody(
+            label: configuration.label,
+            kind: kind,
+            size: size,
+            isEnabled: isEnabled,
+            isPressed: configuration.isPressed
+        )
+    }
+}
+
+private struct AppActionButtonBody<Label: View>: View {
+    let label: Label
+    let kind: AppActionButtonKind
+    let size: AppActionButtonSize
+    let isEnabled: Bool
+    let isPressed: Bool
+
+    @State private var isHovering = false
+
+    var body: some View {
+        label
+            .font(size.font)
+            .lineLimit(1)
+            .padding(.horizontal, size.horizontalPadding)
+            .frame(minHeight: size.minimumHeight)
+            .foregroundStyle(foregroundColor)
+            .background(backgroundColor, in: RoundedRectangle(cornerRadius: size.cornerRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: size.cornerRadius)
+                    .stroke(borderColor, lineWidth: kind == .secondary ? 0.75 : 0.5)
+            }
+            .shadow(
+                color: shadowColor,
+                radius: kind == .secondary ? 0 : 2,
+                y: kind == .secondary ? 0 : 1
+            )
+            .contentShape(RoundedRectangle(cornerRadius: size.cornerRadius))
+            .opacity(isEnabled ? 1 : 0.46)
+            .scaleEffect(isPressed ? 0.985 : 1)
+            .animation(.easeOut(duration: 0.1), value: isPressed)
+            .animation(.easeOut(duration: 0.12), value: isHovering)
+            .onHover { isHovering = $0 }
+    }
+
+    private var foregroundColor: Color {
+        switch kind {
+        case .primary, .destructive: .white
+        case .secondary: .primary
+        }
+    }
+
+    private var backgroundColor: Color {
+        switch kind {
+        case .primary:
+            return Color.accentColor.opacity(isPressed ? 0.78 : isHovering ? 0.9 : 1)
+        case .secondary:
+            if isPressed { return Color.primary.opacity(0.13) }
+            if isHovering { return Color.primary.opacity(0.09) }
+            return Color(nsColor: .controlBackgroundColor).opacity(0.92)
+        case .destructive:
+            return Color.red.opacity(isPressed ? 0.78 : isHovering ? 0.9 : 1)
+        }
+    }
+
+    private var borderColor: Color {
+        switch kind {
+        case .primary: .white.opacity(0.18)
+        case .secondary: Color(nsColor: .separatorColor).opacity(0.9)
+        case .destructive: .white.opacity(0.2)
+        }
+    }
+
+    private var shadowColor: Color {
+        switch kind {
+        case .primary: Color.accentColor.opacity(0.2)
+        case .secondary: .clear
+        case .destructive: Color.red.opacity(0.2)
+        }
+    }
+}
+
+struct AppIconButtonStyle: ButtonStyle {
+    var size: CGFloat = 30
+    var isFramed = true
+
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        AppIconButtonBody(
+            label: configuration.label,
+            size: size,
+            isFramed: isFramed,
+            isEnabled: isEnabled,
+            isPressed: configuration.isPressed
+        )
+    }
+}
+
+private struct AppIconButtonBody<Label: View>: View {
+    let label: Label
+    let size: CGFloat
+    let isFramed: Bool
+    let isEnabled: Bool
+    let isPressed: Bool
+
+    @State private var isHovering = false
+
+    var body: some View {
+        label
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.primary)
+            .frame(width: size, height: size)
+            .background(backgroundColor, in: RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                if isFramed {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(nsColor: .separatorColor).opacity(0.72), lineWidth: 0.5)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .opacity(isEnabled ? 1 : 0.42)
+            .scaleEffect(isPressed ? 0.96 : 1)
+            .animation(.easeOut(duration: 0.1), value: isPressed)
+            .animation(.easeOut(duration: 0.12), value: isHovering)
+            .onHover { isHovering = $0 }
+    }
+
+    private var backgroundColor: Color {
+        guard isFramed else { return isHovering ? Color.primary.opacity(0.07) : .clear }
+        if isPressed { return Color.primary.opacity(0.14) }
+        if isHovering { return Color.primary.opacity(0.1) }
+        return Color(nsColor: .controlBackgroundColor).opacity(0.78)
+    }
+}
+
 struct SectionHeading<Trailing: View>: View {
     let title: String
     let subtitle: String?

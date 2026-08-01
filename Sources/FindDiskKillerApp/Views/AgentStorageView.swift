@@ -220,8 +220,25 @@ struct AgentStorageChatPagination: Equatable, Sendable {
 }
 
 enum AgentStorageBatchSelectionEngine {
+    enum PageSelectionState: Equatable {
+        case none
+        case partial
+        case all
+    }
+
     static func pageFamilyIDs(in rows: [AgentStorageChatRow]) -> Set<String> {
         Set(rows.lazy.filter(\.isFamily).map(\.familyID))
+    }
+
+    static func pageSelectionState(
+        selectedIDs: Set<String>,
+        pageFamilyIDs: Set<String>
+    ) -> PageSelectionState {
+        guard !pageFamilyIDs.isEmpty else { return .none }
+        let selectedCount = pageFamilyIDs.intersection(selectedIDs).count
+        if selectedCount == 0 { return .none }
+        if selectedCount == pageFamilyIDs.count { return .all }
+        return .partial
     }
 
     static func togglingCurrentPage(
@@ -578,6 +595,10 @@ enum AgentStorageProjectionEngine {
 
 struct AgentStorageView: View {
     let model: AgentStorageModel
+    let initialProvider: AgentStorageProvider?
+    let allowsAnalysisActions: Bool
+    let nodeRuntime: ClaudeNodeRuntimeStatusModel
+    let providerExitAction: (() -> Void)?
     @AppStorage(AgentStoragePreferences.hidePrivateDetailsKey) private var hidesPrivateDetails = false
     @State private var selectedProvider: AgentStorageProvider?
     @State private var scope: AgentStorageScope = .chats
@@ -620,7 +641,12 @@ struct AgentStorageView: View {
     @State private var isProjecting = false
     @State private var projectionGeneration = 0
     @State private var projectionTask: Task<Void, Never>?
-    @State private var batchCleanupContext: AgentStorageBatchCleanupContext?
+    @State private var cleanupSelectedIDs: Set<String> = []
+    @State private var cleanupReview: AgentStorageCleanupReview?
+    @State private var isCleanupReviewUpdating = false
+    @State private var cleanupReviewGeneration = 0
+    @State private var cleanupReviewTask: Task<Void, Never>?
+    @State private var cleanupSession: AgentStorageCleanupSession?
     @State private var cleanupCompletion: AgentStorageCleanupCompletion?
     @State private var qualityDetails: AgentStorageQualityDetails?
     @FocusState private var tableHasFocus: Bool
@@ -628,13 +654,50 @@ struct AgentStorageView: View {
     @AccessibilityFocusState private var accessibilityFocusedProvider: AgentStorageProvider?
     @AccessibilityFocusState private var tableAccessibilityFocus: Bool
 
+    init(
+        model: AgentStorageModel,
+        initialProvider: AgentStorageProvider? = nil,
+        allowsAnalysisActions: Bool = true,
+        nodeRuntime: ClaudeNodeRuntimeStatusModel,
+        providerExitAction: (() -> Void)? = nil
+    ) {
+        self.model = model
+        self.initialProvider = initialProvider
+        self.allowsAnalysisActions = allowsAnalysisActions
+        self.nodeRuntime = nodeRuntime
+        self.providerExitAction = providerExitAction
+        _selectedProvider = State(initialValue: initialProvider)
+    }
+
     var body: some View {
         lifecycleContent
+    }
+
+    private var analysisAction: (() -> Void)? {
+        guard allowsAnalysisActions else { return nil }
+        return { model.startAnalysis() }
+    }
+
+    private var refreshAction: (() -> Void)? {
+        guard allowsAnalysisActions else { return nil }
+        return { model.isScanning ? model.stop() : model.startAnalysis() }
+    }
+
+    private var cleanupReanalysisAction: (() -> Void)? {
+        guard allowsAnalysisActions else { return nil }
+        return {
+            cleanupCompletion = nil
+            model.startAnalysis()
+        }
     }
 
     private var lifecycleContent: some View {
         presentationContent
         .task { model.enterFeature() }
+        .task(id: selectedProvider) {
+            guard selectedProvider == .claude else { return }
+            nodeRuntime.refresh()
+        }
         .onChange(of: model.snapshotRevision, initial: true) { _, _ in
             rebuildSnapshotIndex(model.snapshot)
             scheduleProjection()
@@ -665,6 +728,7 @@ struct AgentStorageView: View {
             if !isRestoringWorkspace { scheduleProjection() }
         }
         .onChange(of: scope) { _, _ in
+            if scope != .chats { resetCleanupSelection() }
             if !isRestoringWorkspace { clearSelectionAndDetails() }
             if !isRestoringWorkspace { scheduleProjection() }
         }
@@ -684,7 +748,11 @@ struct AgentStorageView: View {
         }
         .onChange(of: globalSortOrder) { _, _ in scheduleProjection() }
         .onChange(of: unattributedSortOrder) { _, _ in scheduleProjection() }
-        .onDisappear { projectionTask?.cancel() }
+        .onDisappear {
+            projectionTask?.cancel()
+            cleanupReviewTask?.cancel()
+        }
+        .onChange(of: cleanupSelectedIDs) { _, _ in scheduleCleanupReview() }
         .onChange(of: selection) { _, newValue in
             guard let newValue, resolvedDetail(id: newValue) != nil else { return }
             presentDetail(id: newValue)
@@ -701,20 +769,19 @@ struct AgentStorageView: View {
             .frame(minWidth: 560, minHeight: 560)
             .onDisappear { tableHasFocus = true }
         }
-        .sheet(item: $batchCleanupContext) { context in
-            AgentStorageBatchCleanupSheet(
-                context: context,
-                close: { batchCleanupContext = nil },
-                didFinish: { result in
-                    handleCleanupCompletion(result, provider: context.provider)
-                }
+        .sheet(item: $cleanupSession) { session in
+            AgentStorageCleanupReviewView(
+                session: session,
+                close: { cleanupSession = nil },
+                didFinish: { result in handleCleanupCompletion(result) }
             )
+            .interactiveDismissDisabled(session.phase == .deleting)
         }
         .sheet(item: $qualityDetails) { details in
             AgentStorageQualityDetailsView(
                 details: details,
                 hidesPrivateDetails: hidesPrivateDetails,
-                reanalyze: model.startAnalysis
+                reanalyze: analysisAction
             )
         }
     }
@@ -735,7 +802,7 @@ struct AgentStorageView: View {
         }
         .navigationTitle(selectedProvider?.displayName ?? L10n.text("AI 空间"))
         .modifier(AgentStorageFocusedActions(
-            refresh: { model.isScanning ? model.stop() : model.startAnalysis() },
+            refresh: refreshAction,
             back: exitAction
         ))
         .modifier(AgentStorageConditionalSearch(
@@ -750,11 +817,11 @@ struct AgentStorageView: View {
     private var featureToolbar: some ToolbarContent {
         if selectedProvider != nil {
             ToolbarItem(placement: .navigation) {
-                Button(action: leaveProvider) {
+                Button(action: dismissDetailOrLeaveProvider) {
                     Image(systemName: "chevron.left")
                 }
-                .help(L10n.text("AI 空间"))
-                .accessibilityLabel(L10n.text("AI 空间"))
+                .help(providerBackTitle)
+                .accessibilityLabel(providerBackTitle)
             }
 
         }
@@ -772,7 +839,7 @@ struct AgentStorageView: View {
                 .accessibilityIdentifier("agent-storage-detail")
             }
 
-            if model.snapshot != nil || model.isScanning {
+            if allowsAnalysisActions && (model.snapshot != nil || model.isScanning) {
                 Button {
                     model.isScanning ? model.stop() : model.startAnalysis()
                 } label: {
@@ -826,6 +893,10 @@ struct AgentStorageView: View {
 
     private var exitAction: (() -> Void)? {
         selectedProvider == nil ? nil : { dismissDetailOrLeaveProvider() }
+    }
+
+    private var providerBackTitle: String {
+        providerExitAction == nil ? L10n.text("AI 空间") : L10n.text("返回空间地图")
     }
 
     @ViewBuilder
@@ -897,17 +968,17 @@ struct AgentStorageView: View {
             } description: {
                 Text(L10n.text("分析 Codex、Claude 和 OpenCode 的聊天、子代理与全局运行时"))
             } actions: {
-                Button(L10n.text("重新分析")) { model.startAnalysis() }
+                if allowsAnalysisActions {
+                    Button(L10n.text("重新分析")) { model.startAnalysis() }
+                        .buttonStyle(AppActionButtonStyle(kind: .primary))
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
         } else if let cleanupCompletion {
             AgentStorageCleanupCompletedView(
                 completion: cleanupCompletion,
-                reanalyze: {
-                    self.cleanupCompletion = nil
-                    model.startAnalysis()
-                }
+                reanalyze: cleanupReanalysisAction
             )
         } else {
             emptyOrLoadingContent
@@ -949,6 +1020,17 @@ struct AgentStorageView: View {
             summary
             Divider()
             providerStrip
+            if !selectedProviderSources.isEmpty {
+                Divider()
+                AgentStorageLocationStrip(
+                    sources: selectedProviderSources,
+                    hidesPrivateDetails: hidesPrivateDetails
+                )
+            }
+            if selectedProvider == .claude {
+                Divider()
+                ClaudeNodeRuntimeBar(model: nodeRuntime)
+            }
             Divider()
             scopeActionBar
             Divider()
@@ -1099,35 +1181,54 @@ struct AgentStorageView: View {
     @ViewBuilder
     private var scopeManagementControls: some View {
         if scope == .chats {
-            Button(action: presentBatchCleanup) {
+            cleanupSelectionControls
+        }
+    }
+
+    private var cleanupSelectionControls: some View {
+        HStack(spacing: 6) {
+            Menu {
+                Button(action: toggleCleanupCurrentPage) {
+                    Label(
+                        cleanupCurrentPageIsSelected ? L10n.text("取消选择本页") : L10n.text("选择本页"),
+                        systemImage: cleanupCurrentPageIsSelected ? "checkmark.square.fill" : "square"
+                    )
+                }
+                Button(action: toggleCleanupAllMatching) {
+                    Label(
+                        cleanupAllMatchingAreSelected
+                            ? L10n.text("取消选择全部结果")
+                            : L10n.format("选择全部 %d 个结果", visibleChatSummary.families.count),
+                        systemImage: cleanupAllMatchingAreSelected ? "checkmark.square.fill" : "square.stack.3d.up"
+                    )
+                }
+                Divider()
+                Button(L10n.text("清除选择"), systemImage: "xmark") {
+                    cleanupSelectedIDs = []
+                }
+                .disabled(cleanupSelectedIDs.isEmpty)
+            } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: "checklist.checked")
-                    Text(L10n.text("批量清理"))
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.tertiary)
+                    Image(systemName: cleanupSelectedIDs.isEmpty ? "checkmark.circle" : "checkmark.circle.fill")
+                    Text(L10n.format("已选 %d 项", cleanupSelectedIDs.count))
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
                 }
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
                 .padding(.horizontal, 10)
                 .frame(height: 32)
-                .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 7))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 7)
-                        .stroke(Color.accentColor.opacity(0.32))
-                }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(AgentStorageCompactToolbarButtonStyle())
-            .disabled(
-                selectedProviderSummary?.supportStatus == .unsupportedFormat
-                    || visibleChatSummary.families.isEmpty
-            )
-            .help(L10n.text("选择聊天"))
-            .accessibilityLabel(L10n.text("批量清理"))
-            .accessibilityIdentifier("agent-storage-batch-selection")
-            .fixedSize(horizontal: true, vertical: false)
+            .menuStyle(.borderlessButton)
+
+            Button(action: presentCleanupReview) {
+                Label(L10n.text("检查并清理"), systemImage: "checkmark.shield")
+            }
+            .buttonStyle(AppActionButtonStyle(kind: .primary, size: .compact))
+            .disabled(cleanupReview == nil || isCleanupReviewUpdating)
+            .help(L10n.text("最终提交前会再次核验活动状态和官方清理能力。"))
+            .accessibilityIdentifier("agent-storage-review-cleanup")
         }
+        .accessibilityIdentifier("agent-storage-inline-cleanup-controls")
     }
 
     @ViewBuilder
@@ -1303,8 +1404,9 @@ struct AgentStorageView: View {
                 ProgressView().controlSize(.small)
                 Text(model.isScanning ? L10n.text("正在分析 AI Agent 空间") : L10n.text("尚未分析"))
                 Spacer()
-                if !model.isScanning {
+                if allowsAnalysisActions, !model.isScanning {
                     Button(L10n.text("开始分析")) { model.startAnalysis() }
+                        .buttonStyle(AppActionButtonStyle(kind: .primary, size: .compact))
                 }
             }
             .font(.caption)
@@ -1399,6 +1501,7 @@ struct AgentStorageView: View {
             ))
         } actions: {
             Button(L10n.text("查看全局数据")) { selectScope(.global) }
+                .buttonStyle(AppActionButtonStyle(kind: .primary))
             Button {
                 let component = selectedDatabaseCompatibilityFailure?.diagnosticComponent
                     ?? "conversation index"
@@ -1410,16 +1513,23 @@ struct AgentStorageView: View {
             } label: {
                 Label(L10n.text("反馈兼容问题"), systemImage: "arrow.up.right.square")
             }
+            .buttonStyle(AppActionButtonStyle(kind: .secondary))
         }
     }
 
     private var chatTable: some View {
         Table(visibleChatRows, selection: $selection, sortOrder: $chatSortOrder) {
+            TableColumn("") { row in
+                AgentStorageChatSelectionCell(
+                    row: row,
+                    isSelected: cleanupSelectedIDs.contains(row.familyID),
+                    toggleSelection: { toggleCleanupSelection(row.familyID) }
+                )
+            }
+            .width(32)
             TableColumn(L10n.text("聊天"), value: \.title) { row in
                 AgentStorageChatIdentityCell(
                     row: row,
-                    isSelecting: false,
-                    isSelected: false,
                     isExpanded: expandedFamilies.contains(row.familyID),
                     isExpanding: expandingFamilies.contains(row.familyID),
                     toggleExpanded: { toggleExpanded(row.familyID) },
@@ -1474,6 +1584,36 @@ struct AgentStorageView: View {
                 })
             }
             .width(min: 112, ideal: 136)
+            TableColumn(L10n.text("预计立即释放")) { row in
+                if row.isFamily {
+                    Text(AgentStorageSizeFormatter.string(cleanupReclaimableBytes(for: row)))
+                        .font(.body.weight(.medium).monospacedDigit())
+                        .foregroundStyle(cleanupReclaimableBytes(for: row) > 0 ? Color.teal : Color.secondary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .modifier(AgentStorageChatCellActivation {
+                            activateChatRow(row)
+                        })
+                } else {
+                    Text("-").foregroundStyle(.tertiary)
+                }
+            }
+            .width(min: 118, ideal: 140)
+            TableColumn("") { row in
+                AgentStorageTableDetailButton(
+                    accessibilityIdentifier: "agent-storage-chat-detail-\(row.id)",
+                    action: { activateDetail(id: row.id) }
+                )
+            }
+            .width(min: 82, ideal: 88, max: 96)
+        }
+        .overlay(alignment: .topLeading) {
+            AgentStoragePageSelectionCheckbox(
+                state: cleanupCurrentPageSelectionState,
+                selectedCount: cleanupCurrentPageSelectedCount,
+                totalCount: cleanupCurrentPageIDs.count,
+                action: toggleCleanupCurrentPage
+            )
+            .padding(.leading, 16)
         }
         .overlay { tableEmptyStateIfNeeded(itemsAreEmpty: visibleChatRows.isEmpty) }
         .focused($tableHasFocus)
@@ -1481,6 +1621,13 @@ struct AgentStorageView: View {
         .accessibilityIdentifier("agent-storage-chat-table")
         .onKeyPress(.return) {
             showSelectedDetail()
+            return .handled
+        }
+        .onKeyPress(.space) {
+            guard let selection,
+                  let row = visibleChatRows.first(where: { $0.id == selection }),
+                  row.isFamily else { return .ignored }
+            toggleCleanupSelection(row.familyID)
             return .handled
         }
         .onKeyPress(.rightArrow) {
@@ -1511,9 +1658,8 @@ struct AgentStorageView: View {
                 selectChatPage(chatPageIndex - 1)
             } label: {
                 Image(systemName: "chevron.left")
-                    .frame(width: 18, height: 18)
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(AppIconButtonStyle(size: 28, isFramed: false))
             .disabled(chatPageIndex <= 0)
             .help(L10n.text("上一页"))
             .accessibilityLabel(L10n.text("上一页"))
@@ -1530,9 +1676,8 @@ struct AgentStorageView: View {
                 selectChatPage(chatPageIndex + 1)
             } label: {
                 Image(systemName: "chevron.right")
-                    .frame(width: 18, height: 18)
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(AppIconButtonStyle(size: 28, isFramed: false))
             .disabled(chatPageIndex + 1 >= chatPagination.totalPages)
             .help(L10n.text("下一页"))
             .accessibilityLabel(L10n.text("下一页"))
@@ -1579,6 +1724,13 @@ struct AgentStorageView: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .width(min: 112, ideal: 136)
+            TableColumn("") { item in
+                AgentStorageTableDetailButton(
+                    accessibilityIdentifier: "agent-storage-global-detail-\(item.id)",
+                    action: { activateDetail(id: item.id) }
+                )
+            }
+            .width(min: 82, ideal: 88, max: 96)
         }
         .overlay { tableEmptyStateIfNeeded(itemsAreEmpty: visibleGlobalItems.isEmpty) }
         .focused($tableHasFocus)
@@ -1616,6 +1768,13 @@ struct AgentStorageView: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .width(min: 92, ideal: 112)
+            TableColumn("") { item in
+                AgentStorageTableDetailButton(
+                    accessibilityIdentifier: "agent-storage-unattributed-detail-\(item.id)",
+                    action: { activateDetail(id: item.id) }
+                )
+            }
+            .width(min: 82, ideal: 88, max: 96)
         }
         .overlay { tableEmptyStateIfNeeded(itemsAreEmpty: visibleUnattributedItems.isEmpty) }
         .focused($tableHasFocus)
@@ -1639,6 +1798,7 @@ struct AgentStorageView: View {
                         Text(L10n.format("没有与“%@”匹配的结果。", searchText))
                     } actions: {
                         Button(L10n.text("清空搜索")) { searchText = "" }
+                            .buttonStyle(AppActionButtonStyle(kind: .secondary))
                     }
                 } else if let inactiveTitle = timeRange.inactiveTitle,
                           archiveFilter == .all, selectedProject == nil {
@@ -1651,6 +1811,7 @@ struct AgentStorageView: View {
                         Text(L10n.text("可缩短未活动时间，或返回查看全部聊天。"))
                     } actions: {
                         Button(L10n.text("查看全部聊天")) { timeRange = .all }
+                            .buttonStyle(AppActionButtonStyle(kind: .secondary))
                     }
                 } else if hasActiveFilter {
                     ContentUnavailableView {
@@ -1659,6 +1820,7 @@ struct AgentStorageView: View {
                         Text(L10n.text("调整或清除筛选后再试。"))
                     } actions: {
                         Button(L10n.text("清除筛选"), action: clearFilters)
+                            .buttonStyle(AppActionButtonStyle(kind: .secondary))
                     }
                 } else {
                     ContentUnavailableView(
@@ -1675,6 +1837,7 @@ struct AgentStorageView: View {
                         Text(L10n.format("没有与“%@”匹配的结果。", searchText))
                     } actions: {
                         Button(L10n.text("清空搜索")) { searchText = "" }
+                            .buttonStyle(AppActionButtonStyle(kind: .secondary))
                     }
                 } else if hasActiveFilter {
                     ContentUnavailableView {
@@ -1683,6 +1846,7 @@ struct AgentStorageView: View {
                         Text(L10n.text("调整或清除筛选后再试。"))
                     } actions: {
                         Button(L10n.text("清除筛选"), action: clearFilters)
+                            .buttonStyle(AppActionButtonStyle(kind: .secondary))
                     }
                 } else {
                     ContentUnavailableView(
@@ -1699,6 +1863,7 @@ struct AgentStorageView: View {
                         Text(L10n.format("没有与“%@”匹配的结果。", searchText))
                     } actions: {
                         Button(L10n.text("清空搜索")) { searchText = "" }
+                            .buttonStyle(AppActionButtonStyle(kind: .secondary))
                     }
                 } else if hasActiveFilter {
                     ContentUnavailableView {
@@ -1707,6 +1872,7 @@ struct AgentStorageView: View {
                         Text(L10n.text("调整或清除筛选后再试。"))
                     } actions: {
                         Button(L10n.text("清除筛选"), action: clearFilters)
+                            .buttonStyle(AppActionButtonStyle(kind: .secondary))
                     }
                 } else {
                     ContentUnavailableView(
@@ -1732,9 +1898,14 @@ struct AgentStorageView: View {
             ContentUnavailableView {
                 Label(L10n.text("扫描已停止"), systemImage: "pause.circle")
             } description: {
-                Text(L10n.text("尚未生成可显示的结果"))
+                Text(allowsAnalysisActions
+                    ? L10n.text("尚未生成可显示的结果")
+                    : L10n.text("返回空间地图重新开始整体分析。"))
             } actions: {
-                Button(L10n.text("重新分析")) { model.startAnalysis() }
+                if allowsAnalysisActions {
+                    Button(L10n.text("重新分析")) { model.startAnalysis() }
+                        .buttonStyle(AppActionButtonStyle(kind: .primary))
+                }
             }
         case .failed(let message):
             ContentUnavailableView {
@@ -1742,17 +1913,31 @@ struct AgentStorageView: View {
             } description: {
                 Text(message)
             } actions: {
-                Button(L10n.text("重试")) { model.startAnalysis() }
+                if allowsAnalysisActions {
+                    Button(L10n.text("重试")) { model.startAnalysis() }
+                        .buttonStyle(AppActionButtonStyle(kind: .primary))
+                }
             }
         case .idle where model.requiresAnalysis:
-            AgentStorageAnalysisInvitation(start: model.startAnalysis)
+            if allowsAnalysisActions {
+                AgentStorageAnalysisInvitation(start: model.startAnalysis)
+            } else {
+                ContentUnavailableView {
+                    Label(L10n.text("等待空间地图整体分析"), systemImage: "chart.bar.xaxis")
+                } description: {
+                    Text(L10n.text("Codex 与 Claude 深度分析由空间地图的统一分析任务生成。"))
+                }
+            }
         default:
             ContentUnavailableView {
                 Label(L10n.text("尚未分析 AI Agent 空间"), systemImage: "sparkles")
             } description: {
                 Text(L10n.text("分析 Codex、Claude 和 OpenCode 的聊天、子代理与全局运行时"))
             } actions: {
-                Button(L10n.text("开始分析")) { model.startAnalysis() }
+                if allowsAnalysisActions {
+                    Button(L10n.text("开始分析")) { model.startAnalysis() }
+                        .buttonStyle(AppActionButtonStyle(kind: .primary))
+                }
             }
         }
     }
@@ -1924,6 +2109,18 @@ struct AgentStorageView: View {
         return model.snapshot?.providers.first { $0.provider == provider }
     }
 
+    private var selectedProviderSources: [AgentStorageSource] {
+        guard let selectedProvider else { return [] }
+        return (model.snapshot?.sources ?? [])
+            .filter { $0.provider == selectedProvider }
+            .sorted {
+                if $0.allocatedBytes != $1.allocatedBytes {
+                    return $0.allocatedBytes > $1.allocatedBytes
+                }
+                return $0.resolvedPath.localizedStandardCompare($1.resolvedPath) == .orderedAscending
+            }
+    }
+
     private var selectedDatabaseAttributions: [AgentStorageDatabaseAttributionSummary] {
         guard let provider = selectedProvider else { return [] }
         return model.snapshot?.databaseAttributions.filter { $0.provider == provider } ?? []
@@ -2055,6 +2252,7 @@ struct AgentStorageView: View {
         guard model.snapshot?.providers.first(where: { $0.provider == provider })?
             .supportStatus != .notInstalled else { return }
         isRestoringWorkspace = true
+        resetCleanupSelection()
         if let saved = workspaceStates[provider] {
             scope = saved.scope
             archiveFilter = saved.archiveFilter
@@ -2108,6 +2306,7 @@ struct AgentStorageView: View {
     }
 
     private func leaveProvider() {
+        resetCleanupSelection()
         projectionTask?.cancel()
         projectionGeneration &+= 1
         isProjecting = false
@@ -2151,11 +2350,9 @@ struct AgentStorageView: View {
         }
     }
 
-    private func handleCleanupCompletion(
-        _ result: AgentStorageCleanupResult,
-        provider: AgentStorageProvider
-    ) {
-        batchCleanupContext = nil
+    private func handleCleanupCompletion(_ result: AgentStorageCleanupResult) {
+        cleanupSession = nil
+        guard let provider = selectedProvider else { return }
         guard result.changedStorage else { return }
 
         var transaction = Transaction()
@@ -2170,6 +2367,7 @@ struct AgentStorageView: View {
     private func reconcileWorkspaceState(with dataset: AgentStorageProviderDataset) {
         let validFamilies = Set(dataset.families.map(\.id))
         expandedFamilies.formIntersection(validFamilies)
+        cleanupSelectedIDs.formIntersection(validFamilies)
         guard let selection else { return }
         guard detailIndex[selection] == nil else { return }
         self.selection = nil
@@ -2230,6 +2428,8 @@ struct AgentStorageView: View {
             tableHasFocus = true
         } else if showsTransientDetail {
             closeTransientDetail()
+        } else if let providerExitAction {
+            providerExitAction()
         } else {
             leaveProvider()
         }
@@ -2239,24 +2439,456 @@ struct AgentStorageView: View {
         detailIndex[id]
     }
 
-    private func presentBatchCleanup() {
-        guard let provider = selectedProvider,
-              let snapshot = model.snapshot,
-              let dataset = snapshot.dataset(for: provider) else { return }
-        batchCleanupContext = AgentStorageBatchCleanupContext(
-            provider: provider,
-            families: dataset.families,
-            scannedAt: snapshot.scannedAt,
-            hidesPrivateDetails: hidesPrivateDetails
-        )
-    }
-
     private func activateChatRow(_ row: AgentStorageChatRow) {
         activateDetail(id: row.id)
     }
 
+    private var cleanupSelectedFamilies: [AgentStorageThreadFamily] {
+        guard let provider = selectedProvider,
+              let dataset = model.snapshot?.dataset(for: provider) else { return [] }
+        return dataset.families.filter { cleanupSelectedIDs.contains($0.id) }
+    }
+
+    private var cleanupCurrentPageIDs: Set<String> {
+        Set(visibleChatRows.lazy.filter(\.isFamily).map(\.familyID))
+    }
+
+    private var cleanupCurrentPageIsSelected: Bool {
+        !cleanupCurrentPageIDs.isEmpty
+            && cleanupCurrentPageIDs.isSubset(of: cleanupSelectedIDs)
+    }
+
+    private var cleanupCurrentPageSelectionState: AgentStorageBatchSelectionEngine.PageSelectionState {
+        AgentStorageBatchSelectionEngine.pageSelectionState(
+            selectedIDs: cleanupSelectedIDs,
+            pageFamilyIDs: cleanupCurrentPageIDs
+        )
+    }
+
+    private var cleanupCurrentPageSelectedCount: Int {
+        cleanupCurrentPageIDs.intersection(cleanupSelectedIDs).count
+    }
+
+    private var cleanupAllMatchingIDs: Set<String> {
+        Set(visibleChatSummary.families.map(\.id))
+    }
+
+    private var cleanupAllMatchingAreSelected: Bool {
+        !cleanupAllMatchingIDs.isEmpty
+            && cleanupAllMatchingIDs.isSubset(of: cleanupSelectedIDs)
+    }
+
+    private func resetCleanupSelection() {
+        cleanupReviewTask?.cancel()
+        cleanupReviewGeneration &+= 1
+        cleanupSelectedIDs = []
+        cleanupReview = nil
+        isCleanupReviewUpdating = false
+        cleanupSession = nil
+    }
+
+    private func toggleCleanupSelection(_ id: String) {
+        if cleanupSelectedIDs.contains(id) {
+            cleanupSelectedIDs.remove(id)
+        } else {
+            cleanupSelectedIDs.insert(id)
+        }
+    }
+
+    private func toggleCleanupCurrentPage() {
+        cleanupSelectedIDs = AgentStorageBatchSelectionEngine.togglingCurrentPage(
+            selectedIDs: cleanupSelectedIDs,
+            pageFamilyIDs: cleanupCurrentPageIDs
+        )
+    }
+
+    private func toggleCleanupAllMatching() {
+        if cleanupAllMatchingAreSelected {
+            cleanupSelectedIDs.subtract(cleanupAllMatchingIDs)
+        } else {
+            cleanupSelectedIDs.formUnion(cleanupAllMatchingIDs)
+        }
+    }
+
+    private func scheduleCleanupReview() {
+        cleanupReviewTask?.cancel()
+        cleanupReviewGeneration &+= 1
+        let requestedGeneration = cleanupReviewGeneration
+        let families = cleanupSelectedFamilies
+        guard !families.isEmpty else {
+            cleanupReview = nil
+            isCleanupReviewUpdating = false
+            return
+        }
+        isCleanupReviewUpdating = true
+        cleanupReviewTask = Task { @MainActor in
+            await Task.yield()
+            let worker = Task.detached(priority: .userInitiated) {
+                AgentStorageCleanupReview(families: families)
+            }
+            let review = await worker.value
+            guard !Task.isCancelled,
+                  cleanupReviewGeneration == requestedGeneration else { return }
+            cleanupReview = review
+            isCleanupReviewUpdating = false
+            cleanupReviewTask = nil
+        }
+    }
+
+    private func presentCleanupReview() {
+        guard let cleanupReview, !isCleanupReviewUpdating else { return }
+        cleanupSession = AgentStorageCleanupSession(review: cleanupReview)
+    }
+
+    private func cleanupReclaimableBytes(for row: AgentStorageChatRow) -> UInt64 {
+        guard row.isFamily, let family = familyIndex[row.familyID] else { return 0 }
+        return AgentStorageCleanupValidator.officialArtifacts(for: family).reduce(0) {
+            let sum = $0.addingReportingOverflow($1.allocatedBytes)
+            return sum.overflow ? .max : sum.partialValue
+        }
+    }
+
     private func relativeDate(_ date: Date) -> String {
         date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated))
+    }
+}
+
+private struct AgentStorageInlineCleanupInspector: View {
+    let provider: AgentStorageProvider?
+    let selectedFamilies: [AgentStorageThreadFamily]
+    let review: AgentStorageCleanupReview?
+    let isUpdating: Bool
+    let cancel: () -> Void
+    let continueToReview: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            inspectorHeader
+            Divider()
+            metrics
+            Divider()
+            breakdown
+            Divider()
+            selectedList
+            Divider()
+            actions
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .accessibilityIdentifier("agent-storage-inline-cleanup-inspector")
+    }
+
+    private var inspectorHeader: some View {
+        HStack(spacing: 12) {
+            if let provider {
+                AgentStorageProviderIcon(provider: provider, size: 30)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.text("清理计划"))
+                    .font(.headline)
+                Text(L10n.text("直接勾选左侧聊天，无需再次选择"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 4)
+        }
+        .padding(.horizontal, 18)
+        .frame(height: 72)
+    }
+
+    private var metrics: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                cleanupMetric(
+                    L10n.text("已选聊天"),
+                    selectedFamilies.count.formatted(),
+                    symbol: "checkmark.circle.fill"
+                )
+                Divider().frame(height: 44)
+                cleanupMetric(
+                    L10n.text("预计立即释放"),
+                    isUpdating ? "—" : AgentStorageSizeFormatter.string(review?.reclaimableBytes ?? 0),
+                    symbol: "arrow.down.to.line.compact"
+                )
+            }
+            Divider().padding(.horizontal, 14)
+            HStack(spacing: 0) {
+                cleanupMetric(
+                    L10n.text("已测量"),
+                    isUpdating ? "—" : AgentStorageSizeFormatter.string(review?.totalBytes ?? 0),
+                    symbol: "internaldrive"
+                )
+                Divider().frame(height: 44)
+                cleanupMetric(
+                    L10n.text("保留在磁盘"),
+                    isUpdating ? "—" : AgentStorageSizeFormatter.string(review?.retainedBytes ?? 0),
+                    symbol: "lock.shield"
+                )
+            }
+        }
+        .padding(.vertical, 12)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.38))
+    }
+
+    private func cleanupMetric(_ title: String, _ value: String, symbol: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label(title, systemImage: symbol)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.title3.weight(.semibold).monospacedDigit())
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var breakdown: some View {
+        if let review, !review.artifacts.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(L10n.text("可验证文件构成"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(cleanupCategoryBreakdown(review), id: \.category) { item in
+                    HStack(spacing: 8) {
+                        Circle().fill(cleanupCategoryColor(item.category)).frame(width: 7, height: 7)
+                        Text(cleanupCategoryTitle(item.category)).lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(AgentStorageSizeFormatter.string(item.bytes))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        } else {
+            HStack(spacing: 9) {
+                if isUpdating { ProgressView().controlSize(.small) }
+                Image(systemName: "doc.badge.ellipsis")
+                    .foregroundStyle(.secondary)
+                Text(L10n.text("选择后计算可由官方方式验证的文件"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: 48, alignment: .leading)
+        }
+    }
+
+    private func cleanupCategoryBreakdown(
+        _ review: AgentStorageCleanupReview
+    ) -> [(category: AgentStorageArtifactCategory, bytes: UInt64)] {
+        var bytesByCategory: [AgentStorageArtifactCategory: UInt64] = [:]
+        for artifact in review.artifacts {
+            let category = artifact.category ?? .other
+            let current = bytesByCategory[category, default: 0]
+            let sum = current.addingReportingOverflow(artifact.allocatedBytes)
+            bytesByCategory[category] = sum.overflow ? .max : sum.partialValue
+        }
+        return bytesByCategory.map { (category: $0.key, bytes: $0.value) }.sorted {
+            if $0.bytes != $1.bytes { return $0.bytes > $1.bytes }
+            return $0.category.rawValue < $1.category.rawValue
+        }
+    }
+
+    private func cleanupCategoryTitle(_ category: AgentStorageArtifactCategory) -> String {
+        switch category {
+        case .conversation: L10n.text("会话文件")
+        case .toolResult: L10n.text("工具结果")
+        case .subagent: L10n.text("子代理文件")
+        case .fileHistory: L10n.text("文件历史")
+        case .attachment: L10n.text("附件")
+        case .snapshot: L10n.text("快照")
+        case .task: L10n.text("任务")
+        case .workflow: L10n.text("工作流")
+        case .other: L10n.text("其它文件")
+        }
+    }
+
+    private func cleanupCategoryColor(_ category: AgentStorageArtifactCategory) -> Color {
+        switch category {
+        case .conversation, .subagent: .teal
+        case .toolResult, .task, .workflow: .blue
+        case .fileHistory, .snapshot: .orange
+        case .attachment: .purple
+        case .other: .secondary
+        }
+    }
+
+    @ViewBuilder
+    private var selectedList: some View {
+        if selectedFamilies.isEmpty {
+            ContentUnavailableView {
+                Label(L10n.text("选择要清理的聊天"), systemImage: "checkmark.square")
+            } description: {
+                Text(L10n.text("勾选后，这里会实时汇总可验证文件与预计释放空间。"))
+            }
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(selectedFamilies) { family in
+                        HStack(spacing: 10) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(Color.accentColor)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(family.title).font(.callout.weight(.medium)).lineLimit(1)
+                                Text(family.project).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer(minLength: 8)
+                            Text(AgentStorageSizeFormatter.string(family.attributedBytes))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(height: 52)
+                        Divider().padding(.leading, 46)
+                    }
+                }
+            }
+        }
+    }
+
+    private var actions: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(
+                L10n.text("最终提交前会再次核验活动状态和官方清理能力。"),
+                systemImage: "checkmark.shield"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button(L10n.text("退出选择"), action: cancel)
+                    .buttonStyle(AppActionButtonStyle(kind: .secondary))
+                Spacer()
+                if isUpdating { ProgressView().controlSize(.small) }
+                Button(L10n.text("检查并清理"), systemImage: "arrow.right", action: continueToReview)
+                    .buttonStyle(AppActionButtonStyle(kind: .primary))
+                    .disabled(review == nil || isUpdating)
+            }
+        }
+        .padding(16)
+    }
+}
+
+private struct ClaudeNodeRuntimeBar: View {
+    let model: ClaudeNodeRuntimeStatusModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "shippingbox.and.arrow.down.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(statusColor)
+                .frame(width: 32, height: 32)
+                .background(statusColor.opacity(0.11), in: RoundedRectangle(cornerRadius: 6))
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.text("Node.js 运行时"))
+                    .font(.caption.weight(.semibold))
+                Text(statusText)
+                    .font(.caption)
+                    .foregroundStyle(statusColor)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(statusText)
+            }
+
+            Spacer(minLength: 12)
+            action
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 48)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.24))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("claude-node-runtime")
+    }
+
+    @ViewBuilder
+    private var action: some View {
+        switch model.phase {
+        case .checking:
+            ProgressView()
+                .controlSize(.small)
+                .accessibilityLabel(L10n.text("检测中…"))
+        case .available:
+            Button {
+                model.refresh()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.plain)
+            .help(L10n.text("重新检测"))
+            .accessibilityLabel(L10n.text("重新检测"))
+        case .missing, .failed:
+            Button {
+                model.download()
+            } label: {
+                Label(
+                    L10n.format("下载 Node.js v%@", ClaudeNodeRuntime.pinnedVersion),
+                    systemImage: "arrow.down.circle"
+                )
+            }
+            .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .compact))
+        case .downloading, .verifying, .installing:
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.small)
+                Text(provisioningActionTitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var statusColor: Color {
+        switch model.phase {
+        case .checking: .secondary
+        case .available: .green
+        case .missing: .orange
+        case .downloading, .verifying, .installing: .accentColor
+        case .failed: .red
+        }
+    }
+
+    private var statusText: String {
+        switch model.phase {
+        case .checking:
+            return L10n.text("检测中…")
+        case .available(let availability):
+            let status = [availability.version, availability.source.localizedLabel]
+                .compactMap { $0 }
+                .joined(separator: " · ")
+            return "\(status) · \(abbreviatedPath(availability.path))"
+        case .missing:
+            return L10n.text("未检测到可用运行时")
+        case .downloading:
+            return L10n.text("正在下载官方运行时…")
+        case .verifying:
+            return L10n.text("正在校验运行时…")
+        case .installing:
+            return L10n.text("正在安装运行时…")
+        case .failed(let message):
+            return message
+        }
+    }
+
+    private var provisioningActionTitle: String {
+        switch model.phase {
+        case .downloading: L10n.text("正在下载")
+        case .verifying: L10n.text("正在校验")
+        case .installing: L10n.text("正在安装")
+        default: ""
+        }
+    }
+
+    private func abbreviatedPath(_ path: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        guard path == home || path.hasPrefix(home + "/") else { return path }
+        return "~" + String(path.dropFirst(home.count))
     }
 }
 
@@ -2299,6 +2931,7 @@ private struct AgentStorageAgeFilterPopover: View {
                 }
                 Spacer(minLength: 12)
                 Button(L10n.text("完成")) { dismiss() }
+                    .buttonStyle(AppActionButtonStyle(kind: .primary))
                     .keyboardShortcut(.defaultAction)
             }
         }
@@ -2848,7 +3481,7 @@ private struct AgentStorageFilterPopover: View {
             } label: {
                 Image(systemName: "xmark")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(AppIconButtonStyle(size: 28, isFramed: false))
             .help(L10n.text("关闭筛选"))
             .accessibilityLabel(L10n.text("关闭筛选"))
         }
@@ -3003,7 +3636,7 @@ private struct AgentStorageFilterPopover: View {
             }
             Spacer()
             Button(L10n.text("完成")) { dismiss() }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(AppActionButtonStyle(kind: .primary))
                 .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, 16)
@@ -3097,7 +3730,7 @@ private struct AgentStorageConditionalSearch: ViewModifier {
 }
 
 private struct AgentStorageFocusedActions: ViewModifier {
-    let refresh: () -> Void
+    let refresh: (() -> Void)?
     let back: (() -> Void)?
 
     func body(content: Content) -> some View {
@@ -3175,34 +3808,18 @@ struct AgentStorageChatRow: Identifiable, Hashable, Sendable {
 
 private struct AgentStorageChatIdentityCell: View {
     let row: AgentStorageChatRow
-    let isSelecting: Bool
-    let isSelected: Bool
     let isExpanded: Bool
     let isExpanding: Bool
     let toggleExpanded: () -> Void
     let activate: () -> Void
 
-    @ViewBuilder
     var body: some View {
-        if !isSelecting, row.isFamily, row.subagentCount > 0 {
-            cell.accessibilityAction(
-                named: L10n.text(isExpanded ? "折叠子代理" : "展开子代理"),
-                toggleExpanded
-            )
-        } else {
-            cell
-        }
+        cell
     }
 
     private var cell: some View {
-        HStack(spacing: 8) {
-            if isSelecting {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                    .frame(width: 18, height: 24)
-                    .accessibilityHidden(true)
-            } else if row.isFamily, row.subagentCount > 0 {
+        HStack(spacing: 6) {
+            if row.isFamily, row.subagentCount > 0 {
                 Button(action: toggleExpanded) {
                     Group {
                         if isExpanding {
@@ -3217,8 +3834,10 @@ private struct AgentStorageChatIdentityCell: View {
                 }
                 .buttonStyle(.plain)
                 .help(L10n.text(isExpanded ? "折叠子代理" : "展开子代理"))
+                .accessibilityLabel(L10n.text(isExpanded ? "折叠子代理" : "展开子代理"))
             } else {
                 Color.clear.frame(width: 18, height: 24)
+                    .accessibilityHidden(true)
             }
 
             HStack(spacing: 8) {
@@ -3240,14 +3859,12 @@ private struct AgentStorageChatIdentityCell: View {
             }
             .contentShape(Rectangle())
             .simultaneousGesture(TapGesture().onEnded(activate))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityAction(named: L10n.text("显示详情"), activate)
         }
         .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityAction(
-            named: L10n.text(isSelecting ? (isSelected ? "取消选择" : "选择聊天") : "显示详情"),
-            activate
-        )
+        .accessibilityElement(children: .contain)
     }
 
     private var accessibilityLabel: String {
@@ -3255,6 +3872,89 @@ private struct AgentStorageChatIdentityCell: View {
             return "\(L10n.text("主聊天"))，\(row.title)，\(row.subagentCount) \(L10n.text("个子代理"))，\(AgentStorageSizeFormatter.string(row.allocatedBytes))"
         }
         return "\(L10n.text("子代理"))，\(row.title)，\(AgentStorageSizeFormatter.string(row.allocatedBytes))"
+    }
+}
+
+private struct AgentStorageChatSelectionCell: View {
+    let row: AgentStorageChatRow
+    let isSelected: Bool
+    let toggleSelection: () -> Void
+
+    var body: some View {
+        Group {
+            if row.isFamily {
+                Button(action: toggleSelection) {
+                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                        .frame(width: 24, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(L10n.text(isSelected ? "取消选择" : "选择聊天"))
+                .accessibilityLabel(L10n.text(isSelected ? "取消选择" : "选择聊天"))
+                .accessibilityValue(isSelected ? L10n.text("已选择") : L10n.text("未选择"))
+            } else {
+                Color.clear
+                    .frame(width: 24, height: 28)
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct AgentStoragePageSelectionCheckbox: View {
+    let state: AgentStorageBatchSelectionEngine.PageSelectionState
+    let selectedCount: Int
+    let totalCount: Int
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbolName)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(state == .none ? Color.secondary : Color.accentColor)
+                .frame(width: 32, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(totalCount == 0)
+        .help(actionTitle)
+        .accessibilityLabel(actionTitle)
+        .accessibilityValue(L10n.format("已选择 %d，共 %d 个聊天", selectedCount, totalCount))
+        .accessibilityIdentifier("agent-storage-current-page-selection")
+    }
+
+    private var symbolName: String {
+        switch state {
+        case .none: "square"
+        case .partial: "minus.square.fill"
+        case .all: "checkmark.square.fill"
+        }
+    }
+
+    private var actionTitle: String {
+        L10n.text(state == .all ? "取消选择本页" : "选择本页")
+    }
+}
+
+private struct AgentStorageTableDetailButton: View {
+    let accessibilityIdentifier: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(L10n.text("详情"), systemImage: "sidebar.right")
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .help(L10n.text("显示详情"))
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 }
 
@@ -3385,6 +4085,104 @@ private struct AgentStorageProviderLabel: View {
     }
 }
 
+private struct AgentStorageLocationStrip: View {
+    let sources: [AgentStorageSource]
+    let hidesPrivateDetails: Bool
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(alignment: .top, spacing: 0) {
+                ForEach(Array(sources.enumerated()), id: \.element.id) { index, source in
+                    if index > 0 {
+                        Divider()
+                            .frame(height: source.configuredPath == source.resolvedPath ? 54 : 72)
+                            .padding(.horizontal, 14)
+                    }
+                    location(source)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+        .scrollIndicators(.hidden)
+        .frame(minHeight: 76, maxHeight: 106)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.2))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("agent-storage-locations")
+    }
+
+    private func location(_ source: AgentStorageSource) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 7) {
+                Image(systemName: source.kind?.locationSymbol ?? "folder")
+                    .foregroundStyle(.secondary)
+                Text(source.displayName)
+                    .font(.caption.weight(.semibold))
+                Text(AgentStorageSizeFormatter.string(source.allocatedBytes))
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                if !source.isAvailable {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            HStack(spacing: 6) {
+                Label(source.volumeName ?? L10n.text("未知磁盘"), systemImage: "externaldrive")
+                Text("·")
+                Text(discoveryLabel(source))
+                if !source.alternateConfiguredPaths.isEmpty {
+                    Text("·")
+                    Text(L10n.format("%d 个路径指向同一位置", source.alternateConfiguredPaths.count + 1))
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+
+            Text(displayPath(source.configuredPath))
+                .font(.caption2.monospaced())
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if source.configuredPath != source.resolvedPath {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.turn.down.right")
+                    Text(displayPath(source.resolvedPath))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+            }
+        }
+        .frame(minWidth: 260, idealWidth: 320, maxWidth: 390, alignment: .leading)
+    }
+
+    private func discoveryLabel(_ source: AgentStorageSource) -> String {
+        switch source.discoverySource {
+        case .officialDefault: return L10n.text("默认目录")
+        case .environmentVariable:
+            return source.discoveryIdentifier ?? L10n.text("环境变量")
+        case .knownClient: return L10n.text("已知客户端")
+        case .userAdded: return L10n.text("手动添加")
+        case .embeddedAgent: return L10n.text("嵌入式 Agent")
+        case nil: return L10n.text("已发现目录")
+        }
+    }
+
+    private func displayPath(_ path: String) -> String {
+        hidesPrivateDetails ? L10n.text("路径已隐藏") : path
+    }
+}
+
+private extension AgentStorageSourceKind {
+    var locationSymbol: String {
+        switch self {
+        case .codexHome, .claudeCode, .openCode: "terminal"
+        case .codexDesktop, .claudeDesktop: "macwindow"
+        case .claudeDesktopAgent: "point.3.connected.trianglepath.dotted"
+        }
+    }
+}
+
 @MainActor
 struct AgentStorageProviderIcon: View {
     let provider: AgentStorageProvider
@@ -3399,10 +4197,22 @@ struct AgentStorageProviderIcon: View {
     var body: some View {
         Group {
             if let image = providerImage {
-                Image(nsImage: image)
-                    .resizable()
-                    .renderingMode(provider == .claude ? .template : .original)
-                    .foregroundStyle(Color(red: 0.82, green: 0.39, blue: 0.18))
+                switch provider {
+                case .codex:
+                    Image(nsImage: image)
+                        .resizable()
+                        .renderingMode(.template)
+                        .foregroundStyle(.primary)
+                case .claude:
+                    Image(nsImage: image)
+                        .resizable()
+                        .renderingMode(.template)
+                        .foregroundStyle(Color(red: 0.82, green: 0.39, blue: 0.18))
+                case .openCode:
+                    Image(nsImage: image)
+                        .resizable()
+                        .renderingMode(.original)
+                }
             } else {
                 Image(systemName: fallbackSymbol)
                     .resizable()
@@ -3439,6 +4249,17 @@ struct AgentStorageProviderIcon: View {
         }
         return NSImage(contentsOf: url)
     }
+
+    private static func applicationIcon(
+        bundleIdentifier: String,
+        fallbackPath: String
+    ) -> NSImage? {
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) {
+            return NSWorkspace.shared.icon(forFile: url.path)
+        }
+        guard FileManager.default.fileExists(atPath: fallbackPath) else { return nil }
+        return NSWorkspace.shared.icon(forFile: fallbackPath)
+    }
 }
 
 private struct AgentStorageCategoryCell: View {
@@ -3463,7 +4284,7 @@ private struct AgentStorageCategoryCell: View {
 
 private struct AgentStorageCleanupCompletedView: View {
     let completion: AgentStorageCleanupCompletion
-    let reanalyze: () -> Void
+    let reanalyze: (() -> Void)?
 
     var body: some View {
         ScrollView {
@@ -3473,18 +4294,20 @@ private struct AgentStorageCleanupCompletedView: View {
                     .padding(.top, 24)
                 accuracyNotice
                     .padding(.top, 24)
-                Button(action: reanalyze) {
-                    Label(L10n.text("重新分析"), systemImage: "arrow.clockwise")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                        .frame(width: 220, height: 46)
-                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 8))
-                        .contentShape(Rectangle())
+                if let reanalyze {
+                    Button(action: reanalyze) {
+                        Label(L10n.text("重新分析"), systemImage: "arrow.clockwise")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                            .frame(width: 220, height: 46)
+                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 8))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(AgentStoragePrimaryActionButtonStyle())
+                    .keyboardShortcut(.defaultAction)
+                    .padding(.top, 24)
+                    .accessibilityIdentifier("agent-storage-reanalyze-after-cleanup")
                 }
-                .buttonStyle(AgentStoragePrimaryActionButtonStyle())
-                .keyboardShortcut(.defaultAction)
-                .padding(.top, 24)
-                .accessibilityIdentifier("agent-storage-reanalyze-after-cleanup")
 
                 Label(
                     L10n.text("分析会增加 CPU 与磁盘读取，可随时停止。"),
@@ -4655,11 +5478,8 @@ private struct AgentStorageCompactDetail: View {
                 Spacer()
                 Button(action: dismiss.callAsFunction) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(width: 28, height: 28)
-                        .contentShape(Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AppIconButtonStyle(size: 30, isFramed: false))
                 .help(L10n.text("关闭详情"))
                 .accessibilityLabel(L10n.text("关闭详情"))
                 .accessibilityIdentifier("agent-storage-close-compact-detail")
@@ -4691,11 +5511,8 @@ private struct AgentStorageTransientDetail: View {
                 Spacer()
                 Button(action: close) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(width: 26, height: 26)
-                        .contentShape(Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AppIconButtonStyle(size: 30, isFramed: false))
                 .help(L10n.text("关闭详情"))
                 .accessibilityLabel(L10n.text("关闭详情"))
             }
@@ -5164,7 +5981,7 @@ private struct AgentStorageDetailView: View {
             Spacer(minLength: 6)
             if let path {
                 Button { reveal(path) } label: { Image(systemName: "folder") }
-                    .buttonStyle(.plain)
+                    .buttonStyle(AppIconButtonStyle(size: 30, isFramed: false))
                     .help(L10n.text("在 Finder 中显示"))
                     .accessibilityLabel(L10n.text("在 Finder 中显示"))
             }

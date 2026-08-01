@@ -262,7 +262,7 @@ struct AgentStorageQualityDetailsView: View {
     @Environment(\.dismiss) private var dismiss
     let details: AgentStorageQualityDetails
     let hidesPrivateDetails: Bool
-    let reanalyze: () -> Void
+    let reanalyze: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -285,16 +285,19 @@ struct AgentStorageQualityDetailsView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button(L10n.text("完成")) { dismiss() }
-                Button {
-                    dismiss()
-                    Task { @MainActor in
-                        await Task.yield()
-                        reanalyze()
+                    .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .large))
+                if let reanalyze {
+                    Button {
+                        dismiss()
+                        Task { @MainActor in
+                            await Task.yield()
+                            reanalyze()
+                        }
+                    } label: {
+                        Label(L10n.text("重新分析"), systemImage: "arrow.clockwise")
                     }
-                } label: {
-                    Label(L10n.text("重新分析"), systemImage: "arrow.clockwise")
+                    .buttonStyle(AppActionButtonStyle(kind: .primary, size: .large))
                 }
-                .buttonStyle(.borderedProminent)
             }
             .padding(16)
         }

@@ -4,8 +4,8 @@ import FindDiskKillerTraceProtocol
 import SwiftUI
 
 enum MainWindowMetrics {
-    static let minimumWidth: CGFloat = 920
-    static let minimumHeight: CGFloat = 620
+    static let minimumWidth: CGFloat = 820
+    static let minimumHeight: CGFloat = 600
     static let sidebarIdealWidth: CGFloat = 210
     static let providerOverviewContentWidth: CGFloat = 1_080
     static let defaultWidth: CGFloat = sidebarIdealWidth + providerOverviewContentWidth + 50
@@ -44,14 +44,14 @@ private struct MonitoringCommands: Commands {
             }
             .keyboardShortcut(".", modifiers: [.command])
             Divider()
-            Button(L10n.text("刷新 AI 空间")) {
+            Button(L10n.text("刷新空间地图")) {
                 refreshAgentStorage?()
             }
             .keyboardShortcut("r", modifiers: [.command])
             .disabled(refreshAgentStorage == nil)
         }
         CommandGroup(after: .sidebar) {
-            Button(L10n.text("返回 AI 空间")) {
+            Button(L10n.text("返回 AI 工具")) {
                 leaveAgentStorageProvider?()
             }
             .keyboardShortcut("[", modifiers: [.command])
@@ -74,6 +74,8 @@ struct FindDiskKillerApp: App {
                 processDetailWindows: runtime.processDetailWindows,
                 history: runtime.history,
                 agentStorage: runtime.agentStorage,
+                storageMap: runtime.storageMap,
+                claudeNodeRuntime: runtime.claudeNodeRuntime,
                 navigation: runtime.navigation,
                 updates: runtime.updates
             )
@@ -200,6 +202,9 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
     private let reopenMainWindow: @MainActor (NSApplication) -> Bool
     private var observesWorkspaceLifecycle = false
     private var isWaitingForTerminationFlush = false
+#if DEBUG
+    private var debugMainWindow: NSWindow?
+#endif
 
     override convenience init() {
         self.init(runtime: .shared)
@@ -253,16 +258,34 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
         }
         runtime.launch()
         observeWorkspaceLifecycle()
+        let forcesMainWindow = CommandLine.arguments.contains("--show-main-window")
         let isDefaultLaunch = notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey]
             as? Bool ?? true
         let shouldShowWindow = UserDefaults.standard.bool(forKey: "openMainWindowAtLogin")
-        if !isDefaultLaunch && !shouldShowWindow {
+        if !forcesMainWindow && !isDefaultLaunch && !shouldShowWindow {
             NSApp.setActivationPolicy(.accessory)
             DispatchQueue.main.async {
                 NSApp.windows.forEach { $0.orderOut(nil) }
             }
         } else {
             NSApp.setActivationPolicy(.regular)
+            if forcesMainWindow {
+                NSApp.activate(ignoringOtherApps: true)
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .milliseconds(250))
+                    guard let self else { return }
+#if DEBUG
+                    if self.reopenMainWindow(NSApp) {
+                        NSApp.activate(ignoringOtherApps: true)
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(750))
+                    self.presentDebugMainWindow()
+#else
+                    _ = self.reopenMainWindow(NSApp)
+#endif
+                }
+            }
         }
     }
 
@@ -327,6 +350,46 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
         mainWindow.makeKeyAndOrderFront(nil)
         return true
     }
+
+#if DEBUG
+    private func presentDebugMainWindow() {
+        if let debugMainWindow {
+            debugMainWindow.orderFrontRegardless()
+            NSRunningApplication.current.activate(options: [.activateAllWindows])
+            return
+        }
+        if reopenMainWindow(NSApp) {
+            NSRunningApplication.current.activate(options: [.activateAllWindows])
+            return
+        }
+        let content = RootView(
+            store: runtime.store,
+            processDetailWindows: runtime.processDetailWindows,
+            history: runtime.history,
+            agentStorage: runtime.agentStorage,
+            storageMap: runtime.storageMap,
+            claudeNodeRuntime: runtime.claudeNodeRuntime,
+            navigation: runtime.navigation,
+            updates: runtime.updates
+        )
+        .frame(minWidth: MainWindowMetrics.minimumWidth, minHeight: MainWindowMetrics.minimumHeight)
+        let controller = NSHostingController(rootView: content)
+        let window = NSWindow(contentViewController: controller)
+        window.identifier = NSUserInterfaceItemIdentifier("main")
+        window.title = "FindDiskKiller"
+        window.setContentSize(NSSize(
+            width: MainWindowMetrics.defaultWidth,
+            height: MainWindowMetrics.defaultHeight
+        ))
+        window.isReleasedWhenClosed = false
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.center()
+        debugMainWindow = window
+        window.orderFrontRegardless()
+        window.makeKey()
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
+    }
+#endif
 
     @MainActor
     private func authorizeAndTestTraceHelperOnce() async -> Bool {

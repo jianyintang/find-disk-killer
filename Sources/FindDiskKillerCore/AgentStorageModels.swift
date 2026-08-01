@@ -239,6 +239,15 @@ public struct AgentStorageSource: Identifiable, Codable, Hashable, Sendable {
     public let isAvailable: Bool
     public let isSessionSource: Bool
     public let kind: AgentStorageSourceKind?
+    public let configuredPath: String
+    public let resolvedPath: String
+    public let discoverySource: AgentDataLocationDiscoveryKind?
+    public let discoveryIdentifier: String?
+    public let volumeID: String?
+    public let volumeName: String?
+    public let volumeMountPath: String?
+    public let alternateConfiguredPaths: [String]
+    public let allocatedBytes: UInt64
 
     public init(
         id: String,
@@ -247,7 +256,16 @@ public struct AgentStorageSource: Identifiable, Codable, Hashable, Sendable {
         path: String,
         isAvailable: Bool,
         isSessionSource: Bool,
-        kind: AgentStorageSourceKind? = nil
+        kind: AgentStorageSourceKind? = nil,
+        configuredPath: String? = nil,
+        resolvedPath: String? = nil,
+        discoverySource: AgentDataLocationDiscoveryKind? = nil,
+        discoveryIdentifier: String? = nil,
+        volumeID: String? = nil,
+        volumeName: String? = nil,
+        volumeMountPath: String? = nil,
+        alternateConfiguredPaths: [String] = [],
+        allocatedBytes: UInt64 = 0
     ) {
         self.id = id
         self.provider = provider
@@ -256,6 +274,71 @@ public struct AgentStorageSource: Identifiable, Codable, Hashable, Sendable {
         self.isAvailable = isAvailable
         self.isSessionSource = isSessionSource
         self.kind = kind
+        self.configuredPath = configuredPath ?? path
+        self.resolvedPath = resolvedPath ?? path
+        self.discoverySource = discoverySource
+        self.discoveryIdentifier = discoveryIdentifier
+        self.volumeID = volumeID
+        self.volumeName = volumeName
+        self.volumeMountPath = volumeMountPath
+        self.alternateConfiguredPaths = alternateConfiguredPaths
+        self.allocatedBytes = allocatedBytes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, provider, displayName, path, isAvailable, isSessionSource, kind
+        case configuredPath, resolvedPath, discoverySource, discoveryIdentifier
+        case volumeID, volumeName, volumeMountPath, alternateConfiguredPaths, allocatedBytes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let path = try values.decode(String.self, forKey: .path)
+        self.init(
+            id: try values.decode(String.self, forKey: .id),
+            provider: try values.decode(AgentStorageProvider.self, forKey: .provider),
+            displayName: try values.decode(String.self, forKey: .displayName),
+            path: path,
+            isAvailable: try values.decode(Bool.self, forKey: .isAvailable),
+            isSessionSource: try values.decode(Bool.self, forKey: .isSessionSource),
+            kind: try values.decodeIfPresent(AgentStorageSourceKind.self, forKey: .kind),
+            configuredPath: try values.decodeIfPresent(String.self, forKey: .configuredPath) ?? path,
+            resolvedPath: try values.decodeIfPresent(String.self, forKey: .resolvedPath) ?? path,
+            discoverySource: try values.decodeIfPresent(
+                AgentDataLocationDiscoveryKind.self,
+                forKey: .discoverySource
+            ),
+            discoveryIdentifier: try values.decodeIfPresent(String.self, forKey: .discoveryIdentifier),
+            volumeID: try values.decodeIfPresent(String.self, forKey: .volumeID),
+            volumeName: try values.decodeIfPresent(String.self, forKey: .volumeName),
+            volumeMountPath: try values.decodeIfPresent(String.self, forKey: .volumeMountPath),
+            alternateConfiguredPaths: try values.decodeIfPresent(
+                [String].self,
+                forKey: .alternateConfiguredPaths
+            ) ?? [],
+            allocatedBytes: try values.decodeIfPresent(UInt64.self, forKey: .allocatedBytes) ?? 0
+        )
+    }
+
+    public func withAllocatedBytes(_ allocatedBytes: UInt64) -> Self {
+        Self(
+            id: id,
+            provider: provider,
+            displayName: displayName,
+            path: path,
+            isAvailable: isAvailable,
+            isSessionSource: isSessionSource,
+            kind: kind,
+            configuredPath: configuredPath,
+            resolvedPath: resolvedPath,
+            discoverySource: discoverySource,
+            discoveryIdentifier: discoveryIdentifier,
+            volumeID: volumeID,
+            volumeName: volumeName,
+            volumeMountPath: volumeMountPath,
+            alternateConfiguredPaths: alternateConfiguredPaths,
+            allocatedBytes: allocatedBytes
+        )
     }
 }
 

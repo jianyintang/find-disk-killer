@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 
 enum SettingsPane: String, CaseIterable, Hashable, Identifiable, Sendable {
@@ -36,6 +37,15 @@ final class AppNavigationCoordinator {
     private(set) var destination: SidebarDestination = .monitoring(.overview)
     private(set) var lastMonitoringDestination: AppSection = .overview
     var settingsPane: SettingsPane = .general
+
+    init() {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["FIND_DISK_KILLER_INITIAL_SECTION"] == "storage-map" {
+            destination = .monitoring(.agentStorage)
+            lastMonitoringDestination = .agentStorage
+        }
+        #endif
+    }
 
     func select(_ destination: SidebarDestination) {
         self.destination = destination
