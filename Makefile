@@ -1,6 +1,6 @@
 .PHONY: project test test-ci test-agent-cleanup-fixtures test-privileged lint release
 
-CI_LOCAL_ONLY_TESTS = FindDiskKillerCoreTests\.agentStorage|FindDiskKillerAppTests\.codexJSONRPCUsesOfficialDeleteAndVerifiesNotFound|recorder(RetriesABucketAfterATransactionLockFailure|AcceptsTheNextMinuteWhileThePreviousMinuteAwaitsRetry|BoundsPendingMinutesDuringASustainedWriteFailure)|fileChangeWatcherReportsChangesWithoutProcessAttribution|forceStopPrecedesReply
+CI_LOCAL_ONLY_TESTS = FindDiskKillerCoreTests\.agentStorage|FindDiskKillerAppTests\.codexJSONRPCUsesOfficialDeleteAndVerifiesNotFound|recorder(RetriesABucketAfterATransactionLockFailure|AcceptsTheNextMinuteWhileThePreviousMinuteAwaitsRetry|BoundsPendingMinutesDuringASustainedWriteFailure)|scanStartsEveryDetectedSourceWithoutWaitingForAFixedWorkerQueue|fileChangeWatcherReportsChangesWithoutProcessAttribution|forceStopPrecedesReply
 
 project:
 	SWIFT_DETERMINISTIC_HASHING=1 xcodegen generate
@@ -10,7 +10,7 @@ test:
 	swift test --no-parallel
 
 test-ci:
-	bash scripts/test-ci.sh
+	CI_LOCAL_ONLY_TESTS='$(CI_LOCAL_ONLY_TESTS)' bash scripts/test-ci.sh
 
 test-agent-cleanup-fixtures:
 	/bin/zsh scripts/verify-agent-cleanup-fixtures.sh

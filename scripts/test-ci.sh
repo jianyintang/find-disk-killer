@@ -23,4 +23,4 @@ if [[ "${CI_CORE_ONLY:-0}" == "1" ]]; then
 fi
 
 swift test --build-system native --no-parallel --jobs 1 \
-    --skip 'FindDiskKillerCoreTests\.agentStorage|FindDiskKillerAppTests\.codexJSONRPCUsesOfficialDeleteAndVerifiesNotFound|recorder(RetriesABucketAfterATransactionLockFailure|AcceptsTheNextMinuteWhileThePreviousMinuteAwaitsRetry|BoundsPendingMinutesDuringASustainedWriteFailure)|fileChangeWatcherReportsChangesWithoutProcessAttribution|forceStopPrecedesReply'
+    --skip "${CI_LOCAL_ONLY_TESTS:?CI_LOCAL_ONLY_TESTS is required}"
