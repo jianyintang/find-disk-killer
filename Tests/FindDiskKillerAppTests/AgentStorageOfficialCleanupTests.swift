@@ -351,10 +351,13 @@ private actor CancellationGate {
 }
 
 @Test func codexJSONRPCUsesOfficialDeleteAndVerifiesNotFound() async throws {
-    let fixture = try CleanupFixture(provider: .codex, count: 1)
+    let fixture = try CleanupFixture(
+        provider: .codex,
+        count: 1,
+        usesSymlinkedCodexSource: true
+    )
     defer { fixture.destroy() }
     let script = fixture.root.appending(path: "fake-codex")
-    let homeJSON = try #require(String(data: JSONEncoder().encode(fixture.root.path), encoding: .utf8))
     let scriptText = """
     #!/usr/bin/ruby
     require 'json'
@@ -368,7 +371,7 @@ private actor CancellationGate {
       next unless request['id']
       case request['method']
       when 'initialize'
-        puts({id: request['id'], result: {userAgent: 'Codex fixture', codexHome: \(homeJSON), platformFamily: 'unix', platformOs: 'macos'}}.to_json)
+        puts({id: request['id'], result: {userAgent: 'Codex fixture', codexHome: ENV.fetch('CODEX_HOME'), platformFamily: 'unix', platformOs: 'macos'}}.to_json)
       when 'thread/read'
         reads += 1
         if reads == 1
@@ -448,11 +451,20 @@ private final class CleanupFixture {
     init(
         provider: AgentStorageProvider,
         count: Int,
-        sourceKind: AgentStorageSourceKind? = nil
+        sourceKind: AgentStorageSourceKind? = nil,
+        usesSymlinkedCodexSource: Bool = false
     ) throws {
         root = FileManager.default.temporaryDirectory
             .appending(path: "fdk-cleanup-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let sourcePath: String
+        if usesSymlinkedCodexSource {
+            let sourceLink = root.appending(path: "linked-codex-home")
+            try FileManager.default.createSymbolicLink(at: sourceLink, withDestinationURL: root)
+            sourcePath = sourceLink.path
+        } else {
+            sourcePath = root.path
+        }
         var urls: [URL] = []
         var values: [AgentStorageThreadFamily] = []
         for index in 0..<count {
@@ -483,7 +495,7 @@ private final class CleanupFixture {
                 composition: [.conversation: artifact.allocatedBytes],
                 cleanupArtifacts: [artifact],
                 sourceKind: sourceKind ?? (provider == .codex ? .codexHome : .claudeCode),
-                sourcePath: root.path,
+                sourcePath: sourcePath,
                 projectPath: root.appending(path: "workspace").path
             ))
         }

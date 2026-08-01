@@ -236,7 +236,7 @@ enum CodexExecutableLocator {
 private enum CodexJSONRPCSession {
     static func probe(executable: String, expectedHome: String?) async throws {
         try await Task.detached(priority: .userInitiated) {
-            let client = try CodexJSONRPCClient(executable: executable)
+            let client = try CodexJSONRPCClient(executable: executable, codexHome: expectedHome)
             defer { client.stop() }
             try client.initialize(expectedHome: expectedHome)
             let response = try client.request(
@@ -256,7 +256,7 @@ private enum CodexJSONRPCSession {
         threadID: String
     ) async throws -> AgentStorageCleanupOutcome {
         try await Task.detached(priority: .userInitiated) {
-            let client = try CodexJSONRPCClient(executable: executable)
+            let client = try CodexJSONRPCClient(executable: executable, codexHome: expectedHome)
             defer { client.stop() }
             try client.initialize(expectedHome: expectedHome)
 
@@ -302,9 +302,14 @@ private final class CodexJSONRPCClient: @unchecked Sendable {
     private let output = Pipe()
     private var pending = Data()
 
-    init(executable: String) throws {
+    init(executable: String, codexHome: String?) throws {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = ["app-server"]
+        if let codexHome {
+            var environment = ProcessInfo.processInfo.environment
+            environment["CODEX_HOME"] = codexHome
+            process.environment = environment
+        }
         process.standardInput = input
         process.standardOutput = output
         process.standardError = Pipe()
