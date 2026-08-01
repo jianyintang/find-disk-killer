@@ -645,6 +645,49 @@ struct StorageAnalyzerTests {
         #expect(image.cleanupTarget == nil)
     }
 
+    @Test func dockerInventoryFallbackKeepsObjectListsWhenCapacityReportFails() throws {
+        let envelope = try DockerStorageInspector.makeFallbackEnvelope(
+            images: Data(#"""
+            {"ID":"sha256:dangling","Repository":"example/app","Tag":"latest","Size":"2GB","Containers":"0"}
+            {"ID":"sha256:used","Repository":"example/used","Tag":"latest","Size":"3GB","Containers":"1"}
+            """#.utf8),
+            containers: Data(#"{"ID":"container-1","Names":"worker","Image":"example/used:latest","State":"exited","Status":"Exited","Size":"8MB"}"#.utf8),
+            volumes: Data(#"{"Name":"cache","Links":"0"}"#.utf8)
+        )
+
+        let groups = try DockerStorageInspector.parseFallback(envelope)
+        let images = try #require(groups.first { $0.kind == .dockerImages })
+        let containers = try #require(groups.first { $0.kind == .dockerContainers })
+        let volumes = try #require(groups.first { $0.kind == .dockerVolumes })
+
+        #expect(images.children.count == 2)
+        #expect(images.children.first { $0.title == "example/app:latest" }?.cleanupTarget == .dockerImage(id: "sha256:dangling"))
+        #expect(containers.children.first?.cleanupTarget == .dockerContainer(id: "container-1"))
+        #expect(volumes.children.first?.title == "cache")
+    }
+
+    @Test func podmanInventoryFallbackParsesImageContainerAndVolumeLists() async throws {
+        let envelope = try DockerStorageInspector.makeFallbackEnvelope(
+            images: Data(#"[{"Id":"podman-image","Names":["example/app:latest"],"Repository":"example/app","Tag":"latest","Size":"2GB","Containers":0}]"#.utf8),
+            containers: Data(#"[{"Id":"podman-container","Names":["worker"],"Image":"example/app:latest","State":"exited","Status":"Exited","Size":"8MB"}]"#.utf8),
+            volumes: Data(#"[{"Name":"cache"}]"#.utf8)
+        )
+        let inspector = PodmanStorageInspector(
+            runner: { throw DockerStorageInspectorError.unavailable },
+            fallbackRunner: { envelope }
+        )
+
+        let inventory = await inspector.inspect()
+        let images = try #require(inventory.nodes.first { $0.kind == .dockerImages })
+        let containers = try #require(inventory.nodes.first { $0.kind == .dockerContainers })
+        let volumes = try #require(inventory.nodes.first { $0.kind == .dockerVolumes })
+
+        #expect(images.children.first?.title == "example/app:latest")
+        #expect(images.children.first?.cleanupTarget == .dockerImage(id: "podman-image"))
+        #expect(containers.children.first?.cleanupTarget == .dockerContainer(id: "podman-container"))
+        #expect(volumes.children.first?.title == "cache")
+    }
+
     @Test func catalogReadsDockerDesktopConfiguredDataFolder() throws {
         let fixture = try StorageFixture()
         defer { fixture.remove() }

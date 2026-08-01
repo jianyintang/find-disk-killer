@@ -19,13 +19,16 @@ struct DockerStorageInspector: Sendable {
     typealias ImageInspectionRunner = @Sendable () async throws -> [DockerImageInspection]
     private let runner: Runner
     private let imageInspectionRunner: ImageInspectionRunner
+    private let fallbackRunner: Runner
 
     init(
         runner: @escaping Runner = DockerStorageInspector.runDockerSystemDF,
-        imageInspectionRunner: @escaping ImageInspectionRunner = DockerStorageInspector.runDockerImageInspections
+        imageInspectionRunner: @escaping ImageInspectionRunner = DockerStorageInspector.runDockerImageInspections,
+        fallbackRunner: @escaping Runner = DockerStorageInspector.runDockerObjectLists
     ) {
         self.runner = runner
         self.imageInspectionRunner = imageInspectionRunner
+        self.fallbackRunner = fallbackRunner
     }
 
     func inspect() async -> DockerStorageInventory {
@@ -45,6 +48,21 @@ struct DockerStorageInspector: Sendable {
                     : nil
             )
         } catch {
+            if let fallbackData = try? await fallbackRunner() {
+                let references = try? await imageInspectionRunner()
+                let referenceMap = references.map { inspections in
+                    Dictionary(uniqueKeysWithValues: inspections.map { ($0.id, $0.references) })
+                }
+                if let nodes = try? Self.parseFallback(
+                    fallbackData,
+                    imageReferencesByID: referenceMap
+                ) {
+                    return DockerStorageInventory(
+                        nodes: nodes,
+                        diagnostic: "Docker Engine 容量报告不可用，已使用对象清单"
+                    )
+                }
+            }
             return DockerStorageInventory(
                 nodes: [],
                 diagnostic: "Docker Engine inventory was unavailable"
@@ -211,6 +229,95 @@ struct DockerStorageInspector: Sendable {
         ]
     }
 
+    static func parseFallback(
+        _ data: Data,
+        imageReferencesByID: [String: [String]]? = nil
+    ) throws -> [StorageResourceNode] {
+        guard let envelope = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw DockerStorageInspectorError.malformedOutput
+        }
+        func records(_ key: String) -> [[String: Any]] {
+            envelope[key] as? [[String: Any]] ?? []
+        }
+        func value(_ record: [String: Any], _ keys: String...) -> String {
+            for key in keys {
+                if let string = record[key] as? String, !string.isEmpty { return string }
+                if let number = record[key] as? NSNumber { return number.stringValue }
+            }
+            return ""
+        }
+
+        let normalizedImages = records("Images").map { record -> [String: Any] in
+            let id = value(record, "ID", "Id", "id")
+            let repository = value(record, "Repository", "repository")
+            let tag = value(record, "Tag", "tag")
+            let size = value(record, "Size", "size")
+            let containers = value(record, "Containers", "containers")
+            return [
+                "ID": id,
+                "Repository": repository,
+                "Tag": tag,
+                "Containers": containers.isEmpty ? "0" : containers,
+                "Size": size,
+                "SharedSize": value(record, "SharedSize", "Shared", "shared"),
+                "UniqueSize": value(record, "UniqueSize", "Unique", "unique").isEmpty
+                    ? size
+                    : value(record, "UniqueSize", "Unique", "unique"),
+                "VirtualSize": value(record, "VirtualSize", "virtualSize", "size").isEmpty
+                    ? size
+                    : value(record, "VirtualSize", "virtualSize", "size")
+            ]
+        }
+        let normalizedContainers = records("Containers").map { record -> [String: Any] in
+            [
+                "ID": value(record, "ID", "Id", "id"),
+                "Names": value(record, "Names", "Name", "names", "name"),
+                "Image": value(record, "Image", "image"),
+                "State": value(record, "State", "state"),
+                "Status": value(record, "Status", "status"),
+                "Size": value(record, "Size", "size", "SizeRw")
+            ]
+        }
+        let normalizedVolumes = records("Volumes").map { record -> [String: Any] in
+            [
+                "Name": value(record, "Name", "name"),
+                "Links": value(record, "Links", "links"),
+                "Size": value(record, "Size", "size")
+            ]
+        }
+        let normalizedBuildCache = records("BuildCache").map { record -> [String: Any] in
+            [
+                "ID": value(record, "ID", "Id", "id"),
+                "Description": value(record, "Description", "description"),
+                "Size": value(record, "Size", "size"),
+                "InUse": value(record, "InUse", "inUse")
+                    .lowercased() == "true" ? "true" : "false",
+                "LastUsedSince": value(record, "LastUsedSince", "lastUsedSince")
+            ]
+        }
+        let inferredReferences = normalizedImages.reduce(into: [String: [String]]()) { result, image in
+            guard let id = image["ID"] as? String, !id.isEmpty else { return }
+            let repository = image["Repository"] as? String ?? ""
+            let tag = image["Tag"] as? String ?? ""
+            guard !repository.isEmpty, repository != "<none>" else {
+                if result[id] == nil { result[id] = [] }
+                return
+            }
+            result[id, default: []].append("\(repository):\(tag.isEmpty ? "latest" : tag)")
+        }
+        let normalized: [String: Any] = [
+            "Images": normalizedImages,
+            "Containers": normalizedContainers,
+            "Volumes": normalizedVolumes,
+            "BuildCache": normalizedBuildCache
+        ]
+        let normalizedData = try JSONSerialization.data(withJSONObject: normalized)
+        return try parse(
+            normalizedData,
+            imageReferencesByID: imageReferencesByID ?? inferredReferences
+        )
+    }
+
     private static func group(
         id: String,
         kind: StorageResourceKind,
@@ -275,7 +382,7 @@ struct DockerStorageInspector: Sendable {
 
     private static func runDockerSystemDF() async throws -> Data {
         guard let executable = dockerExecutable() else { throw DockerStorageInspectorError.unavailable }
-        return try await DockerCommandRunner().run(
+        return try await ContainerCommandRunner().run(
             executableURL: executable,
             arguments: ["system", "df", "-v", "--format", "{{json .}}"],
             timeout: .seconds(12),
@@ -283,9 +390,67 @@ struct DockerStorageInspector: Sendable {
         )
     }
 
+    private static func runDockerObjectLists() async throws -> Data {
+        guard let executable = dockerExecutable() else { throw DockerStorageInspectorError.unavailable }
+        let runner = ContainerCommandRunner()
+        async let images = runner.run(
+            executableURL: executable,
+            arguments: ["image", "ls", "--all", "--no-trunc", "--format", "{{json .}}"],
+            timeout: .seconds(8),
+            maximumOutputBytes: 8 * 1_024 * 1_024
+        )
+        async let containers = runner.run(
+            executableURL: executable,
+            arguments: ["container", "ls", "--all", "--size", "--no-trunc", "--format", "{{json .}}"],
+            timeout: .seconds(8),
+            maximumOutputBytes: 8 * 1_024 * 1_024
+        )
+        async let volumes = runner.run(
+            executableURL: executable,
+            arguments: ["volume", "ls", "--format", "{{json .}}"],
+            timeout: .seconds(8),
+            maximumOutputBytes: 4 * 1_024 * 1_024
+        )
+        return try makeFallbackEnvelope(
+            images: await images,
+            containers: await containers,
+            volumes: await volumes
+        )
+    }
+
+    static func makeFallbackEnvelope(
+        images: Data,
+        containers: Data,
+        volumes: Data,
+        buildCache: Data = Data("[]".utf8)
+    ) throws -> Data {
+        func records(_ data: Data) -> [[String: Any]] {
+            if let value = try? JSONSerialization.jsonObject(with: data),
+               let array = value as? [[String: Any]] {
+                return array
+            }
+            if let value = try? JSONSerialization.jsonObject(with: data),
+               let record = value as? [String: Any] {
+                return [record]
+            }
+            return String(decoding: data, as: UTF8.self)
+                .split(whereSeparator: \.isNewline)
+                .compactMap { line in
+                    guard let lineData = String(line).data(using: .utf8) else { return nil }
+                    return try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
+                }
+        }
+        return try JSONSerialization.data(withJSONObject: [
+            "Images": records(images),
+            "Containers": records(containers),
+            "Volumes": records(volumes),
+            "BuildCache": records(buildCache)
+        ])
+    }
+
     private static func runDockerImageInspections() async throws -> [DockerImageInspection] {
         guard let executable = dockerExecutable() else { throw DockerStorageInspectorError.unavailable }
-        let runner = DockerCommandRunner()
+        let runner = ContainerCommandRunner()
         let idData = try await runner.run(
             executableURL: executable,
             arguments: ["image", "ls", "--all", "--quiet", "--no-trunc"],
@@ -323,6 +488,89 @@ struct DockerStorageInspector: Sendable {
             "/usr/local/bin/docker",
             "/opt/homebrew/bin/docker",
             "/Applications/Docker.app/Contents/Resources/bin/docker"
+        ].first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+            .map(URL.init(fileURLWithPath:))
+    }
+}
+
+struct PodmanStorageInspector: Sendable {
+    typealias Runner = @Sendable () async throws -> Data
+    private let runner: Runner
+    private let fallbackRunner: Runner
+
+    init(
+        runner: @escaping Runner = PodmanStorageInspector.runSystemDF,
+        fallbackRunner: @escaping Runner = PodmanStorageInspector.runObjectLists
+    ) {
+        self.runner = runner
+        self.fallbackRunner = fallbackRunner
+    }
+
+    func inspect() async -> DockerStorageInventory {
+        if let data = try? await runner(),
+           let nodes = try? DockerStorageInspector.parse(data) {
+            return DockerStorageInventory(nodes: nodes, diagnostic: nil)
+        }
+        guard let fallbackData = try? await fallbackRunner(),
+              let nodes = try? DockerStorageInspector.parseFallback(fallbackData) else {
+            return DockerStorageInventory(
+                nodes: [],
+                diagnostic: "Podman Engine inventory unavailable"
+            )
+        }
+        return DockerStorageInventory(
+            nodes: nodes,
+            diagnostic: "Podman 容量报告不可用，已使用对象清单"
+        )
+    }
+
+    private static func runSystemDF() async throws -> Data {
+        guard let executable = podmanExecutable() else {
+            throw DockerStorageInspectorError.unavailable
+        }
+        return try await ContainerCommandRunner().run(
+            executableURL: executable,
+            arguments: ["system", "df", "-v", "--format", "json"],
+            timeout: .seconds(12),
+            maximumOutputBytes: 16 * 1_024 * 1_024
+        )
+    }
+
+    private static func runObjectLists() async throws -> Data {
+        guard let executable = podmanExecutable() else {
+            throw DockerStorageInspectorError.unavailable
+        }
+        let runner = ContainerCommandRunner()
+        async let images = runner.run(
+            executableURL: executable,
+            arguments: ["images", "--all", "--no-trunc", "--format", "json"],
+            timeout: .seconds(8),
+            maximumOutputBytes: 8 * 1_024 * 1_024
+        )
+        async let containers = runner.run(
+            executableURL: executable,
+            arguments: ["ps", "--all", "--size", "--no-trunc", "--format", "json"],
+            timeout: .seconds(8),
+            maximumOutputBytes: 8 * 1_024 * 1_024
+        )
+        async let volumes = runner.run(
+            executableURL: executable,
+            arguments: ["volume", "ls", "--format", "json"],
+            timeout: .seconds(8),
+            maximumOutputBytes: 4 * 1_024 * 1_024
+        )
+        return try DockerStorageInspector.makeFallbackEnvelope(
+            images: await images,
+            containers: await containers,
+            volumes: await volumes
+        )
+    }
+
+    private static func podmanExecutable() -> URL? {
+        [
+            "/opt/homebrew/bin/podman",
+            "/usr/local/bin/podman",
+            "/Applications/Podman Desktop.app/Contents/Resources/bin/podman"
         ].first(where: { FileManager.default.isExecutableFile(atPath: $0) })
             .map(URL.init(fileURLWithPath:))
     }
@@ -428,7 +676,7 @@ private struct DockerBuildCacheRecord: Decodable {
     }
 }
 
-private actor DockerCommandRunner {
+actor ContainerCommandRunner {
     func run(
         executableURL: URL,
         arguments: [String],

@@ -121,10 +121,17 @@ public actor StorageAnalyzer {
     private func inspectProviderInventories(
         for candidates: [StorageSourceCandidate]
     ) async -> [StorageSourceID: DockerStorageInventory] {
-        guard configuration.providerInventoryEnabled,
-              candidates.contains(where: { $0.id == .docker }) else { return [:] }
-        let inventory = await DockerStorageInspector().inspect()
-        return [.docker: inventory]
+        guard configuration.providerInventoryEnabled else { return [:] }
+        async let dockerInventory: DockerStorageInventory? = candidates.contains(where: { $0.id == .docker })
+            ? await DockerStorageInspector().inspect()
+            : nil
+        async let podmanInventory: DockerStorageInventory? = candidates.contains(where: { $0.id == .podman })
+            ? await PodmanStorageInspector().inspect()
+            : nil
+        var result: [StorageSourceID: DockerStorageInventory] = [:]
+        if let inventory = await dockerInventory { result[.docker] = inventory }
+        if let inventory = await podmanInventory { result[.podman] = inventory }
+        return result
     }
 
     private func scanCandidates(
@@ -812,15 +819,22 @@ public actor StorageAnalyzer {
         physicalNodes: [StorageResourceNode],
         inventoryNodes: [StorageResourceNode]
     ) -> [StorageResourceNode] {
-        guard sourceID == .docker else { return physicalNodes }
+        guard sourceID == .docker || sourceID == .podman else { return physicalNodes }
+        let inventoryNodes = sourceID == .podman
+            ? namespaceContainerInventory(inventoryNodes, sourceID: sourceID)
+            : inventoryNodes
+        let isPodman = sourceID == .podman
+        let sourceTitle = isPodman ? "Podman" : "Docker"
         let physicalBytes = physicalNodes.reduce(UInt64.zero) {
             $0.addingClamped($1.allocatedBytes)
         }
         var nodes = [StorageResourceNode(
-            id: "docker.physical-storage",
+            id: "\(sourceID.rawValue).physical-storage",
             kind: .dockerStorage,
-            title: "宿主机物理存储",
-            detail: "Docker Desktop 虚拟磁盘、维护副本、日志与状态",
+            title: "\(sourceTitle) 宿主机物理存储",
+            detail: isPodman
+                ? "Podman machine、容器层与宿主机状态"
+                : "Docker Desktop 虚拟磁盘、维护副本、日志与状态",
             symbol: "internaldrive.fill",
             allocatedBytes: physicalBytes,
             logicalBytes: physicalNodes.reduce(UInt64.zero) {
@@ -834,10 +848,10 @@ public actor StorageAnalyzer {
         )]
         if !inventoryNodes.isEmpty {
             nodes.append(StorageResourceNode(
-                id: "docker.engine-objects",
+                id: "\(sourceID.rawValue).engine-objects",
                 kind: .dockerStorage,
-                title: "Docker Engine 资源",
-                detail: "提供者报告的对象关系；镜像、容器与缓存可能共享数据层",
+                title: "\(sourceTitle) Engine 资源",
+                detail: "提供者报告的镜像、容器、Volume 与构建缓存；对象可能共享底层数据",
                 symbol: "point.3.connected.trianglepath.dotted",
                 allocatedBytes: 0,
                 logicalBytes: 0,
@@ -849,6 +863,40 @@ public actor StorageAnalyzer {
             ))
         }
         return nodes
+    }
+
+    private nonisolated static func namespaceContainerInventory(
+        _ nodes: [StorageResourceNode],
+        sourceID: StorageSourceID
+    ) -> [StorageResourceNode] {
+        nodes.map { node in
+            let target: StorageResourceCleanupTarget?
+            switch node.cleanupTarget {
+            case .dockerImage(let id) where sourceID == .podman:
+                target = .podmanImage(id: id)
+            case .dockerContainer(let id) where sourceID == .podman:
+                target = .podmanContainer(id: id)
+            case .dockerVolume(let name) where sourceID == .podman:
+                target = .podmanVolume(name: name)
+            default:
+                target = node.cleanupTarget
+            }
+            return StorageResourceNode(
+                id: sourceID == .podman ? node.id.replacingOccurrences(of: "docker.", with: "podman.") : node.id,
+                kind: node.kind,
+                title: node.title,
+                detail: node.detail,
+                symbol: node.symbol,
+                allocatedBytes: node.allocatedBytes,
+                logicalBytes: node.logicalBytes,
+                entryCount: node.entryCount,
+                risk: node.risk,
+                evidence: node.evidence,
+                isProtected: node.isProtected,
+                cleanupTarget: target,
+                children: namespaceContainerInventory(node.children, sourceID: sourceID)
+            )
+        }
     }
 
     private nonisolated static func makeResourceTree(
