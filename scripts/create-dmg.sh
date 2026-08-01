@@ -54,9 +54,14 @@ if [[ -n "$template_dmg" ]]; then
         -o "$read_write_dmg" >/dev/null
     app_size_kib=$(du -sk "$app_path" | awk '{print $1}')
     minimum_image_mib=$(((app_size_kib + 1023) / 1024 + 64))
-    hdiutil resize \
-        -size "${minimum_image_mib}m" \
-        "$read_write_dmg" >/dev/null
+    minimum_image_bytes=$((minimum_image_mib * 1024 * 1024))
+    current_image_bytes=$(hdiutil imageinfo "$read_write_dmg" \
+        | awk -F': ' '/^Total Bytes:/ {print $2; exit}')
+    if [[ "$current_image_bytes" =~ ^[0-9]+$ ]] && (( current_image_bytes < minimum_image_bytes )); then
+        hdiutil resize \
+            -size "${minimum_image_mib}m" \
+            "$read_write_dmg" >/dev/null
+    fi
 else
     mkdir -p "$background_directory"
     ditto "$app_path" "$staging_directory/$app_name"

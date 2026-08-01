@@ -45,6 +45,7 @@ jobs:
             -destination 'generic/platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
             ONLY_ACTIVE_ARCH=NO \
+            -jobs 1 \
             -quiet \
             build
       - name: Validate release metadata
