@@ -1,7 +1,6 @@
 .PHONY: project test test-ci test-agent-cleanup-fixtures test-privileged lint release
 
 CI_LOCAL_ONLY_TESTS = FindDiskKillerCoreTests\.agentStorage|FindDiskKillerAppTests\.codexJSONRPCUsesOfficialDeleteAndVerifiesNotFound|recorder(RetriesABucketAfterATransactionLockFailure|AcceptsTheNextMinuteWhileThePreviousMinuteAwaitsRetry|BoundsPendingMinutesDuringASustainedWriteFailure)|fileChangeWatcherReportsChangesWithoutProcessAttribution|forceStopPrecedesReply
-SWIFT_BUILD_SYSTEM ?= native
 
 project:
 	SWIFT_DETERMINISTIC_HASHING=1 xcodegen generate
@@ -11,13 +10,7 @@ test:
 	swift test --no-parallel
 
 test-ci:
-	@echo "Running the fast CI suite. Scanner integration, timing, and filesystem-event tests run locally via make test."
-	# Keep CI's Swift frontend memory usage deterministic on hosted macOS runners.
-	@if [ "$(SWIFT_BUILD_SYSTEM)" = "swiftbuild" ] || [ "$(SWIFT_BUILD_SYSTEM)" = "next" ]; then \
-		mkdir -p .build/out/Products/Debug/PackageFrameworks; \
-		ln -sfn ../Sparkle.framework .build/out/Products/Debug/PackageFrameworks/Sparkle.framework; \
-	fi
-	swift test --build-system "$(SWIFT_BUILD_SYSTEM)" --no-parallel --jobs 1 --skip '$(CI_LOCAL_ONLY_TESTS)'
+	bash scripts/test-ci.sh
 
 test-agent-cleanup-fixtures:
 	/bin/zsh scripts/verify-agent-cleanup-fixtures.sh
@@ -29,7 +22,7 @@ test-privileged:
 lint:
 	plutil -lint Sources/FindDiskKillerApp/Resources/PrivacyInfo.xcprivacy
 	@for file in Sources/FindDiskKillerApp/Resources/*.lproj/Localizable.strings; do plutil -lint "$$file"; done
-	bash -n scripts/create-dmg.sh scripts/prepare-claude-cleanup-runtime.sh scripts/release.sh scripts/verify-release.sh scripts/verify-installed-trace-helper.sh
+	bash -n scripts/create-dmg.sh scripts/prepare-claude-cleanup-runtime.sh scripts/release.sh scripts/test-ci.sh scripts/verify-release.sh scripts/verify-installed-trace-helper.sh
 	xcrun swiftc -typecheck scripts/render-dmg-background.swift
 
 release:

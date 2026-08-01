@@ -19,7 +19,7 @@ jobs:
           xcodebuild -version
           swift --version
       - name: Test
-        run: SWIFT_BUILD_SYSTEM=next make test-ci
+        run: CI_CORE_ONLY=1 make test-ci
       - name: Install pinned XcodeGen
         env:
           XCODEGEN_VERSION: 2.42.0
@@ -54,5 +54,5 @@ jobs:
           for file in Sources/FindDiskKillerApp/Resources/*.lproj/Localizable.strings; do
             plutil -lint "$file"
           done
-          bash -n scripts/create-dmg.sh scripts/prepare-claude-cleanup-runtime.sh scripts/release.sh scripts/verify-release.sh
+          bash -n scripts/create-dmg.sh scripts/prepare-claude-cleanup-runtime.sh scripts/release.sh scripts/test-ci.sh scripts/verify-release.sh
           xcrun swiftc -typecheck scripts/render-dmg-background.swift
