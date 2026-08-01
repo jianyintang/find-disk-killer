@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import FindDiskKillerCore
 import SwiftUI
 
@@ -188,6 +189,10 @@ struct StorageResourceTreeView: View {
                 : L10n.text("此资源不提供直接清理")
         }
         switch target {
+        case .trashRepository:
+            return L10n.text("将整个主仓库移入废纸篓；不会删除同目录下的其它仓库")
+        case .removeGitWorktree:
+            return L10n.text("移除这个 Worktree，并保留主仓库")
         case .simulatorDevice:
             return L10n.text("通过 Xcode Simulator 删除此设备及其数据")
         case .simulatorRuntime:
@@ -301,6 +306,8 @@ struct StorageResourceTreeIndex: Identifiable, Equatable, Sendable {
         defaultExpandedIDs = StorageResourceTreeProjection.expansionIDs(
             to: safeRequestIDs,
             in: nodes
+        ).union(
+            StorageResourceTreeProjection.workspaceParentIDs(in: nodes)
         )
         defaultRows = StorageResourceTreeProjection.flatten(
             nodes: nodes,
@@ -331,11 +338,12 @@ struct StorageResourceTreeIndex: Identifiable, Equatable, Sendable {
 
 enum StorageResourceTreeProjection {
     static func presentationNodes(_ nodes: [StorageResourceNode]) -> [StorageResourceNode] {
-        nodes.map(presentationNode)
+        repositoryParentGroups(nodes.map(presentationNode))
     }
 
-    private static func presentationNode(_ node: StorageResourceNode) -> StorageResourceNode {
-        let children = node.children.map(presentationNode)
+    private static func presentationNode(_ rawNode: StorageResourceNode) -> StorageResourceNode {
+        let node = migratedRepositoryNode(rawNode)
+        let children = repositoryParentGroups(node.children.map(presentationNode))
         let presentedChildren: [StorageResourceNode]
         if children.count == 1,
            let child = children.first,
@@ -363,6 +371,157 @@ enum StorageResourceTreeProjection {
             cleanupTarget: node.cleanupTarget,
             children: presentedChildren
         )
+    }
+
+    static func workspaceParentIDs(in nodes: [StorageResourceNode]) -> Set<String> {
+        var result = Set<String>()
+        for node in nodes {
+            if node.id.hasPrefix("workspace.parent."), !node.children.isEmpty {
+                result.insert(node.id)
+            }
+            result.formUnion(workspaceParentIDs(in: node.children))
+        }
+        return result
+    }
+
+    private static func repositoryParentGroups(
+        _ nodes: [StorageResourceNode]
+    ) -> [StorageResourceNode] {
+        guard !nodes.contains(where: { $0.id.hasPrefix("workspace.parent.") }) else {
+            return nodes
+        }
+
+        var grouped: [String: [StorageResourceNode]] = [:]
+        var standalone: [StorageResourceNode] = []
+        for node in nodes {
+            guard node.kind == .repository,
+                  let path = repositoryPath(from: node) else {
+                standalone.append(node)
+                continue
+            }
+            let parentPath = URL(fileURLWithPath: path)
+                .deletingLastPathComponent()
+                .standardizedFileURL
+                .path
+            grouped[parentPath, default: []].append(node)
+        }
+
+        guard !grouped.isEmpty else {
+            return nodes
+        }
+
+        var groupedNodes: [String: StorageResourceNode] = [:]
+        for (parentPath, children) in grouped where children.count > 1 {
+            let sortedChildren = children.sorted { lhs, rhs in
+                if lhs.allocatedBytes != rhs.allocatedBytes {
+                    return lhs.allocatedBytes > rhs.allocatedBytes
+                }
+                return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+            }
+            groupedNodes[parentPath] = StorageResourceNode(
+                id: "workspace.parent.\(stablePathHash(parentPath))",
+                kind: .location,
+                title: URL(fileURLWithPath: parentPath).lastPathComponent,
+                detail: "上级目录 · \(parentPath)",
+                symbol: "folder.fill",
+                allocatedBytes: sortedChildren.reduce(UInt64.zero) {
+                    let sum = $0.addingReportingOverflow($1.allocatedBytes)
+                    return sum.overflow ? .max : sum.partialValue
+                },
+                logicalBytes: sortedChildren.reduce(UInt64.zero) {
+                    let sum = $0.addingReportingOverflow($1.logicalBytes)
+                    return sum.overflow ? .max : sum.partialValue
+                },
+                entryCount: sortedChildren.reduce(0) { $0 + $1.entryCount },
+                risk: .environmentOrRuntime,
+                evidence: .fileSystemAllocated,
+                isProtected: false,
+                children: sortedChildren
+            )
+        }
+
+        var emittedParents = Set<String>()
+        var result: [StorageResourceNode] = []
+        for node in nodes {
+            guard node.kind == .repository,
+                  let path = repositoryPath(from: node) else {
+                result.append(node)
+                continue
+            }
+            let parentPath = URL(fileURLWithPath: path)
+                .deletingLastPathComponent()
+                .standardizedFileURL
+                .path
+            if let parent = groupedNodes[parentPath] {
+                if emittedParents.insert(parentPath).inserted {
+                    result.append(parent)
+                }
+            } else {
+                result.append(node)
+            }
+        }
+        return result
+    }
+
+    private static func migratedRepositoryNode(
+        _ node: StorageResourceNode
+    ) -> StorageResourceNode {
+        guard node.kind == .repository,
+              node.cleanupTarget == nil,
+              let path = repositoryPath(from: node),
+              !containsCurrentDirectory(path),
+              let identity = pathIdentity(path),
+              FileManager.default.fileExists(atPath: URL(fileURLWithPath: path).appending(path: ".git").path)
+        else { return node }
+        return StorageResourceNode(
+            id: node.id,
+            kind: node.kind,
+            title: node.title,
+            detail: node.detail,
+            symbol: node.symbol,
+            allocatedBytes: node.allocatedBytes,
+            logicalBytes: node.logicalBytes,
+            entryCount: node.entryCount,
+            risk: node.risk,
+            evidence: node.evidence,
+            isProtected: node.isProtected,
+            cleanupTarget: .trashRepository(path: path, identity: identity),
+            children: node.children
+        )
+    }
+
+    private static func repositoryPath(from node: StorageResourceNode) -> String? {
+        guard node.kind == .repository,
+              let detail = node.detail,
+              let path = detail.components(separatedBy: " · ").last,
+              path.hasPrefix("/") else { return nil }
+        return URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    private static func pathIdentity(_ path: String) -> StoragePathIdentity? {
+        let resolved = URL(fileURLWithPath: path)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        var value = stat()
+        guard stat(resolved.path, &value) == 0 else { return nil }
+        return StoragePathIdentity(device: UInt64(value.st_dev), inode: UInt64(value.st_ino))
+    }
+
+    private static func containsCurrentDirectory(_ path: String) -> Bool {
+        let current = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+        return current == path || current.hasPrefix(path.hasSuffix("/") ? path : path + "/")
+    }
+
+    private static func stablePathHash(_ path: String) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in path.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
     }
 
     static func expansionIDs(
@@ -531,6 +690,10 @@ struct StorageCleanupReviewSheet: View {
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
                 Text(L10n.text(request.title)).font(.callout.weight(.medium)).lineLimit(1)
+                Text(cleanupTargetDetail(request.target))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 if let error = outcome?.errorDescription {
                     Text(error).font(.caption).foregroundStyle(.red).lineLimit(2)
                 }
@@ -541,6 +704,29 @@ struct StorageCleanupReviewSheet: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 10)
+    }
+
+    private func cleanupTargetDetail(_ target: StorageResourceCleanupTarget) -> String {
+        switch target {
+        case .trashRepository:
+            return L10n.text("主仓库 · 整个目录移入废纸篓")
+        case .removeGitWorktree:
+            return L10n.text("Worktree · 保留主仓库")
+        case .removePathContents:
+            return L10n.text("可重建缓存 · 移入废纸篓后自动重建目录")
+        case .simulatorDevice:
+            return L10n.text("模拟器设备 · 通过 Xcode Simulator 删除")
+        case .simulatorRuntime:
+            return L10n.text("模拟器运行时 · 通过 Xcode Simulator 删除")
+        case .simulatorRuntimeAsset:
+            return L10n.text("未安装运行时下载包 · 移入废纸篓")
+        case .dockerImage:
+            return L10n.text("Docker 镜像 · 通过 Docker 命令删除")
+        case .dockerContainer:
+            return L10n.text("Docker 容器 · 通过 Docker 命令删除")
+        case .dockerVolume:
+            return L10n.text("Docker Volume · 通过 Docker 命令删除")
+        }
     }
 
     private var totalBytes: UInt64 {

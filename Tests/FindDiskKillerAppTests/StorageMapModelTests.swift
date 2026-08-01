@@ -1546,6 +1546,137 @@ import Testing
     #expect(expanded == ["safe-root", "safe-group"])
 }
 
+@Test func storageResourceTreeExpandsWorkspaceParentDirectoriesByDefault() {
+    let parent = StorageResourceNode(
+        id: "workspace.parent.code",
+        kind: .location,
+        title: "code",
+        symbol: "folder.fill",
+        allocatedBytes: 2,
+        risk: .environmentOrRuntime,
+        evidence: .fileSystemAllocated,
+        isProtected: false,
+        children: [
+            StorageResourceNode(
+                id: "workspace.repository.alpha",
+                kind: .repository,
+                title: "alpha",
+                symbol: "folder.badge.gearshape",
+                allocatedBytes: 1,
+                risk: .protectedUserData,
+                evidence: .fileSystemAllocated,
+                isProtected: true,
+                cleanupTarget: .trashRepository(
+                    path: "/tmp/alpha",
+                    identity: StoragePathIdentity(device: 1, inode: 1)
+                )
+            )
+        ]
+    )
+
+    let index = StorageResourceTreeIndex(nodes: [parent])
+
+    #expect(index.defaultExpandedIDs.contains(parent.id))
+}
+
+@Test func storageResourceTreeMigratesCachedRepositoriesIntoParentDirectories() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "FindDiskKiller-WorkspaceProjection-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let code = root.appending(path: "Downloads/code")
+    let alpha = code.appending(path: "alpha")
+    let beta = code.appending(path: "beta")
+    try FileManager.default.createDirectory(
+        at: alpha.appending(path: ".git"),
+        withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+        at: beta.appending(path: ".git"),
+        withIntermediateDirectories: true
+    )
+
+    func cachedRepository(_ name: String, path: String) -> StorageResourceNode {
+        StorageResourceNode(
+            id: "workspace.repository.\(name)",
+            kind: .repository,
+            title: name,
+            detail: "主仓库 · main · \(path)",
+            symbol: "folder.badge.gearshape",
+            allocatedBytes: 1,
+            risk: .protectedUserData,
+            evidence: .fileSystemAllocated,
+            isProtected: true
+        )
+    }
+
+    let presented = StorageResourceTreeProjection.presentationNodes([
+        cachedRepository("alpha", path: alpha.path),
+        cachedRepository("beta", path: beta.path)
+    ])
+    let parent = try #require(presented.first)
+
+    #expect(parent.title == "code")
+    #expect(parent.children.map(\.title) == ["alpha", "beta"])
+    #expect(parent.children.allSatisfy { node in
+        if case .trashRepository = node.cleanupTarget { return true }
+        return false
+    })
+}
+
+@Test func storageResourceTreeMigratesRepositoriesInsideCachedWorkspaceNode() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "FindDiskKiller-NestedWorkspaceProjection-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let code = root.appending(path: "code")
+    let alpha = code.appending(path: "alpha")
+    let beta = code.appending(path: "beta")
+    try FileManager.default.createDirectory(
+        at: alpha.appending(path: ".git"),
+        withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+        at: beta.appending(path: ".git"),
+        withIntermediateDirectories: true
+    )
+
+    func cachedRepository(_ name: String, path: String) -> StorageResourceNode {
+        StorageResourceNode(
+            id: "workspace.repository.nested.\(name)",
+            kind: .repository,
+            title: name,
+            detail: "主仓库 · main · \(path)",
+            symbol: "folder.badge.gearshape",
+            allocatedBytes: 1,
+            risk: .protectedUserData,
+            evidence: .fileSystemAllocated,
+            isProtected: true
+        )
+    }
+
+    let workspace = StorageResourceNode(
+        id: "workspace.cached-root",
+        kind: .location,
+        title: "Git Workspaces",
+        symbol: "folder.badge.gearshape",
+        allocatedBytes: 2,
+        risk: .environmentOrRuntime,
+        evidence: .fileSystemAllocated,
+        isProtected: true,
+        children: [
+            cachedRepository("alpha", path: alpha.path),
+            cachedRepository("beta", path: beta.path)
+        ]
+    )
+
+    let presented = try #require(
+        StorageResourceTreeProjection.presentationNodes([workspace]).first
+    )
+    let parent = try #require(presented.children.first)
+
+    #expect(parent.title == "code")
+    #expect(parent.children.map(\.title) == ["alpha", "beta"])
+}
+
 @Test func storageResourceTreeIndexResolvesSelectionWithoutRescanningSubtrees() throws {
     let identity = StoragePathIdentity(device: 1, inode: 2)
     let safeLeaf = StorageResourceNode(

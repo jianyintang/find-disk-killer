@@ -2742,11 +2742,21 @@ private struct StorageSourceDetailView: View {
             return L10n.text("当前可读磁盘仍会继续分析；受保护目录尚未加入范围。")
         }
         if let result {
-            let repositories = result.resourceTree.filter { $0.kind == .repository }.count
-            let worktrees = result.resourceTree.reduce(0) { total, node in
-                total + node.children.filter { $0.kind == .worktree }.count
+            func inventoryCounts(in nodes: [StorageResourceNode]) -> (repositories: Int, worktrees: Int) {
+                nodes.reduce(into: (repositories: 0, worktrees: 0)) { counts, node in
+                    if node.kind == .repository { counts.repositories += 1 }
+                    if node.kind == .worktree { counts.worktrees += 1 }
+                    let nested = inventoryCounts(in: node.children)
+                    counts.repositories += nested.repositories
+                    counts.worktrees += nested.worktrees
+                }
             }
-            return L10n.format("已识别 %d 个仓库 · %d 个 Worktree", repositories, worktrees)
+            let inventory = inventoryCounts(in: result.resourceTree)
+            return L10n.format(
+                "已识别 %d 个仓库 · %d 个 Worktree",
+                inventory.repositories,
+                inventory.worktrees
+            )
         }
         return L10n.text("统一定位本机与外接磁盘中的顶层仓库，并解析 Worktree 关系。")
     }
