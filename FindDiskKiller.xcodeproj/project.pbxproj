@@ -7,9 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		0A8A74D12E6F4426A0F9B301 /* FindDiskKillerNodeRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = 0D8A74D12E6F4426A0F9B301 /* FindDiskKillerNodeRuntime */; };
-		0B8A74D12E6F4426A0F9B301 /* FindDiskKillerNodeRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = 0E8A74D12E6F4426A0F9B301 /* FindDiskKillerNodeRuntime */; };
-		0F8A74D12E6F4426A0F9B301 /* VolumeAccessTraceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 108A74D12E6F4426A0F9B301 /* VolumeAccessTraceStore.swift */; };
 		08EC8E6CD62A8E5E0A03E617 /* StorageMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A31940C062C714728E9ACF6 /* StorageMapView.swift */; };
 		0979572E0A5DF2D9EC840C36 /* AgentStorageQualityViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2848171CEE38313F3FC594EC /* AgentStorageQualityViews.swift */; };
 		14074D8194BCFA4E7DC52B9B /* bun.svg in Resources */ = {isa = PBXBuildFile; fileRef = 7B9EA5A5B3717897152E994C /* bun.svg */; };
@@ -33,13 +30,15 @@
 		3F002AD4B37A468C2B7BB4C6 /* bun.png in Resources */ = {isa = PBXBuildFile; fileRef = FB7411C79DAE72E455833BE9 /* bun.png */; };
 		4069BD1E72DDE99FFE0AA115 /* StorageSourceExperience.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB7197A34B2272E898203959 /* StorageSourceExperience.swift */; };
 		48BB3BA5EE8214B73A06CE55 /* RepositoryAccessAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5469758F79679C8385146301 /* RepositoryAccessAuthorization.swift */; };
+		49A3C31BC73263EBCCD5F5F7 /* FindDiskKillerNodeRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = 0259DB70CBFEB5BF4CC58FFA /* FindDiskKillerNodeRuntime */; };
 		4C0DE85EF0F1D2DBE1BCE566 /* xcode.png in Resources */ = {isa = PBXBuildFile; fileRef = 23796DF1553F0D104683CE6B /* xcode.png */; };
 		4DC9698BA70097105ED29FBC /* python.svg in Resources */ = {isa = PBXBuildFile; fileRef = 022649D5F4C40685AF327583 /* python.svg */; };
 		4E5B5EE5D03E588C2834CF89 /* xcode.svg in Resources */ = {isa = PBXBuildFile; fileRef = B3439FC452E8B3EA0BA1AF82 /* xcode.svg */; };
 		4F55C539B0DCFB72B948CB3D /* UpdaterSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE55FF164FA95751B15D33DF /* UpdaterSettingsSection.swift */; };
-		53876D451A4594C01FB8550C /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 56A2D4A3EC905FA5D0BA2A45 /* Sparkle */; };
+		53876D451A4594C01FB8550C /* FindDiskKillerTraceProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = C4C6752601A90F75FCAC330C /* FindDiskKillerTraceProtocol */; };
 		578A6F5F983D65679474BA82 /* AgentDataLocationRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D63E57ABC1F5B2A5BF06B17 /* AgentDataLocationRepository.swift */; };
 		58317958E5A70F2938AF8B08 /* ProcessesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 457028605863AA4C13E784A4 /* ProcessesView.swift */; };
+		59BBA07E26B92F06EA7F40FA /* opencode.icns in Resources */ = {isa = PBXBuildFile; fileRef = 686BBE4C0B4DDBC12F0135E0 /* opencode.icns */; };
 		5DF5AAA84094D4331DDAF9BC /* TraceHelperMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7F04CF503EF4C19FA578DA5 /* TraceHelperMain.swift */; };
 		5E24EACD1AFFADC97204287F /* DisksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F13AE24E17E72270635D523 /* DisksView.swift */; };
 		60FBDF8CE690926784724D9B /* codex-openai.png in Resources */ = {isa = PBXBuildFile; fileRef = D8EBB20F5BF3CF0CE623067C /* codex-openai.png */; };
@@ -65,13 +64,14 @@
 		9DA65F4A10AA2A81637FBC85 /* BrandLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE77A398DCA93D9D1D69BAF1 /* BrandLinks.swift */; };
 		9E3B6D513AAF6D1ECFA54F73 /* FindDiskKillerTraceHelper in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = 129601FEC7DAF3B684090C81 /* FindDiskKillerTraceHelper */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A1A5A345383AD5797E0A9A9D /* FindDiskKillerTraceProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = F12401CDA817FB03FD601CF3 /* FindDiskKillerTraceProtocol */; };
+		A7122AAFB1F2B47B7CE1E65E /* VolumeAccessTraceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CDA16413AFB50D100FEED41 /* VolumeAccessTraceStore.swift */; };
 		AA71A24339B7FC3D577C0C5A /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 12DB0A40C0A9F3B41FEE5274 /* PrivacyInfo.xcprivacy */; };
 		AD2D93837D3F22D35029747C /* THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = 8F5A2845DA87F6AFE0572292 /* THIRD_PARTY_NOTICES.md */; };
 		B878AAEF8FDB35BB9B078B31 /* FileAccessTraceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A3C91E9D097BF60792BFA1D /* FileAccessTraceView.swift */; };
 		B974532CF7564AA95797FE6C /* LoginItemSettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E01B15E8F0C14456E698603B /* LoginItemSettingsModel.swift */; };
 		BB9D8E9D97936D40BE9AC011 /* TraceActivityRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BDED8FB2CC79A69D2E701EF /* TraceActivityRegistry.swift */; };
 		BC2CAC4DA56D1A99EBC46575 /* HistoryReportExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E4F31444D331C3EA7FFE338 /* HistoryReportExporter.swift */; };
-		BC3E000C2202C14A4B4919C6 /* FindDiskKillerTraceProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = C4C6752601A90F75FCAC330C /* FindDiskKillerTraceProtocol */; };
+		BC3E000C2202C14A4B4919C6 /* FindDiskKillerNodeRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = A7733B0AE16B4BE9ED11F27A /* FindDiskKillerNodeRuntime */; };
 		BD8828B6911CFC4D4E24E5CB /* CFindDiskKillerTrace in Frameworks */ = {isa = PBXBuildFile; productRef = E51665319183E47877DA0458 /* CFindDiskKillerTrace */; };
 		BED81DF72719B8136B7FB922 /* FindDiskKiller.icns in Resources */ = {isa = PBXBuildFile; fileRef = 73D1E9A8CB4ED5D09C2B90D7 /* FindDiskKiller.icns */; };
 		C17D460138BAAD4608FB55FC /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 397BF22044FB3F231AE3EF11 /* SettingsView.swift */; };
@@ -82,11 +82,12 @@
 		D13AE54F2957B4238E2008D4 /* com.jianyintang.FindDiskKiller.TraceHelper.plist in CopyFiles */ = {isa = PBXBuildFile; fileRef = 0EC9EF0D9A07E6D818C8D2BF /* com.jianyintang.FindDiskKiller.TraceHelper.plist */; };
 		D8E39C8B0F6523922443851B /* MenuBarPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5CA4BCE3E2500A9F4B1027 /* MenuBarPanel.swift */; };
 		DAAFF80728BFA104A244C5FF /* StorageMapModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A1E6A36A44DA38FEC974BC /* StorageMapModel.swift */; };
+		DDD41EAA7E000CF1BDF580B6 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 56A2D4A3EC905FA5D0BA2A45 /* Sparkle */; };
 		E25BC097CC890DF89F578E08 /* ProcessIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10F875FFF3EC9D9FECC30CD /* ProcessIcon.swift */; };
 		E59CA58612FC6FBA781EA7A4 /* AgentStorageCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2B7CDE4FFBC48FA99A96EE0 /* AgentStorageCleanup.swift */; };
-		E4C1E1A1D6A74CC7A6B96D1A /* opencode.icns in Resources */ = {isa = PBXBuildFile; fileRef = E4C1E1A1D6A74CC7A6B96D1B /* opencode.icns */; };
 		E5BD6E0513E34D1391173CCC /* docker.svg in Resources */ = {isa = PBXBuildFile; fileRef = 631471341300812FE3FB2BAC /* docker.svg */; };
 		EC249E190109F76E7790D340 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 710BED35EF73FDAAD7FBB024 /* Localizable.strings */; };
+		EC72CA4E6E3B8222A0BBB747 /* SnapshotCacheWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06CF61D4CBEE3ACB29380FA1 /* SnapshotCacheWriter.swift */; };
 		ED209ED3CF45CF9917F29283 /* python.png in Resources */ = {isa = PBXBuildFile; fileRef = 4C2759D16DC408C86467A71D /* python.png */; };
 		F3D38434BB5CB2A2FB8B536F /* podman.png in Resources */ = {isa = PBXBuildFile; fileRef = 126E81700516F3763A1FA0CC /* podman.png */; };
 		F56D28AD59EEE6EAF5521F2A /* FindDiskKillerClaudeCleanupHelper in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = 6568E687FF296CBF043BF903 /* FindDiskKillerClaudeCleanupHelper */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -156,14 +157,15 @@
 		0498F8A849C9CC809CFD1580 /* zh-Hant */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hant"; path = "zh-Hant.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		04A7966706E952F64F3F123A /* go.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = go.png; sourceTree = "<group>"; };
 		05253D9B2F9FCF32F7C0961D /* ClaudeNodeRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeNodeRuntime.swift; sourceTree = "<group>"; };
+		06CF61D4CBEE3ACB29380FA1 /* SnapshotCacheWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotCacheWriter.swift; sourceTree = "<group>"; };
 		095D33516AF500CF80F1DB90 /* MonitorChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorChart.swift; sourceTree = "<group>"; };
 		0EC9EF0D9A07E6D818C8D2BF /* com.jianyintang.FindDiskKiller.TraceHelper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = com.jianyintang.FindDiskKiller.TraceHelper.plist; sourceTree = "<group>"; };
-		108A74D12E6F4426A0F9B301 /* VolumeAccessTraceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeAccessTraceStore.swift; sourceTree = "<group>"; };
 		126E81700516F3763A1FA0CC /* podman.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = podman.png; sourceTree = "<group>"; };
 		129601FEC7DAF3B684090C81 /* FindDiskKillerTraceHelper */ = {isa = PBXFileReference; includeInIndex = 0; path = FindDiskKillerTraceHelper; sourceTree = BUILT_PRODUCTS_DIR; };
 		12DB0A40C0A9F3B41FEE5274 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		19522173F0ADEF7848BBB1F9 /* claude-code.svg */ = {isa = PBXFileReference; path = "claude-code.svg"; sourceTree = "<group>"; };
 		195FD2EA225982A5C2A7D542 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		1CDA16413AFB50D100FEED41 /* VolumeAccessTraceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeAccessTraceStore.swift; sourceTree = "<group>"; };
 		1F0023EE9E80BF9FD710B334 /* FileAccessTraceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileAccessTraceStore.swift; sourceTree = "<group>"; };
 		200053F2C1C0330D1C8DE08B /* podman.svg */ = {isa = PBXFileReference; path = podman.svg; sourceTree = "<group>"; };
 		23796DF1553F0D104683CE6B /* xcode.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = xcode.png; sourceTree = "<group>"; };
@@ -195,6 +197,7 @@
 		6568E687FF296CBF043BF903 /* FindDiskKillerClaudeCleanupHelper */ = {isa = PBXFileReference; includeInIndex = 0; path = FindDiskKillerClaudeCleanupHelper; sourceTree = BUILT_PRODUCTS_DIR; };
 		66EE63E6F7899F3E16018B73 /* StorageMapFirstRunView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageMapFirstRunView.swift; sourceTree = "<group>"; };
 		68194E3D67F4FC76209C94C2 /* claude-code.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "claude-code.png"; sourceTree = "<group>"; };
+		686BBE4C0B4DDBC12F0135E0 /* opencode.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = opencode.icns; sourceTree = "<group>"; };
 		6E35F5D951DD72C76FB62E50 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
 		73A1B95E2CC7DE4E5687DCDC /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/Localizable.strings; sourceTree = "<group>"; };
 		73B6B934C85B0BF27848BFDC /* npm.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = npm.png; sourceTree = "<group>"; };
@@ -233,12 +236,11 @@
 		DC2FCEBE4534296A5E190E2E /* chrome.svg */ = {isa = PBXFileReference; path = chrome.svg; sourceTree = "<group>"; };
 		DCA525FC8E67E0D64066F068 /* HistoryChartViewport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryChartViewport.swift; sourceTree = "<group>"; };
 		DEAF50A4052D9A28723D4E58 /* THIRD_PARTY_ASSETS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_ASSETS.md; sourceTree = "<group>"; };
-		E4C1E1A1D6A74CC7A6B96D1B /* opencode.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = opencode.icns; sourceTree = "<group>"; };
 		DF56BEF152FD832388171A2E /* go.svg */ = {isa = PBXFileReference; path = go.svg; sourceTree = "<group>"; };
 		E01B15E8F0C14456E698603B /* LoginItemSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginItemSettingsModel.swift; sourceTree = "<group>"; };
 		E10F875FFF3EC9D9FECC30CD /* ProcessIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessIcon.swift; sourceTree = "<group>"; };
 		E2B7CDE4FFBC48FA99A96EE0 /* AgentStorageCleanup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStorageCleanup.swift; sourceTree = "<group>"; };
-		EEE9B28D012A948147F00DDA /* find-disk-killer-storage-map-analysis */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "find-disk-killer-storage-map-analysis"; path = .; sourceTree = SOURCE_ROOT; };
+		F0158A1AD1320B490CC04EBD /* find-disk-killer */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "find-disk-killer"; path = .; sourceTree = SOURCE_ROOT; };
 		F233B95DF10CF40F0DE7228B /* AppRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRuntime.swift; sourceTree = "<group>"; };
 		F7EDED53B2EF91B59253BF61 /* docker.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = docker.png; sourceTree = "<group>"; };
 		FB7197A34B2272E898203959 /* StorageSourceExperience.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageSourceExperience.swift; sourceTree = "<group>"; };
@@ -246,14 +248,6 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		0C8A74D12E6F4426A0F9B301 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				0B8A74D12E6F4426A0F9B301 /* FindDiskKillerNodeRuntime in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		A7A9C53473370BCDF9BC38E5 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -263,14 +257,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B27D9B2ECC782C7743C3AA57 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				49A3C31BC73263EBCCD5F5F7 /* FindDiskKillerNodeRuntime in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		B8B4DFF6AF11134F931CC003 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				1BFD6A0C548294189B5161F1 /* FindDiskKillerCore in Frameworks */,
-				0A8A74D12E6F4426A0F9B301 /* FindDiskKillerNodeRuntime in Frameworks */,
-				BC3E000C2202C14A4B4919C6 /* FindDiskKillerTraceProtocol in Frameworks */,
-				53876D451A4594C01FB8550C /* Sparkle in Frameworks */,
+				BC3E000C2202C14A4B4919C6 /* FindDiskKillerNodeRuntime in Frameworks */,
+				53876D451A4594C01FB8550C /* FindDiskKillerTraceProtocol in Frameworks */,
+				DDD41EAA7E000CF1BDF580B6 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -291,12 +293,12 @@
 				F7EDED53B2EF91B59253BF61 /* docker.png */,
 				631471341300812FE3FB2BAC /* docker.svg */,
 				73D1E9A8CB4ED5D09C2B90D7 /* FindDiskKiller.icns */,
-				E4C1E1A1D6A74CC7A6B96D1B /* opencode.icns */,
 				04A7966706E952F64F3F123A /* go.png */,
 				DF56BEF152FD832388171A2E /* go.svg */,
 				710BED35EF73FDAAD7FBB024 /* Localizable.strings */,
 				73B6B934C85B0BF27848BFDC /* npm.png */,
 				CACA7EF9AC852657B16B3DA6 /* npm.svg */,
+				686BBE4C0B4DDBC12F0135E0 /* opencode.icns */,
 				869F31AD6F7AED0595FCC3C5 /* pnpm.png */,
 				8EBE7E01BFA1582619CCC542 /* pnpm.svg */,
 				126E81700516F3763A1FA0CC /* podman.png */,
@@ -389,7 +391,7 @@
 		ADC8128EAF213ACF0F089EDC /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				EEE9B28D012A948147F00DDA /* find-disk-killer-storage-map-analysis */,
+				F0158A1AD1320B490CC04EBD /* find-disk-killer */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
@@ -432,13 +434,14 @@
 				03A020A758E12C4DAB2BFC75 /* ProcessKnowledge.swift */,
 				5469758F79679C8385146301 /* RepositoryAccessAuthorization.swift */,
 				195FD2EA225982A5C2A7D542 /* RootView.swift */,
+				06CF61D4CBEE3ACB29380FA1 /* SnapshotCacheWriter.swift */,
 				B5A1E6A36A44DA38FEC974BC /* StorageMapModel.swift */,
 				A9EFE154D0FA5B35DA20055B /* StorageResourceCleanup.swift */,
 				FB7197A34B2272E898203959 /* StorageSourceExperience.swift */,
 				3BDED8FB2CC79A69D2E701EF /* TraceActivityRegistry.swift */,
 				51F7C0EAECA734CA262A07EC /* TraceHelperController.swift */,
 				8691F9AB17FBDB37EFD2B719 /* UpdateCoordinator.swift */,
-				108A74D12E6F4426A0F9B301 /* VolumeAccessTraceStore.swift */,
+				1CDA16413AFB50D100FEED41 /* VolumeAccessTraceStore.swift */,
 				07E4C84B97D3B58CCBF2D4A7 /* Components */,
 				06371809CAAB4D69E2CA353B /* Resources */,
 				9A50B8DA304DE29885F70CEB /* Views */,
@@ -490,7 +493,7 @@
 			name = FindDiskKillerApp;
 			packageProductDependencies = (
 				DF40BF11AB711252275ECD86 /* FindDiskKillerCore */,
-				0D8A74D12E6F4426A0F9B301 /* FindDiskKillerNodeRuntime */,
+				A7733B0AE16B4BE9ED11F27A /* FindDiskKillerNodeRuntime */,
 				C4C6752601A90F75FCAC330C /* FindDiskKillerTraceProtocol */,
 				56A2D4A3EC905FA5D0BA2A45 /* Sparkle */,
 			);
@@ -503,7 +506,7 @@
 			buildConfigurationList = FC028C5DA505D9147A0EB1CB /* Build configuration list for PBXNativeTarget "FindDiskKillerClaudeCleanupHelper" */;
 			buildPhases = (
 				009C2DFA611F773B1A1DBD5F /* Sources */,
-				0C8A74D12E6F4426A0F9B301 /* Frameworks */,
+				B27D9B2ECC782C7743C3AA57 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -511,7 +514,7 @@
 			);
 			name = FindDiskKillerClaudeCleanupHelper;
 			packageProductDependencies = (
-				0E8A74D12E6F4426A0F9B301 /* FindDiskKillerNodeRuntime */,
+				0259DB70CBFEB5BF4CC58FFA /* FindDiskKillerNodeRuntime */,
 			);
 			productName = FindDiskKillerClaudeCleanupHelper;
 			productReference = 6568E687FF296CBF043BF903 /* FindDiskKillerClaudeCleanupHelper */;
@@ -590,13 +593,13 @@
 				780A5E1EC904EA5BFF7138E3 /* claude-code.svg in Resources */,
 				60FBDF8CE690926784724D9B /* codex-openai.png in Resources */,
 				1499823B10B0CC6D47F29166 /* codex-openai.svg in Resources */,
-				E4C1E1A1D6A74CC7A6B96D1A /* opencode.icns in Resources */,
 				1E2FA69EBE3D6F52D819A016 /* docker.png in Resources */,
 				E5BD6E0513E34D1391173CCC /* docker.svg in Resources */,
 				29F107746F077C5DE55373C1 /* go.png in Resources */,
 				28573322D0669253DB1DC8C8 /* go.svg in Resources */,
 				29D92E6754DF89D7C4079344 /* npm.png in Resources */,
 				6856961C6AD87CA6359CBCA8 /* npm.svg in Resources */,
+				59BBA07E26B92F06EA7F40FA /* opencode.icns in Resources */,
 				6F0819E5AB8F3C3F1DAAA753 /* pnpm.png in Resources */,
 				8F8B649AC987F0A2AADB68FD /* pnpm.svg in Resources */,
 				F3D38434BB5CB2A2FB8B536F /* podman.png in Resources */,
@@ -681,6 +684,7 @@
 				61564FA8A1037BE920518107 /* RootView.swift in Sources */,
 				C17D460138BAAD4608FB55FC /* SettingsView.swift in Sources */,
 				F5E7955B1A19F150460C4A82 /* SharedComponents.swift in Sources */,
+				EC72CA4E6E3B8222A0BBB747 /* SnapshotCacheWriter.swift in Sources */,
 				6BDE5C9BC75A644419D3406E /* StorageMapFirstRunView.swift in Sources */,
 				DAAFF80728BFA104A244C5FF /* StorageMapModel.swift in Sources */,
 				08EC8E6CD62A8E5E0A03E617 /* StorageMapView.swift in Sources */,
@@ -690,8 +694,8 @@
 				BB9D8E9D97936D40BE9AC011 /* TraceActivityRegistry.swift in Sources */,
 				FA64CAF12CFFF37C9F591513 /* TraceHelperController.swift in Sources */,
 				8E41D0C7545253171C96A23B /* UpdateCoordinator.swift in Sources */,
-				0F8A74D12E6F4426A0F9B301 /* VolumeAccessTraceStore.swift in Sources */,
 				4F55C539B0DCFB72B948CB3D /* UpdaterSettingsSection.swift in Sources */,
+				A7122AAFB1F2B47B7CE1E65E /* VolumeAccessTraceStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1041,11 +1045,7 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		0D8A74D12E6F4426A0F9B301 /* FindDiskKillerNodeRuntime */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = FindDiskKillerNodeRuntime;
-		};
-		0E8A74D12E6F4426A0F9B301 /* FindDiskKillerNodeRuntime */ = {
+		0259DB70CBFEB5BF4CC58FFA /* FindDiskKillerNodeRuntime */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = FindDiskKillerNodeRuntime;
 		};
@@ -1053,6 +1053,10 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A38F28F6130F4B6E2A5F7963 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		A7733B0AE16B4BE9ED11F27A /* FindDiskKillerNodeRuntime */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = FindDiskKillerNodeRuntime;
 		};
 		C4C6752601A90F75FCAC330C /* FindDiskKillerTraceProtocol */ = {
 			isa = XCSwiftPackageProductDependency;
