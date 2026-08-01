@@ -199,6 +199,12 @@ struct StorageResourceTreeView: View {
             return L10n.text("通过 Xcode Simulator 删除此运行时")
         case .simulatorRuntimeAsset:
             return L10n.text("删除尚未安装的模拟器运行时下载包")
+        case .podmanImage:
+            return L10n.text("通过 Podman 删除此镜像；执行前会再次检查容器引用")
+        case .podmanContainer:
+            return L10n.text("通过 Podman 删除此已停止容器")
+        case .podmanVolume:
+            return L10n.text("通过 Podman 删除此未被容器引用的 Volume")
         default:
             return L10n.text("选择此资源进行清理")
         }
@@ -308,6 +314,8 @@ struct StorageResourceTreeIndex: Identifiable, Equatable, Sendable {
             in: nodes
         ).union(
             StorageResourceTreeProjection.workspaceParentIDs(in: nodes)
+        ).union(
+            StorageResourceTreeProjection.providerDetailIDs(in: nodes)
         )
         defaultRows = StorageResourceTreeProjection.flatten(
             nodes: nodes,
@@ -380,6 +388,21 @@ enum StorageResourceTreeProjection {
                 result.insert(node.id)
             }
             result.formUnion(workspaceParentIDs(in: node.children))
+        }
+        return result
+    }
+
+    static func providerDetailIDs(in nodes: [StorageResourceNode]) -> Set<String> {
+        var result = Set<String>()
+        for node in nodes {
+            let isProviderGroup = node.id == "docker.engine-objects"
+                || node.id.hasPrefix("docker.engine.")
+                || node.id == "podman.engine-objects"
+                || node.id.hasPrefix("podman.engine.")
+            if isProviderGroup, !node.children.isEmpty {
+                result.insert(node.id)
+            }
+            result.formUnion(providerDetailIDs(in: node.children))
         }
         return result
     }
@@ -726,6 +749,12 @@ struct StorageCleanupReviewSheet: View {
             return L10n.text("Docker 容器 · 通过 Docker 命令删除")
         case .dockerVolume:
             return L10n.text("Docker Volume · 通过 Docker 命令删除")
+        case .podmanImage:
+            return L10n.text("Podman 镜像 · 通过 Podman 命令删除")
+        case .podmanContainer:
+            return L10n.text("Podman 容器 · 通过 Podman 命令删除")
+        case .podmanVolume:
+            return L10n.text("Podman Volume · 通过 Podman 命令删除")
         }
     }
 

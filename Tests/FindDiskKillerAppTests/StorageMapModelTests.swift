@@ -1328,6 +1328,25 @@ import Testing
     ])
 }
 
+@Test func podmanContainerCleanupUsesPodmanCommand() async {
+    let recorder = DockerCleanupCommandRecorder(referenceOutput: "")
+    let executor = StorageResourceCleanupExecutor(podmanCommand: { arguments in
+        await recorder.run(arguments)
+    })
+    let request = StorageCleanupRequest(
+        id: "podman.container.worker",
+        title: "worker",
+        displayBytes: 2_048,
+        target: .podmanContainer(id: "container-id")
+    )
+
+    let summary = await executor.execute([request])
+    let commands = await recorder.commands
+
+    #expect(summary.succeededCount == 1)
+    #expect(commands == [["container", "rm", "container-id"]])
+}
+
 @Test func simulatorCleanupUsesOfficialSimctlCommands() async {
     let recorder = DockerCleanupCommandRecorder(referenceOutput: "")
     let executor = StorageResourceCleanupExecutor(simctlCommand: { arguments in
@@ -1577,6 +1596,50 @@ import Testing
     let index = StorageResourceTreeIndex(nodes: [parent])
 
     #expect(index.defaultExpandedIDs.contains(parent.id))
+}
+
+@Test func storageResourceTreeExpandsContainerObjectGroupsByDefault() {
+    let image = StorageResourceNode(
+        id: "docker.image.sha256:test",
+        kind: .dockerImage,
+        title: "example/app:latest",
+        symbol: "shippingbox.fill",
+        allocatedBytes: 1,
+        entryCount: 1,
+        risk: .environmentOrRuntime,
+        evidence: .providerReported,
+        isProtected: true
+    )
+    let images = StorageResourceNode(
+        id: "docker.engine.images",
+        kind: .dockerImages,
+        title: "镜像",
+        symbol: "shippingbox.fill",
+        allocatedBytes: 2,
+        entryCount: 1,
+        risk: .environmentOrRuntime,
+        evidence: .providerReported,
+        isProtected: true,
+        children: [image]
+    )
+    let engine = StorageResourceNode(
+        id: "docker.engine-objects",
+        kind: .dockerStorage,
+        title: "Docker Engine 资源",
+        symbol: "shippingbox.fill",
+        allocatedBytes: 3,
+        entryCount: 2,
+        risk: .environmentOrRuntime,
+        evidence: .providerReported,
+        isProtected: true,
+        children: [images]
+    )
+
+    let index = StorageResourceTreeIndex(nodes: [engine])
+
+    #expect(index.defaultExpandedIDs.contains(engine.id))
+    #expect(index.defaultExpandedIDs.contains(images.id))
+    #expect(index.defaultRows.map(\.id) == [engine.id, images.id, image.id])
 }
 
 @Test func storageResourceTreeMigratesCachedRepositoriesIntoParentDirectories() throws {

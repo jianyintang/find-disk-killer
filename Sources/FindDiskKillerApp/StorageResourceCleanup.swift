@@ -173,7 +173,10 @@ enum StorageSafeCleanupProjection {
             return target
         case .dockerImage:
             return node.kind == .dockerImage ? target : nil
-        case .trashRepository, .removeGitWorktree, .dockerContainer, .dockerVolume:
+        case .podmanImage:
+            return node.kind == .dockerImage ? target : nil
+        case .trashRepository, .removeGitWorktree, .dockerContainer, .dockerVolume,
+             .podmanContainer, .podmanVolume:
             return nil
         case .simulatorDevice, .simulatorRuntime, .simulatorRuntimeAsset:
             return nil
@@ -190,19 +193,23 @@ enum StorageSafeCleanupProjection {
 
 actor StorageResourceCleanupExecutor {
     typealias DockerCommand = @Sendable ([String]) async throws -> String
+    typealias PodmanCommand = @Sendable ([String]) async throws -> String
     typealias SimctlCommand = @Sendable ([String]) async throws -> String
 
     private let fileManager: FileManager
     private let dockerCommand: DockerCommand?
+    private let podmanCommand: PodmanCommand?
     private let simctlCommand: SimctlCommand?
 
     init(
         fileManager: FileManager = .default,
         dockerCommand: DockerCommand? = nil,
+        podmanCommand: PodmanCommand? = nil,
         simctlCommand: SimctlCommand? = nil
     ) {
         self.fileManager = fileManager
         self.dockerCommand = dockerCommand
+        self.podmanCommand = podmanCommand
         self.simctlCommand = simctlCommand
     }
 
@@ -339,6 +346,50 @@ actor StorageResourceCleanupExecutor {
                 throw StorageCleanupError.sourceChanged
             }
             try await runDocker(arguments: ["volume", "rm", name])
+        case .podmanImage(let id):
+            let referenceOutput: String
+            do {
+                referenceOutput = try await runPodman(arguments: [
+                    "image", "inspect", id, "--format", "{{json .RepoTags}}"
+                ])
+            } catch {
+                if podmanResourceIsAbsent(error) { return }
+                throw error
+            }
+            let references = try await runPodman(arguments: [
+                "container", "ls", "--all", "--quiet", "--filter", "ancestor=\(id)"
+            ])
+            guard references.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw StorageCleanupError.sourceChanged
+            }
+            let repositoryReferences = try parseDockerImageReferences(referenceOutput)
+            if repositoryReferences.isEmpty {
+                try await runPodman(arguments: ["image", "rm", id])
+            } else {
+                for reference in repositoryReferences {
+                    try await runPodman(arguments: ["image", "rm", reference])
+                }
+            }
+        case .podmanContainer(let id):
+            do {
+                try await runPodman(arguments: ["container", "rm", id])
+            } catch {
+                guard podmanResourceIsAbsent(error) else { throw error }
+            }
+        case .podmanVolume(let name):
+            do {
+                _ = try await runPodman(arguments: ["volume", "inspect", name])
+            } catch {
+                if podmanResourceIsAbsent(error) { return }
+                throw error
+            }
+            let references = try await runPodman(arguments: [
+                "container", "ls", "--all", "--quiet", "--filter", "volume=\(name)"
+            ])
+            guard references.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw StorageCleanupError.sourceChanged
+            }
+            try await runPodman(arguments: ["volume", "rm", name])
         }
     }
 
@@ -351,6 +402,19 @@ actor StorageResourceCleanupExecutor {
             "/Applications/Docker.app/Contents/Resources/bin/docker"
         ].first(where: { fileManager.isExecutableFile(atPath: $0) }) else {
             throw StorageCleanupError.toolUnavailable("Docker")
+        }
+        return try await run(executable: URL(fileURLWithPath: executable), arguments: arguments)
+    }
+
+    @discardableResult
+    private func runPodman(arguments: [String]) async throws -> String {
+        if let podmanCommand { return try await podmanCommand(arguments) }
+        guard let executable = [
+            "/opt/homebrew/bin/podman",
+            "/usr/local/bin/podman",
+            "/Applications/Podman Desktop.app/Contents/Resources/bin/podman"
+        ].first(where: { fileManager.isExecutableFile(atPath: $0) }) else {
+            throw StorageCleanupError.toolUnavailable("Podman")
         }
         return try await run(executable: URL(fileURLWithPath: executable), arguments: arguments)
     }
@@ -446,6 +510,10 @@ actor StorageResourceCleanupExecutor {
             || message.contains("no such container")
             || message.contains("no such object")
             || message.contains("not found")
+    }
+
+    private func podmanResourceIsAbsent(_ error: Error) -> Bool {
+        dockerResourceIsAbsent(error)
     }
 
     private func samePhysicalPath(_ lhs: String, _ rhs: String) -> Bool {
