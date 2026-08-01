@@ -33,6 +33,7 @@ final class StorageMapModel {
     private(set) var progress: StorageScanProgress?
     private(set) var progressBySource: [StorageSourceID: StorageScanProgress] = [:]
     private(set) var reanalyzingSourceIDs: Set<StorageSourceID> = []
+    private(set) var refreshErrorsBySource: [StorageSourceID: String] = [:]
     private(set) var errorMessage: String?
     private(set) var hasFullDiskRepositoryAccess: Bool
 
@@ -43,9 +44,12 @@ final class StorageMapModel {
     @ObservationIgnored private let cacheURL: URL?
     @ObservationIgnored private let repositoryAccessCheck: RepositoryAccessCheck
     @ObservationIgnored private let discoveryPresentationInterval: Duration
+    @ObservationIgnored private let snapshotCacheWriter = SnapshotCacheWriter<StorageAnalysisSnapshot>()
+    @ObservationIgnored private var cacheRevision: UInt64 = 0
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     @ObservationIgnored private var sourceScanTasks: [StorageSourceID: Task<Void, Never>] = [:]
     @ObservationIgnored private var sourceGenerations: [StorageSourceID: UInt64] = [:]
+    @ObservationIgnored private var pendingSourceRefreshIDs = Set<StorageSourceID>()
     @ObservationIgnored private var generation: UInt64 = 0
     @ObservationIgnored nonisolated(unsafe) private var locationChangeObserver: NSObjectProtocol?
 
@@ -321,6 +325,7 @@ final class StorageMapModel {
             totalSourceCount: candidates.filter { !$0.roots.isEmpty }.count
         )
         progressBySource = [:]
+        refreshErrorsBySource = [:]
         errorMessage = nil
 
         let scanOperation = self.scanOperation
@@ -345,13 +350,15 @@ final class StorageMapModel {
                 self.progress = nil
                 self.progressBySource = [:]
                 self.scanTask = nil
-                await Self.saveSnapshot(committedSnapshot, to: self.cacheURL)
+                await self.persistSnapshot(committedSnapshot)
+                self.drainPendingSourceRefreshes()
             } catch is CancellationError {
                 guard requestedGeneration == self.generation else { return }
                 self.phase = .ready
                 self.progress = nil
                 self.progressBySource = [:]
                 self.scanTask = nil
+                self.drainPendingSourceRefreshes()
             } catch {
                 guard requestedGeneration == self.generation else { return }
                 self.phase = .failed
@@ -359,6 +366,7 @@ final class StorageMapModel {
                 self.progressBySource = [:]
                 self.errorMessage = error.localizedDescription
                 self.scanTask = nil
+                self.drainPendingSourceRefreshes()
             }
         }
     }
@@ -372,6 +380,7 @@ final class StorageMapModel {
         let requestedGeneration = sourceGenerations[sourceID, default: 0] &+ 1
         sourceGenerations[sourceID] = requestedGeneration
         reanalyzingSourceIDs.insert(sourceID)
+        refreshErrorsBySource.removeValue(forKey: sourceID)
         progressBySource[sourceID] = StorageScanProgress(
             phase: .discovering,
             sourceID: sourceID,
@@ -398,18 +407,32 @@ final class StorageMapModel {
                     sourceID: sourceID
                 )
                 self.reanalyzingSourceIDs.remove(sourceID)
+                self.refreshErrorsBySource.removeValue(forKey: sourceID)
                 self.progressBySource.removeValue(forKey: sourceID)
                 self.sourceScanTasks.removeValue(forKey: sourceID)
                 if let snapshot = self.snapshot {
-                    await Self.saveSnapshot(snapshot, to: self.cacheURL)
+                    await self.persistSnapshot(snapshot)
                 }
             } catch is CancellationError {
                 self.finishSourceAnalysis(sourceID, generation: requestedGeneration)
             } catch {
                 self.finishSourceAnalysis(sourceID, generation: requestedGeneration)
                 self.errorMessage = error.localizedDescription
+                self.refreshErrorsBySource[sourceID] = error.localizedDescription
             }
         }
+    }
+
+    func refreshAfterCleanup(sourceID: StorageSourceID) {
+        sourceScanTasks[sourceID]?.cancel()
+        sourceScanTasks.removeValue(forKey: sourceID)
+        sourceGenerations[sourceID, default: 0] &+= 1
+        reanalyzingSourceIDs.remove(sourceID)
+        progressBySource.removeValue(forKey: sourceID)
+        refreshErrorsBySource.removeValue(forKey: sourceID)
+        pendingSourceRefreshIDs.insert(sourceID)
+        errorMessage = nil
+        drainPendingSourceRefreshes()
     }
 
     func startAnalysis(including agentStorage: AgentStorageModel) {
@@ -438,6 +461,7 @@ final class StorageMapModel {
             self.phase = .ready
             self.progress = nil
             self.progressBySource = [:]
+            self.drainPendingSourceRefreshes()
         }
     }
 
@@ -458,6 +482,8 @@ final class StorageMapModel {
         scanTask = nil
         phase = .idle
         candidates = []
+        pendingSourceRefreshIDs = []
+        refreshErrorsBySource = [:]
         errorMessage = nil
         Task { [weak self] in
             await self?.prepare()
@@ -493,11 +519,16 @@ final class StorageMapModel {
         snapshot = nil
         progress = nil
         progressBySource = [:]
+        pendingSourceRefreshIDs = []
+        refreshErrorsBySource = [:]
         candidates = []
         phase = .idle
+        cacheRevision &+= 1
+        let revision = cacheRevision
+        let cacheWriter = snapshotCacheWriter
         let cacheURL = cacheURL
         Task {
-            if let cacheURL { try? FileManager.default.removeItem(at: cacheURL) }
+            await cacheWriter.remove(at: cacheURL, revision: revision)
             await prepare()
         }
     }
@@ -514,6 +545,7 @@ final class StorageMapModel {
         scanTask = nil
         progress = nil
         progressBySource = [:]
+        pendingSourceRefreshIDs = []
         if phase == .scanning || phase == .stopping {
             phase = .ready
         }
@@ -548,6 +580,16 @@ final class StorageMapModel {
         sourceScanTasks = [:]
         reanalyzingSourceIDs = []
         sourceGenerations = sourceGenerations.mapValues { $0 &+ 1 }
+    }
+
+    private func drainPendingSourceRefreshes() {
+        guard phase != .scanning, phase != .stopping,
+              !pendingSourceRefreshIDs.isEmpty else { return }
+        let sourceIDs = pendingSourceRefreshIDs
+        pendingSourceRefreshIDs = []
+        for sourceID in sourceIDs.sorted(by: { $0.rawValue < $1.rawValue }) {
+            startAnalysis(sourceID: sourceID)
+        }
     }
 
     private static func merging(
@@ -821,21 +863,12 @@ final class StorageMapModel {
         return try? JSONDecoder().decode(StorageAnalysisSnapshot.self, from: data)
     }
 
-    nonisolated private static func saveSnapshot(
-        _ snapshot: StorageAnalysisSnapshot,
-        to url: URL?
-    ) async {
-        guard let url,
-              let data = try? JSONEncoder().encode(snapshot) else { return }
-        do {
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-            try data.write(to: url, options: .atomic)
-        } catch {
-            return
-        }
+    private func persistSnapshot(_ snapshot: StorageAnalysisSnapshot) async {
+        cacheRevision &+= 1
+        await snapshotCacheWriter.save(
+            snapshot,
+            to: cacheURL,
+            revision: cacheRevision
+        )
     }
 }

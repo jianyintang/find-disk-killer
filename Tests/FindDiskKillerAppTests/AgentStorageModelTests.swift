@@ -1027,6 +1027,68 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
 }
 
 @MainActor
+@Test func agentCleanupRefreshSurvivesAStoppedFullAnalysisAndPreservesOtherProviders() async throws {
+    let suiteName = "AgentStorageCleanupRefreshTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let initial = agentStorageProviderSnapshot(codexBytes: 100, claudeBytes: 200)
+    let replacement = agentStorageProviderSnapshot(codexBytes: 40, claudeBytes: nil)
+    let probe = AgentStorageCleanupRefreshProbe(replacement: replacement)
+    let model = AgentStorageModel(
+        defaults: defaults,
+        initialSnapshot: initial,
+        cacheURL: nil
+    ) { configuration, progress in
+        try await probe.scan(configuration: configuration, progress: progress)
+    }
+
+    model.startAnalysis()
+    try await waitUntil {
+        let fullScanCount = await probe.fullScanCount
+        return model.isScanning && fullScanCount == 1
+    }
+    model.refreshAfterCleanup(providers: [.codex])
+    #expect(await probe.providerScanCount == 0)
+
+    model.stop()
+    try await waitUntil {
+        let providerScanCount = await probe.providerScanCount
+        return providerScanCount == 1
+            && model.reanalyzingProviders.isEmpty
+            && model.snapshot?.providers.first { $0.provider == .codex }?.exclusiveBytes == 40
+    }
+
+    #expect(model.snapshot?.providers.first { $0.provider == .claude }?.exclusiveBytes == 200)
+    #expect(model.refreshErrorsByProvider[.codex] == nil)
+    #expect(await probe.providerSets.last == [.codex])
+}
+
+@MainActor
+@Test func agentCleanupRefreshFailureKeepsOtherProvidersAndReportsTheAffectedProvider() async throws {
+    let suiteName = "AgentStorageCleanupRefreshFailureTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let initial = agentStorageProviderSnapshot(codexBytes: 100, claudeBytes: 200)
+    let model = AgentStorageModel(
+        defaults: defaults,
+        initialSnapshot: initial,
+        cacheURL: nil
+    ) { configuration, _ in
+        if configuration.providers == [.codex] {
+            throw AgentStorageCleanupRefreshTestError.syncFailed
+        }
+        return initial
+    }
+
+    model.refreshAfterCleanup(providers: [.codex])
+    try await waitUntil { model.refreshErrorsByProvider[.codex] != nil }
+
+    #expect(model.snapshot == initial)
+    #expect(model.refreshErrorsByProvider[.codex] == "同步失败")
+    #expect(model.refreshErrorsByProvider[.claude] == nil)
+}
+
+@MainActor
 @Test func agentStoragePersistsAndRestoresDeepAnalysisWithoutScanning() async throws {
     let suiteName = "AgentStorageCacheTests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suiteName)!
@@ -1189,6 +1251,39 @@ private actor AgentStorageProviderRefreshProbe {
     }
 }
 
+private actor AgentStorageCleanupRefreshProbe {
+    private(set) var fullScanCount = 0
+    private(set) var providerScanCount = 0
+    private(set) var providerSets: [Set<AgentStorageProvider>] = []
+    private let replacement: AgentStorageSnapshot
+
+    init(replacement: AgentStorageSnapshot) {
+        self.replacement = replacement
+    }
+
+    func scan(
+        configuration: AgentStorageScanner.Configuration,
+        progress: @escaping @Sendable (AgentStorageScanProgress) -> Void
+    ) async throws -> AgentStorageSnapshot {
+        providerSets.append(configuration.providers)
+        if configuration.providers.count == 1,
+           let provider = configuration.providers.first {
+            providerScanCount += 1
+            progress(.init(
+                phase: .measuringEntries,
+                completedCount: 1,
+                totalCount: 1,
+                provider: provider,
+                processedBytes: 40
+            ))
+            return replacement
+        }
+        fullScanCount += 1
+        try await Task.sleep(for: .seconds(60))
+        return replacement
+    }
+}
+
 private actor LateAgentStorageProgressProbe {
     private(set) var callCount = 0
 
@@ -1294,6 +1389,12 @@ private func agentStorageProviderSummary(
 
 private enum AgentStorageModelTestError: Error {
     case timeout
+}
+
+private enum AgentStorageCleanupRefreshTestError: LocalizedError {
+    case syncFailed
+
+    var errorDescription: String? { "同步失败" }
 }
 
 private func agentStorageCanonicalPath(_ url: URL) -> String {

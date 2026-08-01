@@ -130,6 +130,69 @@ private struct AgentStorageSummaryProjection {
     }
 }
 
+private struct AgentStorageSnapshotIndex: Sendable {
+    let providerOverviewItems: [AgentStorageProviderOverviewItem]
+    let dataset: AgentStorageProviderDataset?
+    let familyIndex: [String: AgentStorageThreadFamily]
+    let detailIndex: [String: AgentStorageResolvedDetail]
+    let cleanupBytesByFamilyID: [String: UInt64]
+}
+
+private enum AgentStorageIndexBuilder {
+    static func build(
+        snapshot: AgentStorageSnapshot,
+        provider: AgentStorageProvider?
+    ) -> AgentStorageSnapshotIndex {
+        let overviewItems = snapshot.providers.map {
+            AgentStorageProviderOverviewItem(
+                summary: $0,
+                totalAgentBytes: snapshot.totalBytes
+            )
+        }
+        guard let provider,
+              let dataset = snapshot.dataset(for: provider) else {
+            return AgentStorageSnapshotIndex(
+                providerOverviewItems: overviewItems,
+                dataset: nil,
+                familyIndex: [:],
+                detailIndex: [:],
+                cleanupBytesByFamilyID: [:]
+            )
+        }
+
+        let families = Dictionary(uniqueKeysWithValues: dataset.families.map { ($0.id, $0) })
+        var details: [String: AgentStorageResolvedDetail] = [:]
+        var cleanupBytesByFamilyID: [String: UInt64] = [:]
+        details.reserveCapacity(
+            dataset.families.count
+                + dataset.families.reduce(0) { $0 + $1.subagents.count }
+                + dataset.globalItems.count
+                + dataset.unattributedItems.count
+        )
+        for family in dataset.families {
+            details[family.id] = .family(family)
+            cleanupBytesByFamilyID[family.id] = AgentStorageCleanupValidator
+                .officialArtifacts(for: family)
+                .reduce(0) {
+                    let sum = $0.addingReportingOverflow($1.allocatedBytes)
+                    return sum.overflow ? .max : sum.partialValue
+                }
+            for subagent in family.subagents {
+                details[subagent.id] = .subagent(subagent, family)
+            }
+        }
+        for item in dataset.globalItems { details[item.id] = .global(item) }
+        for item in dataset.unattributedItems { details[item.id] = .unattributed(item) }
+        return AgentStorageSnapshotIndex(
+            providerOverviewItems: overviewItems,
+            dataset: dataset,
+            familyIndex: families,
+            detailIndex: details,
+            cleanupBytesByFamilyID: cleanupBytesByFamilyID
+        )
+    }
+}
+
 enum AgentStorageChatSortField: Sendable {
     case title
     case updatedAt
@@ -599,6 +662,7 @@ struct AgentStorageView: View {
     let allowsAnalysisActions: Bool
     let nodeRuntime: ClaudeNodeRuntimeStatusModel
     let providerExitAction: (() -> Void)?
+    let cleanupDidAffectProviders: ((Set<AgentStorageProvider>) -> Void)?
     @AppStorage(AgentStoragePreferences.hidePrivateDetailsKey) private var hidesPrivateDetails = false
     @State private var selectedProvider: AgentStorageProvider?
     @State private var scope: AgentStorageScope = .chats
@@ -631,6 +695,7 @@ struct AgentStorageView: View {
     @State private var compactDetail: AgentStorageDetailSelection?
     @State private var familyIndex: [String: AgentStorageThreadFamily] = [:]
     @State private var detailIndex: [String: AgentStorageResolvedDetail] = [:]
+    @State private var cleanupBytesByFamilyID: [String: UInt64] = [:]
     @State private var availableProjectsCache: [String] = []
     @State private var chatPageIndex = 0
     @State private var chatPagination = AgentStorageChatPagination.empty
@@ -641,6 +706,8 @@ struct AgentStorageView: View {
     @State private var isProjecting = false
     @State private var projectionGeneration = 0
     @State private var projectionTask: Task<Void, Never>?
+    @State private var indexGeneration = 0
+    @State private var indexTask: Task<Void, Never>?
     @State private var cleanupSelectedIDs: Set<String> = []
     @State private var cleanupReview: AgentStorageCleanupReview?
     @State private var isCleanupReviewUpdating = false
@@ -659,14 +726,17 @@ struct AgentStorageView: View {
         initialProvider: AgentStorageProvider? = nil,
         allowsAnalysisActions: Bool = true,
         nodeRuntime: ClaudeNodeRuntimeStatusModel,
-        providerExitAction: (() -> Void)? = nil
+        providerExitAction: (() -> Void)? = nil,
+        cleanupDidAffectProviders: ((Set<AgentStorageProvider>) -> Void)? = nil
     ) {
         self.model = model
         self.initialProvider = initialProvider
         self.allowsAnalysisActions = allowsAnalysisActions
         self.nodeRuntime = nodeRuntime
         self.providerExitAction = providerExitAction
+        self.cleanupDidAffectProviders = cleanupDidAffectProviders
         _selectedProvider = State(initialValue: initialProvider)
+        _isProjecting = State(initialValue: initialProvider != nil)
     }
 
     var body: some View {
@@ -699,8 +769,7 @@ struct AgentStorageView: View {
             nodeRuntime.refresh()
         }
         .onChange(of: model.snapshotRevision, initial: true) { _, _ in
-            rebuildSnapshotIndex(model.snapshot)
-            scheduleProjection()
+            scheduleSnapshotIndex(model.snapshot)
         }
         .onChange(of: archiveFilter) { _, _ in
             if !isRestoringWorkspace {
@@ -750,6 +819,7 @@ struct AgentStorageView: View {
         .onChange(of: unattributedSortOrder) { _, _ in scheduleProjection() }
         .onDisappear {
             projectionTask?.cancel()
+            indexTask?.cancel()
             cleanupReviewTask?.cancel()
         }
         .onChange(of: cleanupSelectedIDs) { _, _ in scheduleCleanupReview() }
@@ -1224,7 +1294,11 @@ struct AgentStorageView: View {
                 Label(L10n.text("检查并清理"), systemImage: "checkmark.shield")
             }
             .buttonStyle(AppActionButtonStyle(kind: .primary, size: .compact))
-            .disabled(cleanupReview == nil || isCleanupReviewUpdating)
+            .disabled(
+                cleanupReview == nil
+                    || isCleanupReviewUpdating
+                    || selectedProvider.map(model.isAnalyzing) == true
+            )
             .help(L10n.text("最终提交前会再次核验活动状态和官方清理能力。"))
             .accessibilityIdentifier("agent-storage-review-cleanup")
         }
@@ -1417,7 +1491,20 @@ struct AgentStorageView: View {
 
     private func providerScanStatus(_ snapshot: AgentStorageSnapshot) -> some View {
         Group {
-            if model.isScanning {
+            if let provider = selectedProvider,
+               model.reanalyzingProviders.contains(provider) {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.small)
+                    Text(L10n.text("正在同步最新状态"))
+                        .foregroundStyle(.secondary)
+                }
+            } else if let provider = selectedProvider,
+                      let refreshError = model.refreshErrorsByProvider[provider] {
+                Label(refreshError, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+                    .help(refreshError)
+            } else if model.isScanning {
                 AgentStorageRefreshingProgressView(model: model)
             } else if let summary = selectedProviderSummary {
                 let diagnostics = snapshot.diagnostics(for: summary.provider)
@@ -2198,54 +2285,64 @@ struct AgentStorageView: View {
         scheduleProjection()
     }
 
-    private func rebuildSnapshotIndex(_ snapshot: AgentStorageSnapshot?) {
+    private func scheduleSnapshotIndex(_ snapshot: AgentStorageSnapshot?) {
+        indexTask?.cancel()
+        indexGeneration &+= 1
+        let requestedGeneration = indexGeneration
+
         guard let snapshot else {
             providerOverviewItems = []
             familyIndex = [:]
             detailIndex = [:]
+            cleanupBytesByFamilyID = [:]
             availableProjectsCache = []
             chatPageIndex = 0
             chatPagination = .empty
             expandingFamilies = []
+            isProjecting = false
             return
         }
-        let totalAgentBytes = snapshot.totalBytes
-        providerOverviewItems = snapshot.providers.map {
-            AgentStorageProviderOverviewItem(summary: $0, totalAgentBytes: totalAgentBytes)
-        }
-        guard let selectedProvider else {
-            familyIndex = [:]
-            detailIndex = [:]
-            return
-        }
-        guard snapshot.providers.contains(where: { $0.provider == selectedProvider }),
-              let dataset = snapshot.dataset(for: selectedProvider) else {
-            leaveProvider()
-            return
-        }
-        rebuildProviderIndexes(dataset)
-        expandingFamilies.formIntersection(Set(familyIndex.keys))
-        reconcileWorkspaceState(with: dataset)
-    }
-
-    private func rebuildProviderIndexes(_ dataset: AgentStorageProviderDataset) {
-        familyIndex = Dictionary(uniqueKeysWithValues: dataset.families.map { ($0.id, $0) })
-        var details: [String: AgentStorageResolvedDetail] = [:]
-        details.reserveCapacity(
-            dataset.families.count
-                + dataset.families.reduce(0) { $0 + $1.subagents.count }
-                + dataset.globalItems.count
-                + dataset.unattributedItems.count
-        )
-        for family in dataset.families {
-            details[family.id] = .family(family)
-            for subagent in family.subagents {
-                details[subagent.id] = .subagent(subagent, family)
+        let requestedProvider = selectedProvider
+        if requestedProvider != nil { isProjecting = true }
+        indexTask = Task { @MainActor in
+            await Task.yield()
+            let worker = Task.detached(priority: .userInitiated) {
+                AgentStorageIndexBuilder.build(
+                    snapshot: snapshot,
+                    provider: requestedProvider
+                )
             }
+            let index = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard !Task.isCancelled,
+                  indexGeneration == requestedGeneration,
+                  selectedProvider == requestedProvider else { return }
+            providerOverviewItems = index.providerOverviewItems
+            guard let requestedProvider else {
+                familyIndex = [:]
+                detailIndex = [:]
+                cleanupBytesByFamilyID = [:]
+                isProjecting = false
+                indexTask = nil
+                return
+            }
+            guard snapshot.providers.contains(where: { $0.provider == requestedProvider }),
+                  let dataset = index.dataset else {
+                indexTask = nil
+                leaveProvider()
+                return
+            }
+            familyIndex = index.familyIndex
+            detailIndex = index.detailIndex
+            cleanupBytesByFamilyID = index.cleanupBytesByFamilyID
+            expandingFamilies.formIntersection(Set(index.familyIndex.keys))
+            reconcileWorkspaceState(with: dataset)
+            indexTask = nil
+            scheduleProjection()
         }
-        for item in dataset.globalItems { details[item.id] = .global(item) }
-        for item in dataset.unattributedItems { details[item.id] = .unattributed(item) }
-        detailIndex = details
     }
 
     private func enterProvider(_ provider: AgentStorageProvider) {
@@ -2292,11 +2389,14 @@ struct AgentStorageView: View {
         focusedProvider = nil
         accessibilityFocusedProvider = nil
         selectedProvider = provider
-        if let dataset = model.snapshot?.dataset(for: provider) {
-            rebuildProviderIndexes(dataset)
-            reconcileWorkspaceState(with: dataset)
-        }
-        scheduleProjection()
+        familyIndex = [:]
+        detailIndex = [:]
+        cleanupBytesByFamilyID = [:]
+        visibleChatRows = []
+        visibleGlobalItems = []
+        visibleUnattributedItems = []
+        isProjecting = true
+        scheduleSnapshotIndex(model.snapshot)
         Task { @MainActor in
             await Task.yield()
             isRestoringWorkspace = false
@@ -2309,6 +2409,8 @@ struct AgentStorageView: View {
         resetCleanupSelection()
         projectionTask?.cancel()
         projectionGeneration &+= 1
+        indexTask?.cancel()
+        indexGeneration &+= 1
         isProjecting = false
         let departingProvider = selectedProvider
         if let departingProvider {
@@ -2338,6 +2440,7 @@ struct AgentStorageView: View {
         visibleUnattributedItems = []
         familyIndex = [:]
         detailIndex = [:]
+        cleanupBytesByFamilyID = [:]
         availableProjectsCache = []
         chatPageIndex = 0
         chatPagination = .empty
@@ -2351,17 +2454,10 @@ struct AgentStorageView: View {
     }
 
     private func handleCleanupCompletion(_ result: AgentStorageCleanupResult) {
-        cleanupSession = nil
-        guard let provider = selectedProvider else { return }
-        guard result.changedStorage else { return }
-
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            cleanupCompletion = AgentStorageCleanupCompletion(provider: provider, result: result)
-            leaveProvider()
-            model.invalidateCachedResults()
-        }
+        let providers = result.providersRequiringRefresh
+        guard !providers.isEmpty else { return }
+        cleanupDidAffectProviders?(providers)
+        model.refreshAfterCleanup(providers: providers)
     }
 
     private func reconcileWorkspaceState(with dataset: AgentStorageProviderDataset) {
@@ -2444,9 +2540,7 @@ struct AgentStorageView: View {
     }
 
     private var cleanupSelectedFamilies: [AgentStorageThreadFamily] {
-        guard let provider = selectedProvider,
-              let dataset = model.snapshot?.dataset(for: provider) else { return [] }
-        return dataset.families.filter { cleanupSelectedIDs.contains($0.id) }
+        cleanupSelectedIDs.sorted().compactMap { familyIndex[$0] }
     }
 
     private var cleanupCurrentPageIDs: Set<String> {
@@ -2541,11 +2635,8 @@ struct AgentStorageView: View {
     }
 
     private func cleanupReclaimableBytes(for row: AgentStorageChatRow) -> UInt64 {
-        guard row.isFamily, let family = familyIndex[row.familyID] else { return 0 }
-        return AgentStorageCleanupValidator.officialArtifacts(for: family).reduce(0) {
-            let sum = $0.addingReportingOverflow($1.allocatedBytes)
-            return sum.overflow ? .max : sum.partialValue
-        }
+        guard row.isFamily else { return 0 }
+        return cleanupBytesByFamilyID[row.familyID] ?? 0
     }
 
     private func relativeDate(_ date: Date) -> String {

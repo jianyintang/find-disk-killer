@@ -311,9 +311,18 @@ public actor StorageAnalyzer {
                     mountedVolumes: mountedVolumes
                 )
             } else {
+                let excludedDescendantPaths = Set(candidate.roots.compactMap { other -> String? in
+                    guard other.id != root.id,
+                          other.path.hasPrefix(root.path.hasSuffix("/") ? root.path : root.path + "/") else {
+                        return nil
+                    }
+                    return String(other.path.dropFirst(root.path.count))
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                })
                 try measure(
                     root: root,
                     fileManager: FileManager(),
+                    excludedDescendantPaths: excludedDescendantPaths,
                     into: &ledger,
                     processedEntries: &processedEntries,
                     processedBytes: &processedBytes,
@@ -389,6 +398,7 @@ public actor StorageAnalyzer {
             sourceID: root.sourceID,
             rootID: root.id,
             rootPath: rootURL.path,
+            relativePath: "",
             category: classification.category,
             risk: classification.risk,
             isProtected: classification.isProtected,
@@ -474,6 +484,7 @@ public actor StorageAnalyzer {
     private nonisolated static func measure(
         root: StorageSourceRoot,
         fileManager: FileManager,
+        excludedDescendantPaths: Set<String>,
         into ledger: inout [StoragePhysicalIdentity: StorageLedgerEntry],
         processedEntries: inout Int,
         processedBytes: inout UInt64,
@@ -525,8 +536,11 @@ public actor StorageAnalyzer {
             if processedEntries.isMultiple(of: 128) {
                 try Task.checkCancellation()
             }
-            let relativePath = String(url.path.dropFirst(min(url.path.count, rootURL.path.count)))
-                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let relativePath = relativePath(from: rootURL, to: url)
+            if excludedDescendantPaths.contains(relativePath) {
+                enumerator.skipDescendants()
+                continue
+            }
             let entryKind = try measureEntry(
                 at: url,
                 relativePath: relativePath,
@@ -604,6 +618,7 @@ public actor StorageAnalyzer {
             sourceID: root.sourceID,
             rootID: root.id,
             rootPath: measuredRootPath,
+            relativePath: relativePath,
             category: classification.category,
             risk: classification.risk,
             isProtected: classification.isProtected,
@@ -637,6 +652,7 @@ public actor StorageAnalyzer {
         providerInventories: [StorageSourceID: DockerStorageInventory]
     ) -> StorageAnalysisSnapshot {
         var aggregates: [StorageComponentKey: StorageComponentAccumulator] = [:]
+        var simulatorObjects: [SimulatorObjectKey: StorageObjectAccumulator] = [:]
         var volumeUsage: [String: [StorageSourceID: UInt64]] = [:]
         var conflictBytes: UInt64 = 0
 
@@ -670,6 +686,22 @@ public actor StorageAnalyzer {
                 aggregate.newestModificationDate = claim.modifiedAt
             }
             aggregates[key] = aggregate
+
+            if claim.sourceID == .simulators,
+               claim.rootID.hasSuffix(".devices") || claim.rootID.contains("runtime"),
+               let objectIdentifier = claim.relativePath.split(separator: "/").first.map(String.init) {
+                let objectKey = SimulatorObjectKey(
+                    rootID: claim.rootID,
+                    identifier: objectIdentifier
+                )
+                var object = simulatorObjects[objectKey] ?? StorageObjectAccumulator()
+                object.allocatedBytes = object.allocatedBytes.addingClamped(entry.allocatedBytes)
+                object.logicalBytes = object.logicalBytes.addingClamped(entry.logicalBytes)
+                object.entryCount += 1
+                object.risk = max(object.risk, claim.risk)
+                object.isProtected = object.isProtected || claim.isProtected
+                simulatorObjects[objectKey] = object
+            }
         }
 
         let results = candidates.map { candidate in
@@ -706,7 +738,11 @@ public actor StorageAnalyzer {
             let inventory = providerInventories[candidate.id]
             let resourceTree = Self.completeResourceTree(
                 sourceID: candidate.id,
-                physicalNodes: Self.makeResourceTree(candidate: candidate, components: components),
+                physicalNodes: Self.makeResourceTree(
+                    candidate: candidate,
+                    components: components,
+                    simulatorObjects: simulatorObjects
+                ),
                 inventoryNodes: inventory?.nodes ?? []
             )
             return StorageSourceResult(
@@ -817,51 +853,246 @@ public actor StorageAnalyzer {
 
     private nonisolated static func makeResourceTree(
         candidate: StorageSourceCandidate,
-        components: [StorageComponent]
+        components: [StorageComponent],
+        simulatorObjects: [SimulatorObjectKey: StorageObjectAccumulator]
     ) -> [StorageResourceNode] {
-        let nodes = candidate.roots.compactMap { root -> StorageResourceNode? in
-            let rootComponents = components.filter { $0.rootID == root.id }
-            guard !rootComponents.isEmpty else { return nil }
-            let allocatedBytes = rootComponents.reduce(UInt64.zero) {
-                $0.addingClamped($1.allocatedBytes)
-            }
-            let logicalBytes = rootComponents.reduce(UInt64.zero) {
-                $0.addingClamped($1.logicalBytes)
-            }
-            let cleanupTarget = cleanupTarget(for: root, components: rootComponents)
-            let children = rootComponents.map { component in
-                StorageResourceNode(
-                    id: component.id,
-                    kind: .category,
-                    title: component.title,
-                    detail: nil,
-                    symbol: resourceSymbol(for: component.risk),
-                    allocatedBytes: component.allocatedBytes,
-                    logicalBytes: component.logicalBytes,
-                    entryCount: component.entryCount,
-                    risk: component.risk,
-                    evidence: component.evidence,
-                    isProtected: component.isProtected
-                )
-            }
-            return StorageResourceNode(
-                id: root.id,
-                kind: resourceKind(for: root),
-                title: root.displayName,
-                detail: resourceDetail(for: root),
-                symbol: resourceSymbol(for: root),
-                allocatedBytes: allocatedBytes,
-                logicalBytes: logicalBytes,
-                entryCount: rootComponents.reduce(0) { $0 + $1.entryCount },
-                risk: rootComponents.map(\.risk).max() ?? root.defaultRisk,
-                evidence: .fileSystemAllocated,
-                isProtected: rootComponents.contains(where: \.isProtected),
-                cleanupTarget: cleanupTarget,
-                children: children
+        if candidate.id == .simulators {
+            return makeSimulatorResourceTree(
+                candidate: candidate,
+                components: components,
+                objects: simulatorObjects
             )
+        }
+        let nodes = candidate.roots.compactMap {
+            makeRootResourceNode(root: $0, components: components)
         }
         guard candidate.id == .workspace else { return nodes }
         return groupRepositoryNodes(nodes, roots: candidate.roots)
+    }
+
+    private nonisolated static func makeSimulatorResourceTree(
+        candidate: StorageSourceCandidate,
+        components: [StorageComponent],
+        objects: [SimulatorObjectKey: StorageObjectAccumulator]
+    ) -> [StorageResourceNode] {
+        let rootsByID = Dictionary(uniqueKeysWithValues: candidate.roots.map { ($0.id, $0) })
+        let deviceRootIDs = Set(candidate.roots.filter { $0.id.hasSuffix(".devices") }.map(\.id))
+        let runtimeRootIDs = Set(candidate.roots.filter { $0.id.contains("runtime") }.map(\.id))
+
+        let deviceNodes = objects.compactMap { key, value -> StorageResourceNode? in
+            guard deviceRootIDs.contains(key.rootID),
+                  let root = rootsByID[key.rootID],
+                  let objectURL = simulatorObjectURL(root: root, identifier: key.identifier),
+                  let metadata = SimulatorStorageMetadata.device(
+                    at: objectURL,
+                    identifier: key.identifier
+                  ) else { return nil }
+            return StorageResourceNode(
+                id: "\(key.rootID).object.\(key.identifier)",
+                kind: .location,
+                title: metadata.title,
+                detail: metadata.detail,
+                symbol: "iphone.gen3",
+                allocatedBytes: value.allocatedBytes,
+                logicalBytes: value.logicalBytes,
+                entryCount: value.entryCount,
+                risk: value.risk,
+                evidence: .fileSystemAllocated,
+                isProtected: value.isProtected,
+                cleanupTarget: .simulatorDevice(identifier: key.identifier)
+            )
+        }
+        .sorted(by: resourceNodeSort)
+
+        let runtimeNodes = objects.compactMap { key, value -> StorageResourceNode? in
+            guard runtimeRootIDs.contains(key.rootID),
+                  let root = rootsByID[key.rootID],
+                  let objectURL = simulatorObjectURL(root: root, identifier: key.identifier),
+                  let metadata = SimulatorStorageMetadata.runtime(
+                    at: objectURL,
+                    identifier: key.identifier
+                  ) else { return nil }
+            let cleanupTarget: StorageResourceCleanupTarget?
+            if objectURL.pathExtension == "asset" {
+                cleanupTarget = pathIdentity(objectURL.path).map {
+                    .simulatorRuntimeAsset(path: objectURL.path, identity: $0)
+                }
+            } else {
+                cleanupTarget = pathIdentity(objectURL.path).map {
+                    .simulatorRuntime(
+                        identifier: SimulatorStorageMetadata.runtimeIdentifier(
+                            at: objectURL,
+                            fallback: key.identifier
+                        ),
+                        path: objectURL.path,
+                        identity: $0
+                    )
+                }
+            }
+            return StorageResourceNode(
+                id: "\(key.rootID).object.\(key.identifier)",
+                kind: .location,
+                title: metadata.title,
+                detail: simulatorRuntimeSourceDetail(rootID: key.rootID),
+                symbol: "shippingbox.fill",
+                allocatedBytes: value.allocatedBytes,
+                logicalBytes: value.logicalBytes,
+                entryCount: value.entryCount,
+                risk: value.risk,
+                evidence: .fileSystemAllocated,
+                isProtected: value.isProtected,
+                cleanupTarget: cleanupTarget
+            )
+        }
+        .sorted(by: resourceNodeSort)
+
+        var nodes: [StorageResourceNode] = []
+        if let node = simulatorGroupNode(
+            id: "simulators.devices",
+            title: "模拟器设备",
+            detail: "按具体设备名称与 Runtime 展示",
+            symbol: "iphone.gen3",
+            rootIDs: deviceRootIDs,
+            components: components,
+            children: deviceNodes
+        ) {
+            nodes.append(node)
+        }
+        if let node = simulatorGroupNode(
+            id: "simulators.runtimes",
+            title: "模拟器运行时",
+            detail: "按已安装 Runtime 名称展示",
+            symbol: "shippingbox.fill",
+            rootIDs: runtimeRootIDs,
+            components: components,
+            children: runtimeNodes
+        ) {
+            nodes.append(node)
+        }
+
+        let aggregateRootIDs = deviceRootIDs.union(runtimeRootIDs)
+        nodes.append(contentsOf: candidate.roots.compactMap { root in
+            guard !aggregateRootIDs.contains(root.id) else { return nil }
+            return makeRootResourceNode(root: root, components: components)
+        })
+        return nodes
+    }
+
+    private nonisolated static func simulatorObjectURL(
+        root: StorageSourceRoot,
+        identifier: String
+    ) -> URL? {
+        let url = URL(fileURLWithPath: root.path, isDirectory: true)
+            .appending(path: identifier, directoryHint: .isDirectory)
+        var value = stat()
+        guard lstat(url.path, &value) == 0,
+              (value.st_mode & S_IFMT) != S_IFLNK else { return nil }
+        return url
+    }
+
+    private nonisolated static func simulatorGroupNode(
+        id: String,
+        title: String,
+        detail: String,
+        symbol: String,
+        rootIDs: Set<String>,
+        components: [StorageComponent],
+        children: [StorageResourceNode]
+    ) -> StorageResourceNode? {
+        let matching = components.filter { component in
+            component.rootID.map(rootIDs.contains) == true
+        }
+        guard !matching.isEmpty else { return nil }
+        return StorageResourceNode(
+            id: id,
+            kind: .location,
+            title: title,
+            detail: detail,
+            symbol: symbol,
+            allocatedBytes: matching.reduce(UInt64.zero) { $0.addingClamped($1.allocatedBytes) },
+            logicalBytes: matching.reduce(UInt64.zero) { $0.addingClamped($1.logicalBytes) },
+            entryCount: matching.reduce(0) { $0 + $1.entryCount },
+            risk: matching.map(\.risk).max() ?? .environmentOrRuntime,
+            evidence: .fileSystemAllocated,
+            isProtected: matching.contains(where: \.isProtected),
+            children: children
+        )
+    }
+
+    private nonisolated static func makeRootResourceNode(
+        root: StorageSourceRoot,
+        components: [StorageComponent]
+    ) -> StorageResourceNode? {
+        let rootComponents = components.filter { $0.rootID == root.id }
+        guard !rootComponents.isEmpty else { return nil }
+        let cleanupTarget = cleanupTarget(for: root, components: rootComponents)
+        let children = rootComponents.map { component in
+            StorageResourceNode(
+                id: component.id,
+                kind: .category,
+                title: component.title,
+                symbol: resourceSymbol(for: component.risk),
+                allocatedBytes: component.allocatedBytes,
+                logicalBytes: component.logicalBytes,
+                entryCount: component.entryCount,
+                risk: component.risk,
+                evidence: component.evidence,
+                isProtected: component.isProtected
+            )
+        }
+        return StorageResourceNode(
+            id: root.id,
+            kind: resourceKind(for: root),
+            title: root.displayName,
+            detail: resourceDetail(for: root),
+            symbol: resourceSymbol(for: root),
+            allocatedBytes: rootComponents.reduce(UInt64.zero) {
+                $0.addingClamped($1.allocatedBytes)
+            },
+            logicalBytes: rootComponents.reduce(UInt64.zero) {
+                $0.addingClamped($1.logicalBytes)
+            },
+            entryCount: rootComponents.reduce(0) { $0 + $1.entryCount },
+            risk: rootComponents.map(\.risk).max() ?? root.defaultRisk,
+            evidence: .fileSystemAllocated,
+            isProtected: rootComponents.contains(where: \.isProtected),
+            cleanupTarget: cleanupTarget,
+            children: children
+        )
+    }
+
+    private nonisolated static func resourceNodeSort(
+        _ lhs: StorageResourceNode,
+        _ rhs: StorageResourceNode
+    ) -> Bool {
+        if lhs.allocatedBytes != rhs.allocatedBytes {
+            return lhs.allocatedBytes > rhs.allocatedBytes
+        }
+        return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+    }
+
+    private nonisolated static func simulatorRuntimeSourceDetail(rootID: String) -> String {
+        if rootID.contains("downloaded-runtime") { return "系统下载资源" }
+        if rootID.contains("legacy-system-runtime") { return "系统安装" }
+        return "用户安装"
+    }
+
+    private nonisolated static func relativePath(from root: URL, to entry: URL) -> String {
+        let rootPrefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        if entry.path.hasPrefix(rootPrefix) {
+            return String(entry.path.dropFirst(rootPrefix.count))
+        }
+        let rootComponents = root.pathComponents.filter { $0 != "/" }
+        let entryComponents = entry.pathComponents.filter { $0 != "/" }
+        if rootComponents.count <= entryComponents.count {
+            for start in 0...(entryComponents.count - rootComponents.count) {
+                let end = start + rootComponents.count
+                if Array(entryComponents[start..<end]) == rootComponents {
+                    return entryComponents.dropFirst(end).joined(separator: "/")
+                }
+            }
+        }
+        return entry.lastPathComponent
     }
 
     private nonisolated static func cleanupTarget(
@@ -1334,6 +1565,7 @@ private struct StorageLedgerClaim: Sendable {
     let sourceID: StorageSourceID
     let rootID: String
     let rootPath: String
+    let relativePath: String
     let category: String
     let risk: StorageRiskLevel
     let isProtected: Bool
@@ -1378,6 +1610,19 @@ private struct StorageComponentAccumulator {
     var logicalBytes: UInt64 = 0
     var entryCount = 0
     var newestModificationDate: Date?
+}
+
+private struct SimulatorObjectKey: Hashable {
+    let rootID: String
+    let identifier: String
+}
+
+private struct StorageObjectAccumulator {
+    var allocatedBytes: UInt64 = 0
+    var logicalBytes: UInt64 = 0
+    var entryCount = 0
+    var risk: StorageRiskLevel = .rebuildableCache
+    var isProtected = false
 }
 
 private struct StoragePathClassification {
@@ -1458,6 +1703,45 @@ private enum StoragePathClassifier {
             if lower.contains("build/intermediates.noindex") { return .init(category: "构建中间产物", risk: .rebuildableCache, isProtected: false) }
             if lower.contains("build/products") { return .init(category: "构建产品", risk: .sharedOrExpensive, isProtected: false) }
             if root.id.contains("archives") { return .init(category: "归档", risk: .protectedUserData, isProtected: true) }
+        case .vscode:
+            if root.id.hasSuffix(".cached-extension-vsixs") {
+                return .init(category: "扩展安装包缓存", risk: .rebuildableCache, isProtected: false)
+            }
+            if root.id.hasSuffix(".logs") {
+                return .init(category: "编辑器日志", risk: .rebuildableCache, isProtected: false)
+            }
+            if root.id.hasSuffix(".crash-reports") {
+                return .init(category: "崩溃报告", risk: .rebuildableCache, isProtected: false)
+            }
+            if root.id.hasSuffix(".update-cache") {
+                return .init(category: "更新缓存", risk: .rebuildableCache, isProtected: false)
+            }
+            if root.id.contains("cache") || root.id.contains("cached-") {
+                let category = root.id.contains("gpu") || root.id.contains("dawn")
+                    ? "图形缓存"
+                    : "编辑器缓存"
+                return .init(category: category, risk: .rebuildableCache, isProtected: false)
+            }
+            if root.id.hasSuffix(".extensions-and-cli") {
+                if first == "extensions" {
+                    return .init(category: "已安装扩展", risk: .environmentOrRuntime, isProtected: true)
+                }
+                return .init(category: "编辑器 CLI 与配置", risk: .protectedUserData, isProtected: true)
+            }
+            if components.contains("workspacestorage") {
+                return .init(category: "工作区状态", risk: .protectedUserData, isProtected: true)
+            }
+            if first == "backups" || components.contains("history") {
+                return .init(category: "本地历史与未保存备份", risk: .protectedUserData, isProtected: true)
+            }
+            if first == "user" {
+                return .init(category: "用户设置与扩展状态", risk: .protectedUserData, isProtected: true)
+            }
+            if ["service worker", "webstorage", "local storage", "session storage", "blob_storage"]
+                .contains(first) {
+                return .init(category: "扩展与 Web 状态", risk: .protectedUserData, isProtected: true)
+            }
+            return .init(category: "编辑器状态数据", risk: .protectedUserData, isProtected: true)
         case .simulators:
             if root.id.contains("runtime") || lower.contains("profiles/runtimes") {
                 return .init(category: "模拟器运行时", risk: .environmentOrRuntime, isProtected: true)

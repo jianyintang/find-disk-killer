@@ -602,6 +602,7 @@ struct ProcessTable: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .scrollIndicators(.automatic)
+        .defaultScrollAnchor(.topLeading)
         .background {
             GeometryReader { geometry in
                 Color.clear.preference(

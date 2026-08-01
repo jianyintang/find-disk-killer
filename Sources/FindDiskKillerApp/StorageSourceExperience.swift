@@ -21,6 +21,16 @@ extension StorageSourceID {
     }
 }
 
+extension AgentStorageProvider {
+    var storageSourceID: StorageSourceID {
+        switch self {
+        case .codex: .codex
+        case .claude: .claude
+        case .openCode: .openCode
+        }
+    }
+}
+
 enum StorageSourceResultAccess {
     static func canPresent(
         sourceID: StorageSourceID,
@@ -116,6 +126,44 @@ struct StorageSourceActivityPresentation: Equatable {
     let supportingDetail: String?
     let processedEntryCount: Int?
     let processedBytes: UInt64?
+
+    static func completedComposition(for result: StorageSourceResult) -> String? {
+        var seenTitles = Set<String>()
+        let titles = result.components
+            .sorted {
+                if $0.allocatedBytes != $1.allocatedBytes {
+                    return $0.allocatedBytes > $1.allocatedBytes
+                }
+                return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+            }
+            .compactMap { component -> String? in
+                guard seenTitles.insert(component.title).inserted else { return nil }
+                return L10n.text(component.title)
+            }
+            .prefix(3)
+
+        guard !titles.isEmpty else { return nil }
+        return titles.joined(separator: L10n.text("、"))
+    }
+
+    static func completedAgentComposition(
+        for summary: AgentStorageProviderSummary
+    ) -> String? {
+        let categories = [
+            (L10n.text("聊天与子代理"), summary.chatBytes),
+            (L10n.text("工具全局数据"), summary.globalBytes),
+            (L10n.text("未归属数据"), summary.unattributedBytes)
+        ]
+        .filter { $0.1 > 0 }
+        .sorted {
+            if $0.1 != $1.1 { return $0.1 > $1.1 }
+            return $0.0.localizedStandardCompare($1.0) == .orderedAscending
+        }
+        .map(\.0)
+
+        guard !categories.isEmpty else { return nil }
+        return categories.joined(separator: L10n.text("、"))
+    }
 
     static func deferredWorkspace() -> Self {
         .init(
@@ -400,6 +448,16 @@ struct StorageSourceDetailProfile {
                 managementDetail: L10n.text("构建缓存可由 Xcode 重建；源码包重新获取需要网络；归档可能用于崩溃符号化与重新分发，应在 Xcode Organizer 中确认后管理。"),
                 officialAction: nil
             )
+        case .vscode:
+            .init(
+                headline: L10n.text("区分编辑器缓存、扩展与工作区状态"),
+                summary: L10n.text("VS Code 的占用不仅来自缓存，还包含已安装扩展、用户设置、工作区状态、本地历史与未保存文件备份。"),
+                compositionTitle: L10n.text("VS Code 空间构成"),
+                compositionDetail: L10n.text("按编辑器缓存、扩展安装包缓存、已安装扩展、用户与工作区状态、日志和备份分别统计。"),
+                managementTitle: L10n.text("只清理可重建内容"),
+                managementDetail: L10n.text("缓存、日志与崩溃报告可以重新生成；扩展、设置、工作区状态、本地历史和未保存备份始终保持受保护。"),
+                officialAction: nil
+            )
         case .simulators:
             .init(
                 headline: L10n.text("分辨运行时、设备与模拟器应用数据"),
@@ -411,10 +469,14 @@ struct StorageSourceDetailProfile {
                 officialAction: nil
             )
         case .docker:
-            containerProfile(
+            .init(
                 headline: L10n.text("跟随 Docker 配置定位真实虚拟磁盘"),
-                summary: L10n.text("自动读取 Docker Desktop 的数据目录设置，并区分当前虚拟磁盘、磁盘维护副本、日志和 Desktop 状态。"),
-                detail: L10n.text("镜像、容器、卷和构建缓存共享虚拟磁盘，宿主机无法可靠拆分其内部占比。本页按真实物理位置统计，具体对象仍应在 Docker Desktop 中确认后管理。")
+                summary: L10n.text("同时测量 Docker Desktop 的宿主机物理占用；Engine 可连接时，再读取镜像、容器、Volume 与构建缓存的官方容量报告。"),
+                compositionTitle: L10n.text("Docker 空间构成"),
+                compositionDetail: L10n.text("宿主机物理分配与 Engine 对象容量分开展示。镜像按 ID 去重，并区分独占、共享与总大小，避免多标签重复计数。"),
+                managementTitle: L10n.text("按引用关系安全清理"),
+                managementDetail: L10n.text("零容器引用的镜像和 Volume 可单独勾选；删除前会再次查询 Docker Engine。悬空镜像可默认安全清理，Volume 可能保存持久数据，始终由用户手动选择。"),
+                officialAction: nil
             )
         case .podman:
             containerProfile(
@@ -481,6 +543,19 @@ struct StorageSourceDetailProfile {
         case "构建中间产物": L10n.text("编译产生的中间文件，可重建但会增加下一次构建时间。")
         case "构建产品": L10n.text("当前项目的构建输出，可能包含仍需测试或分发的产物。")
         case "归档": L10n.text("发布归档与调试符号，可能无法从构建缓存恢复。")
+        case "编辑器缓存": L10n.text("VS Code 可重新生成的编辑器与 Web 缓存，不包含用户设置和工作区状态。")
+        case "图形缓存": L10n.text("Electron 图形管线生成的 GPU、Dawn 与着色器缓存，可重新创建。")
+        case "扩展安装包缓存": L10n.text("已下载的扩展安装包副本；不会移除当前已经安装的扩展。")
+        case "编辑器日志": L10n.text("VS Code 运行与扩展宿主日志，仅在排查近期问题时有保留价值。")
+        case "更新缓存": L10n.text("VS Code 更新器留下的下载与暂存内容，可由更新器重新获取。")
+        case "已安装扩展": L10n.text("用户主动安装的扩展及其程序文件，移除后对应开发能力将不可用。")
+        case "编辑器 CLI 与配置": L10n.text("VS Code 命令行组件与启动配置，不属于缓存。")
+        case "工作区状态": L10n.text("每个工作区的编辑器状态、扩展状态与会话信息，按用户数据保护。")
+        case "用户设置与扩展状态": L10n.text("包含设置、快捷键、代码片段以及扩展的全局状态。")
+        case "本地历史与未保存备份": L10n.text("可能包含尚未写回项目的内容或本地编辑历史，始终受保护。")
+        case "扩展与 Web 状态": L10n.text("扩展 WebView、认证和本地会话使用的数据，清除可能导致状态丢失。")
+        case "编辑器状态数据", "编辑器用户与工作区数据": L10n.text("VS Code 保存的运行状态和用户数据，未验证为缓存时一律受保护。")
+        case "已安装扩展与 CLI": L10n.text("已安装扩展、命令行组件与启动配置，不作为普通缓存处理。")
         case "模拟器运行时": L10n.text("可从 Xcode 重新下载的系统运行时，体积大且重建依赖网络。")
         case "模拟器设备": L10n.text("模拟设备的状态与配置，删除设备会连同其中数据一起移除。")
         case "模拟器应用数据": L10n.text("测试应用在模拟器中的文档、数据库与状态，应按用户数据判断。")

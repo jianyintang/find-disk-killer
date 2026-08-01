@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import FindDiskKillerCore
 import Testing
@@ -546,11 +547,72 @@ import Testing
     #expect(model.progressBySource.isEmpty)
 }
 
+@MainActor
+@Test func cleanupRefreshRunsAfterAnInterruptedFullAnalysisAndReplacesStaleDockerData() async throws {
+    let npm = storageMapCandidate()
+    let initial = storageMapMultiSourceSnapshot(npmBytes: 4_096, chromeBytes: nil)
+    let replacement = storageMapMultiSourceSnapshot(npmBytes: 12_288, chromeBytes: nil)
+    let probe = StorageMapCleanupRefreshProbe(initial: initial, replacement: replacement)
+    let model = StorageMapModel(
+        cacheURL: nil,
+        detect: { [npm] in [npm] },
+        scan: { progress in try await probe.fullScan(progress: progress) },
+        scanSource: { sourceID, progress in
+            try await probe.sourceScan(sourceID: sourceID, progress: progress)
+        }
+    )
+    await model.prepare()
+    model.startAnalysis()
+    try await waitForStorageMapTest { model.phase == .ready && model.snapshot != nil }
+
+    model.startAnalysis()
+    #expect(model.phase == .scanning)
+    model.refreshAfterCleanup(sourceID: .npm)
+    #expect(await probe.sourceScanCount == 0)
+
+    model.stopAnalysis()
+    try await waitForStorageMapTest {
+        await probe.sourceScanCount == 1
+            && model.phase == .ready
+            && model.reanalyzingSourceIDs.isEmpty
+    }
+
+    #expect(model.snapshot?.result(for: .npm)?.allocatedBytes == 12_288)
+    #expect(await probe.sourceIDs == [.npm])
+}
+
+@MainActor
+@Test func cleanupRefreshFailureIsAttachedToTheAffectedSource() async throws {
+    let npm = storageMapCandidate()
+    let initial = storageMapMultiSourceSnapshot(npmBytes: 4_096, chromeBytes: nil)
+    let model = StorageMapModel(
+        cacheURL: nil,
+        detect: { [npm] in [npm] },
+        scan: { _ in initial },
+        scanSource: { _, _ in throw CleanupLifecycleTestError.syncFailed }
+    )
+    await model.prepare()
+    model.startAnalysis()
+    try await waitForStorageMapTest { model.phase == .ready && model.snapshot != nil }
+
+    model.refreshAfterCleanup(sourceID: .npm)
+    try await waitForStorageMapTest {
+        !model.reanalyzingSourceIDs.contains(.npm)
+            && model.refreshErrorsBySource[.npm] != nil
+    }
+
+    #expect(model.snapshot == initial)
+    #expect(model.refreshErrorsBySource[.npm] == "同步失败")
+}
+
 @Test func storageMapRoutesAgentSourcesToTheirOriginalDeepAnalysis() {
     #expect(StorageSourceDestination.destination(for: .codex) == .agentAnalysis(.codex))
     #expect(StorageSourceDestination.destination(for: .claude) == .agentAnalysis(.claude))
     #expect(StorageSourceDestination.destination(for: .chrome) == .tailoredAnalysis)
     #expect(StorageSourceDestination.destination(for: .go) == .tailoredAnalysis)
+    #expect(AgentStorageProvider.codex.storageSourceID == .codex)
+    #expect(AgentStorageProvider.claude.storageSourceID == .claude)
+    #expect(AgentStorageProvider.openCode.storageSourceID == .openCode)
 }
 
 @Test func storageMapUsesDifferentAnalysisBriefsForChromeAndGo() {
@@ -651,6 +713,67 @@ import Testing
     #expect(regular.supportingDetail?.contains("1 / 1") == true)
     #expect(codex.phaseTitle == L10n.text("正在进行日志数据库归因"))
     #expect(codex.workDetail.contains("128"))
+}
+
+@Test func completedStorageRowsDescribeLargestMeasuredComponents() {
+    let descriptor = storageMapCandidate().descriptor
+    func component(_ id: String, _ title: String, _ bytes: UInt64) -> StorageComponent {
+        StorageComponent(
+            id: id,
+            title: title,
+            rootDisplayName: "npm cache",
+            allocatedBytes: bytes,
+            logicalBytes: bytes,
+            entryCount: 1,
+            newestModificationDate: nil,
+            risk: .rebuildableCache,
+            isProtected: false
+        )
+    }
+    let result = StorageSourceResult(
+        descriptor: descriptor,
+        availability: .available,
+        allocatedBytes: 29_000,
+        logicalBytes: 29_000,
+        entryCount: 5,
+        reclaimableCandidateBytes: 29_000,
+        components: [
+            component("logs", "调试日志", 3_000),
+            component("cache", "内容寻址缓存", 10_000),
+            component("cache-copy", "内容寻址缓存", 5_000),
+            component("npx", "npx 临时安装", 8_000),
+            component("metadata", "包索引元数据", 3_000)
+        ]
+    )
+
+    #expect(StorageSourceActivityPresentation.completedComposition(for: result) == [
+        L10n.text("内容寻址缓存"),
+        L10n.text("npx 临时安装"),
+        L10n.text("包索引元数据")
+    ].joined(separator: L10n.text("、")))
+}
+
+@Test func completedAgentRowsDescribeAttributedStorageComposition() {
+    let summary = AgentStorageProviderSummary(
+        provider: .codex,
+        exclusiveBytes: 100,
+        chatBytes: 55,
+        globalBytes: 35,
+        unattributedBytes: 10,
+        mainThreadBytes: 40,
+        subagentBytes: 15,
+        familyOtherBytes: 0,
+        threadCount: 2,
+        subagentCount: 1,
+        sourceCount: 1,
+        issueCount: 0
+    )
+
+    #expect(StorageSourceActivityPresentation.completedAgentComposition(for: summary) == [
+        L10n.text("聊天与子代理"),
+        L10n.text("工具全局数据"),
+        L10n.text("未归属数据")
+    ].joined(separator: L10n.text("、")))
 }
 
 @Test func deferredWorkspaceNeverPretendsToWaitForAScanWorker() {
@@ -787,6 +910,20 @@ import Testing
     ) == .available)
 }
 
+@Test func storageMapReanalysisButtonIsPersistentAndActionable() throws {
+    let source = try storageMapViewSource()
+    let buttonBody = try #require(
+        source.split(separator: "private var analysisButton", maxSplits: 1).last?
+            .split(separator: "private var isAnalysisRunning", maxSplits: 1).first
+    )
+
+    #expect(buttonBody.contains("Text(L10n.text(isAnalysisRunning ? \"停止分析\" : \"重新分析\"))"))
+    #expect(buttonBody.contains("storage-map-reanalyze"))
+    #expect(buttonBody.contains("idealWidth: 178"))
+    #expect(buttonBody.contains("minHeight: 58"))
+    #expect(!buttonBody.contains("opacity(isHovering ? 1 : 0)"))
+}
+
 @Test func storageMapDoesNotInstallHoverPopovers() throws {
     let source = try storageMapViewSource()
 
@@ -808,7 +945,8 @@ import Testing
     )
 
     #expect(compactRow.contains("frame(minWidth: 0, maxWidth: .infinity"))
-    #expect(compactRow.contains("stateBadge\n                    .fixedSize"))
+    #expect(compactRow.contains("activityContent"))
+    #expect(!compactRow.contains("stateBadge"))
     #expect(compactRow.contains(".clipped()"))
     #expect(overview.contains(".frame(maxWidth: .infinity, maxHeight: .infinity)"))
     #expect(overview.contains(".clipped()"))
@@ -947,6 +1085,10 @@ import Testing
     #expect(source.contains(".sheet(item: $cleanupSession)"))
     #expect(!source.contains(".sheet(item: $batchCleanupContext)"))
     #expect(!source.contains("AgentStorageBatchCleanupSheet("))
+    #expect(source.contains("AgentStorageIndexBuilder.build("))
+    #expect(source.contains("let worker = Task.detached(priority: .userInitiated)"))
+    #expect(source.contains("cleanupBytesByFamilyID[row.familyID]"))
+    #expect(!source.contains("rebuildProviderIndexes("))
 }
 
 @Test func storageMapDoesNotPresentAResultMissingFromTheUnifiedStorageSnapshot() {
@@ -993,6 +1135,573 @@ import Testing
     #expect(detailBody.contains("StorageSourceBrandIcon"))
     #expect(detailBody.contains("ToolbarItem(placement: .navigation)"))
     #expect(!detailBody.contains("Button(action: goBack) { Image"))
+}
+
+@Test func safeCleanupProjectionIncludesVerifiedCachesAndDanglingImages() throws {
+    let identity = StoragePathIdentity(device: 11, inode: 22)
+    let safeNode = StorageResourceNode(
+        id: "go.build-cache",
+        kind: .location,
+        title: "Build cache",
+        symbol: "shippingbox",
+        allocatedBytes: 8_192,
+        risk: .rebuildableCache,
+        evidence: .fileSystemAllocated,
+        isProtected: false,
+        cleanupTarget: .removePathContents(
+            path: "/tmp/go-build",
+            identity: identity,
+            sourceID: .go,
+            rootID: "go.build-cache"
+        )
+    )
+    let protectedNode = StorageResourceNode(
+        id: "go.tools",
+        kind: .location,
+        title: "Installed tools",
+        symbol: "hammer",
+        allocatedBytes: 4_096,
+        risk: .protectedUserData,
+        evidence: .fileSystemAllocated,
+        isProtected: true,
+        cleanupTarget: .removePathContents(
+            path: "/tmp/go-tools",
+            identity: identity,
+            sourceID: .go,
+            rootID: "go.tools"
+        )
+    )
+    let dockerNode = StorageResourceNode(
+        id: "docker.image",
+        kind: .dockerImage,
+        title: "Unused image",
+        symbol: "shippingbox",
+        allocatedBytes: 16_384,
+        risk: .rebuildableCache,
+        evidence: .providerReported,
+        isProtected: false,
+        cleanupTarget: .dockerImage(id: "sha256:test")
+    )
+    let taggedImageNode = StorageResourceNode(
+        id: "docker.image.tagged",
+        kind: .dockerImage,
+        title: "Tagged image",
+        symbol: "shippingbox",
+        allocatedBytes: 12_288,
+        risk: .environmentOrRuntime,
+        evidence: .providerReported,
+        isProtected: false,
+        cleanupTarget: .dockerImage(id: "sha256:tagged")
+    )
+    let volumeNode = StorageResourceNode(
+        id: "docker.volume.data",
+        kind: .dockerVolume,
+        title: "data",
+        symbol: "externaldrive",
+        allocatedBytes: 65_536,
+        risk: .protectedUserData,
+        evidence: .providerReported,
+        isProtected: true,
+        cleanupTarget: .dockerVolume(name: "data")
+    )
+    let repositoryNode = StorageResourceNode(
+        id: "workspace.repository",
+        kind: .repository,
+        title: "Repository",
+        symbol: "folder.badge.gearshape",
+        allocatedBytes: 32_768,
+        risk: .rebuildableCache,
+        evidence: .fileSystemAllocated,
+        isProtected: false,
+        cleanupTarget: .trashRepository(path: "/tmp/repository", identity: identity)
+    )
+    let worktreeNode = StorageResourceNode(
+        id: "workspace.worktree",
+        kind: .worktree,
+        title: "Worktree",
+        symbol: "arrow.triangle.branch",
+        allocatedBytes: 4_096,
+        risk: .rebuildableCache,
+        evidence: .fileSystemAllocated,
+        isProtected: false,
+        cleanupTarget: .removeGitWorktree(
+            path: "/tmp/worktree",
+            mainRepositoryPath: "/tmp/repository",
+            identity: identity
+        )
+    )
+
+    let requests = StorageSafeCleanupProjection.safeRequests(
+        in: [
+            safeNode,
+            protectedNode,
+            dockerNode,
+            taggedImageNode,
+            volumeNode,
+            repositoryNode,
+            worktreeNode
+        ]
+    )
+
+    #expect(requests.map(\.id) == ["docker.image", "go.build-cache"])
+    #expect(requests.first?.displayBytes == 16_384)
+    guard case .dockerImage = try #require(requests.first).target else {
+        Issue.record("Expected a dangling Docker image cleanup target")
+        return
+    }
+    guard case .removePathContents = try #require(requests.last).target else {
+        Issue.record("Expected a verified directory cleanup target")
+        return
+    }
+}
+
+@Test func dockerImageCleanupRevalidatesReferencesBeforeUsingOfficialRemoval() async {
+    let recorder = DockerCleanupCommandRecorder(referenceOutput: "")
+    let executor = StorageResourceCleanupExecutor(dockerCommand: { arguments in
+        await recorder.run(arguments)
+    })
+    let request = StorageCleanupRequest(
+        id: "docker.image.test",
+        title: "Dangling image",
+        displayBytes: 1_024,
+        target: .dockerImage(id: "sha256:test")
+    )
+
+    let summary = await executor.execute([request])
+    let commands = await recorder.commands
+
+    #expect(summary.succeededCount == 1)
+    #expect(commands == [
+        ["image", "inspect", "sha256:test", "--format", "{{json .RepoTags}}"],
+        ["container", "ls", "--all", "--quiet", "--filter", "ancestor=sha256:test"],
+        ["image", "rm", "sha256:test"]
+    ])
+}
+
+@Test func dockerImageCleanupRemovesEveryVerifiedRepositoryReferenceWithoutForce() async {
+    let recorder = DockerCleanupCommandRecorder(
+        referenceOutput: "",
+        inspectOutput: #"["mirror.example/app@sha256:test","registry.example/app@sha256:test"]"#
+    )
+    let executor = StorageResourceCleanupExecutor(dockerCommand: { arguments in
+        await recorder.run(arguments)
+    })
+    let request = StorageCleanupRequest(
+        id: "docker.image.test",
+        title: "Digest-only image",
+        displayBytes: 1_024,
+        target: .dockerImage(id: "sha256:test")
+    )
+
+    let summary = await executor.execute([request])
+    let commands = await recorder.commands
+
+    #expect(summary.succeededCount == 1)
+    #expect(commands == [
+        ["image", "inspect", "sha256:test", "--format", "{{json .RepoTags}}"],
+        ["container", "ls", "--all", "--quiet", "--filter", "ancestor=sha256:test"],
+        ["image", "rm", "mirror.example/app@sha256:test"],
+        ["image", "rm", "registry.example/app@sha256:test"]
+    ])
+    #expect(!commands.flatMap { $0 }.contains("--force"))
+}
+
+@Test func dockerVolumeCleanupStopsWhenAContainerNowReferencesIt() async {
+    let recorder = DockerCleanupCommandRecorder(referenceOutput: "container-id\n")
+    let executor = StorageResourceCleanupExecutor(dockerCommand: { arguments in
+        await recorder.run(arguments)
+    })
+    let request = StorageCleanupRequest(
+        id: "docker.volume.data",
+        title: "data",
+        displayBytes: 2_048,
+        target: .dockerVolume(name: "data")
+    )
+
+    let summary = await executor.execute([request])
+    let commands = await recorder.commands
+
+    #expect(summary.failedCount == 1)
+    #expect(commands == [
+        ["volume", "inspect", "data"],
+        ["container", "ls", "--all", "--quiet", "--filter", "volume=data"]
+    ])
+}
+
+@Test func simulatorCleanupUsesOfficialSimctlCommands() async {
+    let recorder = DockerCleanupCommandRecorder(referenceOutput: "")
+    let executor = StorageResourceCleanupExecutor(simctlCommand: { arguments in
+        await recorder.run(arguments)
+    })
+    let runtimeURL = FileManager.default.temporaryDirectory
+        .appending(path: "FindDiskKiller-runtime-\(UUID().uuidString).simruntime")
+    try? FileManager.default.createDirectory(at: runtimeURL, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: runtimeURL) }
+    var runtimeStat = stat()
+    _ = lstat(runtimeURL.path, &runtimeStat)
+    let requests = [
+        StorageCleanupRequest(
+            id: "simulator.device",
+            title: "iPhone 16 Pro",
+            displayBytes: 2_048,
+            target: .simulatorDevice(identifier: "DEVICE-ONE")
+        ),
+        StorageCleanupRequest(
+            id: "simulator.runtime",
+            title: "iOS 18.5",
+            displayBytes: 4_096,
+            target: .simulatorRuntime(
+                identifier: "com.apple.CoreSimulator.SimRuntime.iOS-18-5",
+                path: runtimeURL.path,
+                identity: StoragePathIdentity(
+                    device: UInt64(runtimeStat.st_dev),
+                    inode: UInt64(runtimeStat.st_ino)
+                )
+            )
+        )
+    ]
+
+    let summary = await executor.execute(requests)
+    let commands = await recorder.commands
+
+    #expect(summary.succeededCount == 2)
+    #expect(commands == [
+        ["delete", "DEVICE-ONE"],
+        ["runtime", "delete", "com.apple.CoreSimulator.SimRuntime.iOS-18-5"]
+    ])
+}
+
+@Test func missingFileCleanupTargetsAreIdempotentSuccesses() async {
+    let missingRoot = FileManager.default.temporaryDirectory
+        .appending(path: "FindDiskKiller-missing-\(UUID().uuidString)").path
+    let identity = StoragePathIdentity(device: .max, inode: .max)
+    let requests = [
+        StorageCleanupRequest(
+            id: "missing.cache",
+            title: "Missing cache",
+            displayBytes: 1,
+            target: .removePathContents(
+                path: missingRoot,
+                identity: identity,
+                sourceID: .npm,
+                rootID: "missing.cache"
+            )
+        ),
+        StorageCleanupRequest(
+            id: "missing.repository",
+            title: "Missing repository",
+            displayBytes: 1,
+            target: .trashRepository(path: missingRoot, identity: identity)
+        ),
+        StorageCleanupRequest(
+            id: "missing.worktree",
+            title: "Missing worktree",
+            displayBytes: 1,
+            target: .removeGitWorktree(
+                path: missingRoot,
+                mainRepositoryPath: missingRoot + "-main",
+                identity: identity
+            )
+        )
+    ]
+
+    let summary = await StorageResourceCleanupExecutor().execute(requests)
+
+    #expect(summary.succeededCount == 3)
+    #expect(summary.failedCount == 0)
+}
+
+@Test func snapshotCacheWriterRejectsAnObsoleteCleanupSnapshot() async throws {
+    let cacheURL = FileManager.default.temporaryDirectory
+        .appending(path: "FindDiskKiller-snapshot-\(UUID().uuidString).json")
+    defer { try? FileManager.default.removeItem(at: cacheURL) }
+    let current = storageMapMultiSourceSnapshot(
+        npmBytes: 2_048,
+        chromeBytes: nil,
+        scannedAt: Date(timeIntervalSince1970: 2_000)
+    )
+    let obsolete = storageMapMultiSourceSnapshot(
+        npmBytes: 8_192,
+        chromeBytes: nil,
+        scannedAt: Date(timeIntervalSince1970: 1_000)
+    )
+    let writer = SnapshotCacheWriter<StorageAnalysisSnapshot>()
+
+    await writer.save(current, to: cacheURL, revision: 2)
+    await writer.save(obsolete, to: cacheURL, revision: 1)
+
+    let restored = try JSONDecoder().decode(
+        StorageAnalysisSnapshot.self,
+        from: Data(contentsOf: cacheURL)
+    )
+    #expect(restored == current)
+}
+
+@Test func storageResourceTreeCollapsesARepeatedSingleLeafWithoutLosingCleanup() throws {
+    let identity = StoragePathIdentity(device: 1, inode: 2)
+    let child = StorageResourceNode(
+        id: "go.build-cache.category",
+        kind: .category,
+        title: "构建缓存",
+        symbol: "shippingbox",
+        allocatedBytes: 8_192,
+        logicalBytes: 7_168,
+        entryCount: 12,
+        risk: .rebuildableCache,
+        evidence: .fileSystemAllocated,
+        isProtected: false
+    )
+    let parent = StorageResourceNode(
+        id: "go.build-cache",
+        kind: .location,
+        title: "Build cache",
+        symbol: "shippingbox",
+        allocatedBytes: 8_192,
+        logicalBytes: 7_168,
+        entryCount: 12,
+        risk: .rebuildableCache,
+        evidence: .fileSystemAllocated,
+        isProtected: false,
+        cleanupTarget: .removePathContents(
+            path: "/tmp/go-build",
+            identity: identity,
+            sourceID: .go,
+            rootID: "go.build-cache"
+        ),
+        children: [child]
+    )
+
+    let presented = try #require(
+        StorageResourceTreeProjection.presentationNodes([parent]).first
+    )
+
+    #expect(presented.children.isEmpty)
+    #expect(presented.cleanupTarget == parent.cleanupTarget)
+    #expect(StorageResourceTreeProjection.cleanupRequests(in: presented).map(\.id) == [parent.id])
+}
+
+@Test func storageResourceTreePreservesMeaningfulChildStructure() {
+    func node(
+        id: String,
+        bytes: UInt64,
+        children: [StorageResourceNode] = []
+    ) -> StorageResourceNode {
+        StorageResourceNode(
+            id: id,
+            kind: .category,
+            title: id,
+            symbol: "folder",
+            allocatedBytes: bytes,
+            logicalBytes: bytes,
+            entryCount: 1,
+            risk: .environmentOrRuntime,
+            evidence: .fileSystemAllocated,
+            isProtected: true,
+            children: children
+        )
+    }
+    let unequal = node(id: "unequal", bytes: 10, children: [node(id: "partial", bytes: 4)])
+    let grouped = node(
+        id: "grouped",
+        bytes: 10,
+        children: [node(id: "first", bytes: 4), node(id: "second", bytes: 6)]
+    )
+
+    let presented = StorageResourceTreeProjection.presentationNodes([unequal, grouped])
+
+    #expect(presented[0].children.map(\.id) == ["partial"])
+    #expect(presented[1].children.map(\.id) == ["first", "second"])
+}
+
+@Test func storageResourceTreeExpandsOnlyAncestorsOfSafeTargets() {
+    func node(
+        id: String,
+        children: [StorageResourceNode] = []
+    ) -> StorageResourceNode {
+        StorageResourceNode(
+            id: id,
+            kind: .category,
+            title: id,
+            symbol: "folder",
+            allocatedBytes: 1,
+            risk: .environmentOrRuntime,
+            evidence: .fileSystemAllocated,
+            isProtected: true,
+            children: children
+        )
+    }
+    let nodes = [
+        node(id: "safe-root", children: [
+            node(id: "safe-group", children: [node(id: "safe-target")]),
+            node(id: "unrelated-group", children: [node(id: "unrelated-leaf")])
+        ]),
+        node(id: "closed-root", children: [node(id: "closed-leaf")])
+    ]
+
+    let expanded = StorageResourceTreeProjection.expansionIDs(
+        to: ["safe-target"],
+        in: nodes
+    )
+
+    #expect(expanded == ["safe-root", "safe-group"])
+}
+
+@Test func storageResourceTreeIndexResolvesSelectionWithoutRescanningSubtrees() throws {
+    let identity = StoragePathIdentity(device: 1, inode: 2)
+    let safeLeaf = StorageResourceNode(
+        id: "safe-leaf",
+        kind: .location,
+        title: "Safe leaf",
+        symbol: "shippingbox",
+        allocatedBytes: 4_096,
+        risk: .rebuildableCache,
+        evidence: .fileSystemAllocated,
+        isProtected: false,
+        cleanupTarget: .removePathContents(
+            path: "/tmp/safe-leaf",
+            identity: identity,
+            sourceID: .go,
+            rootID: "safe-leaf"
+        )
+    )
+    let manualLeaf = StorageResourceNode(
+        id: "manual-leaf",
+        kind: .dockerVolume,
+        title: "Manual leaf",
+        symbol: "externaldrive",
+        allocatedBytes: 8_192,
+        risk: .protectedUserData,
+        evidence: .providerReported,
+        isProtected: true,
+        cleanupTarget: .dockerVolume(name: "manual")
+    )
+    let root = StorageResourceNode(
+        id: "root",
+        kind: .category,
+        title: "Root",
+        symbol: "folder",
+        allocatedBytes: 12_288,
+        risk: .environmentOrRuntime,
+        evidence: .fileSystemAllocated,
+        isProtected: true,
+        children: [safeLeaf, manualLeaf]
+    )
+
+    let index = StorageResourceTreeIndex(nodes: [root])
+
+    #expect(index.cleanupRequestIDsByNodeID["root"] == ["safe-leaf", "manual-leaf"])
+    #expect(index.safeRequestIDs == ["safe-leaf"])
+    #expect(index.defaultExpandedIDs == ["root"])
+    #expect(index.selectionCounts(for: ["safe-leaf"]) == ["root": 1, "safe-leaf": 1])
+    #expect(index.selectedRequests(for: ["manual-leaf"]).map(\.id) == ["manual-leaf"])
+}
+
+@Test func safeCleanupIndexCachesScopeAndRequestLookups() {
+    let index = StorageSafeCleanupIndex(snapshot: storageSafeCleanupSnapshot())
+
+    #expect(index.groups.map(\.id) == [.go, .npm])
+    #expect(index.groups(for: .developerTools).map(\.id) == [.go, .npm])
+    #expect(index.requestIDs(for: .developerTools) == ["go.build", "go.module", "npm.cache"])
+    #expect(index.requestIDsByGroup[.go] == ["go.build", "go.module"])
+    #expect(index.selectedBytes(for: ["go.build", "npm.cache"]) == 10_240)
+    #expect(index.selectedEntries(for: ["npm.cache"]).map(\.0) == [.npm])
+}
+
+@Test func storageMapInteractionHandlersYieldBeforeDerivedContentWork() throws {
+    let storageMapSource = try storageMapViewSource()
+    let testsURL = URL(fileURLWithPath: #filePath)
+    let repositoryRoot = testsURL
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let treeSource = try String(
+        contentsOf: repositoryRoot
+            .appendingPathComponent("Sources/FindDiskKillerApp/Views/StorageResourceTreeView.swift"),
+        encoding: .utf8
+    )
+
+    #expect(storageMapSource.contains("isOpening = true"))
+    #expect(storageMapSource.contains("await Task.yield()"))
+    #expect(storageMapSource.contains("renderedScope = newScope"))
+    #expect(storageMapSource.contains("StorageResourceTreeIndex(nodes: nodes)"))
+    #expect(storageMapSource.contains("StorageSafeCleanupIndex(snapshot: snapshot)"))
+    #expect(treeSource.contains("cleanupRequestIDsByNodeID[row.node.id]"))
+    #expect(treeSource.contains("rowUpdateTask = Task"))
+    #expect(!treeSource.contains("cleanupRequests(in: row.node)"))
+}
+
+@Test func safeCleanupProjectionGroupsBySourceAndSortsByVerifiedBytes() {
+    let snapshot = storageSafeCleanupSnapshot()
+
+    let groups = StorageSafeCleanupProjection.groups(in: snapshot)
+
+    #expect(groups.map(\.id) == [.go, .npm])
+    #expect(groups.map(\.family) == [.developerTools, .developerTools])
+    #expect(groups[0].requests.map(\.id) == ["go.build", "go.module"])
+    #expect(groups[0].totalBytes == 12_288)
+    #expect(groups[1].totalBytes == 2_048)
+    #expect(StorageSafeCleanupProjection.totalBytes(in: groups) == 14_336)
+}
+
+@Test func safeCleanupProjectionDoesNotUseCandidateBytesWithoutExecutableTargets() {
+    let descriptor = StorageSourceDescriptor(
+        id: .chrome,
+        title: "Chrome",
+        family: .applications,
+        symbol: "globe",
+        cleanupCapability: .analysisOnly
+    )
+    let result = StorageSourceResult(
+        descriptor: descriptor,
+        availability: .available,
+        allocatedBytes: 32_768,
+        logicalBytes: 32_768,
+        entryCount: 1,
+        reclaimableCandidateBytes: 32_768,
+        components: [],
+        resourceTree: []
+    )
+    let snapshot = StorageAnalysisSnapshot(
+        scannedAt: Date(timeIntervalSince1970: 1_000),
+        results: [result],
+        totalAllocatedBytes: result.allocatedBytes,
+        conflictBytes: 0,
+        measuredEntryCount: 1,
+        skippedEntryCount: 0
+    )
+
+    #expect(StorageSafeCleanupProjection.groups(in: snapshot).isEmpty)
+}
+
+@Test func safeCleanupExecutesSelectionWithoutAConfirmationLayer() throws {
+    let source = try storageMapViewSource()
+    let safeCleanupView = try #require(
+        source.split(separator: "private struct StorageSafeCleanupView", maxSplits: 1).last?
+            .split(separator: "private struct StorageMapSummaryBand", maxSplits: 1).first
+    )
+
+    #expect(safeCleanupView.contains("Button(action: executeSelected)"))
+    #expect(safeCleanupView.contains("StorageResourceCleanupExecutor()"))
+    #expect(safeCleanupView.contains("accessibilityIdentifier(\"storage-safe-cleanup-execute\")"))
+    #expect(!safeCleanupView.contains(".sheet"))
+    #expect(!safeCleanupView.contains(".alert"))
+    #expect(!safeCleanupView.contains("confirmationDialog"))
+}
+
+@Test func storageMapKeepsSafeCleanupAndAgentDetailsAsInPageRoutes() throws {
+    let source = try storageMapViewSource()
+    let rootView = try #require(
+        source.split(separator: "struct StorageMapView: View", maxSplits: 1).last?
+            .split(separator: "private struct StorageMapFirstRunView", maxSplits: 1).first
+    )
+
+    #expect(rootView.contains("case .safeCleanup:"))
+    #expect(rootView.contains("route = .safeCleanup"))
+    #expect(rootView.contains("storage-map-safe-cleanup-scope"))
+    #expect(rootView.contains("case .agentAnalysis(let provider):"))
+    #expect(rootView.contains("AgentStorageView("))
+    #expect(!rootView.contains("StorageSafeCleanupSheet"))
+    #expect(!rootView.contains("StorageSafeCleanupSidebar"))
 }
 
 private actor StorageMapScanProbe {
@@ -1124,6 +1833,39 @@ private actor StorageMapPartialScanProbe {
         ))
         try await Task.sleep(for: delay)
         return result
+    }
+}
+
+private actor StorageMapCleanupRefreshProbe {
+    private let initial: StorageAnalysisSnapshot
+    private let replacement: StorageAnalysisSnapshot
+    private(set) var fullScanCount = 0
+    private(set) var sourceIDs: [StorageSourceID] = []
+    var sourceScanCount: Int { sourceIDs.count }
+
+    init(initial: StorageAnalysisSnapshot, replacement: StorageAnalysisSnapshot) {
+        self.initial = initial
+        self.replacement = replacement
+    }
+
+    func fullScan(
+        progress: @escaping @Sendable (StorageScanProgress) -> Void
+    ) async throws -> StorageAnalysisSnapshot {
+        fullScanCount += 1
+        progress(.init(phase: .measuring, sourceID: .npm))
+        if fullScanCount > 1 {
+            try await Task.sleep(for: .seconds(60))
+        }
+        return initial
+    }
+
+    func sourceScan(
+        sourceID: StorageSourceID,
+        progress: @escaping @Sendable (StorageScanProgress) -> Void
+    ) async throws -> StorageAnalysisSnapshot {
+        sourceIDs.append(sourceID)
+        progress(.init(phase: .measuring, sourceID: sourceID))
+        return replacement
     }
 }
 
@@ -1434,6 +2176,84 @@ private func storageMapResult(
     )
 }
 
+private func storageSafeCleanupSnapshot() -> StorageAnalysisSnapshot {
+    let identity = StoragePathIdentity(device: 1, inode: 2)
+    func safeNode(
+        id: String,
+        title: String,
+        bytes: UInt64,
+        sourceID: StorageSourceID
+    ) -> StorageResourceNode {
+        StorageResourceNode(
+            id: id,
+            kind: .location,
+            title: title,
+            symbol: "shippingbox",
+            allocatedBytes: bytes,
+            risk: .rebuildableCache,
+            evidence: .fileSystemAllocated,
+            isProtected: false,
+            cleanupTarget: .removePathContents(
+                path: "/tmp/\(id)",
+                identity: identity,
+                sourceID: sourceID,
+                rootID: id
+            )
+        )
+    }
+    func result(
+        id: StorageSourceID,
+        title: String,
+        nodes: [StorageResourceNode]
+    ) -> StorageSourceResult {
+        let bytes = nodes.reduce(UInt64.zero) { $0 + $1.allocatedBytes }
+        return StorageSourceResult(
+            descriptor: StorageSourceDescriptor(
+                id: id,
+                title: title,
+                family: .developerTools,
+                symbol: "shippingbox",
+                cleanupCapability: .analysisOnly
+            ),
+            availability: .available,
+            allocatedBytes: bytes,
+            logicalBytes: bytes,
+            entryCount: nodes.count,
+            reclaimableCandidateBytes: bytes,
+            components: [],
+            resourceTree: nodes
+        )
+    }
+
+    let go = result(
+        id: .go,
+        title: "Go",
+        nodes: [
+            safeNode(id: "go.module", title: "Module cache", bytes: 4_096, sourceID: .go),
+            safeNode(id: "go.build", title: "Build cache", bytes: 8_192, sourceID: .go)
+        ]
+    )
+    let npm = result(
+        id: .npm,
+        title: "npm",
+        nodes: [safeNode(id: "npm.cache", title: "Cache", bytes: 2_048, sourceID: .npm)]
+    )
+    return StorageAnalysisSnapshot(
+        scannedAt: Date(timeIntervalSince1970: 1_000),
+        results: [npm, go],
+        totalAllocatedBytes: npm.allocatedBytes + go.allocatedBytes,
+        conflictBytes: 0,
+        measuredEntryCount: 3,
+        skippedEntryCount: 0
+    )
+}
+
+private enum CleanupLifecycleTestError: LocalizedError {
+    case syncFailed
+
+    var errorDescription: String? { "同步失败" }
+}
+
 private func storageMapAccessSnapshot(
     sourceIDs: [StorageSourceID]
 ) -> StorageAnalysisSnapshot {
@@ -1501,6 +2321,24 @@ private func storageMapAgentSnapshot(
         ),
         crossAgentSharedBytes: 0
     )
+}
+
+private actor DockerCleanupCommandRecorder {
+    private(set) var commands: [[String]] = []
+    private let referenceOutput: String
+    private let inspectOutput: String
+
+    init(referenceOutput: String, inspectOutput: String = "[]") {
+        self.referenceOutput = referenceOutput
+        self.inspectOutput = inspectOutput
+    }
+
+    func run(_ arguments: [String]) -> String {
+        commands.append(arguments)
+        if arguments.starts(with: ["container", "ls"]) { return referenceOutput }
+        if arguments.starts(with: ["image", "inspect"]) { return inspectOutput }
+        return ""
+    }
 }
 
 private extension String {

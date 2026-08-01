@@ -16,16 +16,34 @@ enum DockerStorageInspectorError: Error {
 
 struct DockerStorageInspector: Sendable {
     typealias Runner = @Sendable () async throws -> Data
+    typealias ImageInspectionRunner = @Sendable () async throws -> [DockerImageInspection]
     private let runner: Runner
+    private let imageInspectionRunner: ImageInspectionRunner
 
-    init(runner: @escaping Runner = DockerStorageInspector.runDockerSystemDF) {
+    init(
+        runner: @escaping Runner = DockerStorageInspector.runDockerSystemDF,
+        imageInspectionRunner: @escaping ImageInspectionRunner = DockerStorageInspector.runDockerImageInspections
+    ) {
         self.runner = runner
+        self.imageInspectionRunner = imageInspectionRunner
     }
 
     func inspect() async -> DockerStorageInventory {
         do {
-            let data = try await runner()
-            return DockerStorageInventory(nodes: try Self.parse(data), diagnostic: nil)
+            async let reportData = runner()
+            async let inspections = imageInspectionRunner()
+            let data = try await reportData
+            let referenceMap = try? await Dictionary(
+                uniqueKeysWithValues: inspections.map { inspection in
+                    (inspection.id, inspection.references)
+                }
+            )
+            return DockerStorageInventory(
+                nodes: try Self.parse(data, imageReferencesByID: referenceMap),
+                diagnostic: referenceMap == nil
+                    ? "Docker image references could not be verified"
+                    : nil
+            )
         } catch {
             return DockerStorageInventory(
                 nodes: [],
@@ -34,28 +52,55 @@ struct DockerStorageInspector: Sendable {
         }
     }
 
-    static func parse(_ data: Data) throws -> [StorageResourceNode] {
+    static func parse(
+        _ data: Data,
+        imageReferencesByID: [String: [String]]? = nil
+    ) throws -> [StorageResourceNode] {
         let report = try JSONDecoder().decode(DockerSystemDFReport.self, from: data)
-        let imageNodes = report.images.map { image in
-            let title = image.repository.isEmpty || image.repository == "<none>"
-                ? String(image.id.prefix(19))
-                : "\(image.repository):\(image.tag.isEmpty ? "latest" : image.tag)"
-            let unique = parseSize(image.uniqueSize) ?? parseSize(image.size) ?? 0
-            let shared = parseSize(image.sharedSize) ?? 0
-            let virtual = parseSize(image.virtualSize) ?? parseSize(image.size) ?? 0
+        let imageNodes = Dictionary(grouping: report.images, by: \.id).map { id, records in
+            let reportedReferences = records.compactMap { image -> String? in
+                guard !image.repository.isEmpty, image.repository != "<none>" else { return nil }
+                return "\(image.repository):\(image.tag.isEmpty ? "latest" : image.tag)"
+            }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            let verifiedReferences = imageReferencesByID?[id]
+            let references = verifiedReferences ?? reportedReferences
+            let referencesAreVerified = verifiedReferences != nil
+            let containerCount = records.compactMap { Int($0.containers) }.max()
+            let unique = records.compactMap { parseSize($0.uniqueSize) }.max()
+                ?? records.compactMap { parseSize($0.size) }.max()
+                ?? 0
+            let shared = records.compactMap { parseSize($0.sharedSize) }.max() ?? 0
+            let virtual = records.compactMap { image in
+                image.virtualSize.flatMap(parseSize) ?? parseSize(image.size)
+            }.max() ?? 0
+            let isDangling = referencesAreVerified && references.isEmpty
+            let canRemove = referencesAreVerified && containerCount == 0
+            let title = references.first ?? String(id.prefix(19))
+            var detailParts = [
+                "独占 \(formatBytes(unique))",
+                "共享 \(formatBytes(shared))",
+                "总大小 \(formatBytes(virtual))"
+            ]
+            if references.count > 1 { detailParts.append("\(references.count) 个仓库引用") }
+            if let containerCount {
+                detailParts.append("\(containerCount) 个容器")
+            } else {
+                detailParts.append("容器引用未知")
+            }
             return StorageResourceNode(
-                id: "docker.image.\(image.id)",
+                id: "docker.image.\(id)",
                 kind: .dockerImage,
                 title: title,
-                detail: "独占 \(formatBytes(unique)) · 共享 \(formatBytes(shared)) · 虚拟 \(formatBytes(virtual)) · \(image.containers) 个容器",
+                detail: detailParts.joined(separator: " · "),
                 symbol: "shippingbox.fill",
                 allocatedBytes: unique,
                 logicalBytes: virtual,
                 entryCount: 1,
-                risk: .environmentOrRuntime,
+                risk: isDangling ? .rebuildableCache : .environmentOrRuntime,
                 evidence: .providerReported,
-                isProtected: image.containers != "0",
-                cleanupTarget: image.containers == "0" ? .dockerImage(id: image.id) : nil
+                isProtected: !canRemove,
+                cleanupTarget: canRemove ? .dockerImage(id: id) : nil
             )
         }
         .sorted(by: resourceOrder)
@@ -82,12 +127,19 @@ struct DockerStorageInspector: Sendable {
 
         let volumeNodes = report.volumes.map { volume in
             let bytes = parseSize(volume.size) ?? 0
-            let isInUse = Int(volume.links) ?? 0 > 0
+            let linkCount = Int(volume.links)
+            let canRemove = linkCount == 0
+            let detail: String
+            if let linkCount {
+                detail = linkCount > 0 ? "被 \(linkCount) 个容器引用" : "当前未被容器引用"
+            } else {
+                detail = "容器引用关系未知"
+            }
             return StorageResourceNode(
                 id: "docker.volume.\(volume.name)",
                 kind: .dockerVolume,
                 title: volume.name,
-                detail: isInUse ? "被 \(volume.links) 个容器引用" : "当前未被容器引用",
+                detail: detail,
                 symbol: "externaldrive.fill",
                 allocatedBytes: bytes,
                 logicalBytes: bytes,
@@ -95,7 +147,7 @@ struct DockerStorageInspector: Sendable {
                 risk: .protectedUserData,
                 evidence: .providerReported,
                 isProtected: true,
-                cleanupTarget: isInUse ? nil : .dockerVolume(name: volume.name)
+                cleanupTarget: canRemove ? .dockerVolume(name: volume.name) : nil
             )
         }
         .sorted(by: resourceOrder)
@@ -231,6 +283,41 @@ struct DockerStorageInspector: Sendable {
         )
     }
 
+    private static func runDockerImageInspections() async throws -> [DockerImageInspection] {
+        guard let executable = dockerExecutable() else { throw DockerStorageInspectorError.unavailable }
+        let runner = DockerCommandRunner()
+        let idData = try await runner.run(
+            executableURL: executable,
+            arguments: ["image", "ls", "--all", "--quiet", "--no-trunc"],
+            timeout: .seconds(8),
+            maximumOutputBytes: 2 * 1_024 * 1_024
+        )
+        let ids = Set(
+            String(decoding: idData, as: UTF8.self)
+                .split(whereSeparator: \.isNewline)
+                .map(String.init)
+        ).sorted()
+        guard !ids.isEmpty else { return [] }
+
+        var inspections: [DockerImageInspection] = []
+        inspections.reserveCapacity(ids.count)
+        for start in stride(from: 0, to: ids.count, by: 128) {
+            try Task.checkCancellation()
+            let end = min(ids.count, start + 128)
+            let data = try await runner.run(
+                executableURL: executable,
+                arguments: ["image", "inspect"] + ids[start..<end],
+                timeout: .seconds(12),
+                maximumOutputBytes: 16 * 1_024 * 1_024
+            )
+            inspections.append(contentsOf: try JSONDecoder().decode(
+                [DockerImageInspection].self,
+                from: data
+            ))
+        }
+        return inspections
+    }
+
     private static func dockerExecutable() -> URL? {
         [
             "/usr/local/bin/docker",
@@ -238,6 +325,24 @@ struct DockerStorageInspector: Sendable {
             "/Applications/Docker.app/Contents/Resources/bin/docker"
         ].first(where: { FileManager.default.isExecutableFile(atPath: $0) })
             .map(URL.init(fileURLWithPath:))
+    }
+}
+
+struct DockerImageInspection: Decodable, Sendable {
+    let id: String
+    let repoTags: [String]?
+    let repoDigests: [String]?
+
+    var references: [String] {
+        Set((repoTags ?? []) + (repoDigests ?? []))
+            .filter { !$0.isEmpty && $0 != "<none>:<none>" }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id = "Id"
+        case repoTags = "RepoTags"
+        case repoDigests = "RepoDigests"
     }
 }
 
@@ -263,7 +368,7 @@ private struct DockerImageRecord: Decodable {
     let size: String
     let sharedSize: String
     let uniqueSize: String
-    let virtualSize: String
+    let virtualSize: String?
 
     private enum CodingKeys: String, CodingKey {
         case id = "ID"

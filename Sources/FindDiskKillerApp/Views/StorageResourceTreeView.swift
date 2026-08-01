@@ -3,42 +3,60 @@ import FindDiskKillerCore
 import SwiftUI
 
 struct StorageResourceTreeView: View {
-    let nodes: [StorageResourceNode]
+    let projection: StorageResourceTreeIndex
     let categoryDescription: (String) -> String
+    let onSelectionInteraction: () -> Void
     @Binding var selectedIDs: Set<String>
-    @State private var expandedIDs: Set<String> = []
+    @State private var expandedIDs: Set<String>
+    @State private var visibleRows: [StorageResourceTreeRow]
+    @State private var didCustomizeExpansion = false
+    @State private var rowUpdateTask: Task<Void, Never>?
+
+    init(
+        projection: StorageResourceTreeIndex,
+        categoryDescription: @escaping (String) -> String,
+        selectedIDs: Binding<Set<String>>,
+        onSelectionInteraction: @escaping () -> Void = {}
+    ) {
+        self.projection = projection
+        self.categoryDescription = categoryDescription
+        self.onSelectionInteraction = onSelectionInteraction
+        _selectedIDs = selectedIDs
+        _expandedIDs = State(initialValue: projection.defaultExpandedIDs)
+        _visibleRows = State(initialValue: projection.defaultRows)
+    }
 
     var body: some View {
+        let selectionCounts = projection.selectionCounts(for: selectedIDs)
         VStack(spacing: 0) {
-            ForEach(Array(rows.enumerated()), id: \.element.node.id) { index, row in
-                if index > 0 { Divider().padding(.leading, CGFloat(row.depth) * 20 + 40) }
-                resourceRow(row)
+            ForEach(visibleRows) { row in
+                if row.id != visibleRows.first?.id {
+                    Divider().padding(.leading, CGFloat(row.depth) * 20 + 40)
+                }
+                resourceRow(row, selectedCount: selectionCounts[row.node.id] ?? 0)
             }
         }
-        .onAppear {
-            if expandedIDs.isEmpty {
-                expandedIDs = Set(defaultExpandedIDs(in: nodes))
+        .onChange(of: projection.id) { _, _ in
+            rowUpdateTask?.cancel()
+            guard !didCustomizeExpansion else {
+                visibleRows = projection.flatten(expandedIDs: expandedIDs)
+                return
             }
+            expandedIDs = projection.defaultExpandedIDs
+            visibleRows = projection.defaultRows
         }
+        .onDisappear { rowUpdateTask?.cancel() }
     }
 
-    private var rows: [StorageResourceTreeRow] {
-        StorageResourceTreeProjection.flatten(nodes: nodes, expandedIDs: expandedIDs)
-    }
-
-    private func resourceRow(_ row: StorageResourceTreeRow) -> some View {
-        let targets = StorageResourceTreeProjection.cleanupRequests(in: row.node)
-        let selectedTargetIDs = Set(targets.map(\.id)).intersection(selectedIDs)
+    private func resourceRow(
+        _ row: StorageResourceTreeRow,
+        selectedCount: Int
+    ) -> some View {
+        let requestIDs = projection.cleanupRequestIDsByNodeID[row.node.id] ?? []
         return HStack(alignment: .center, spacing: 10) {
             treeIndent(depth: row.depth)
             Button {
-                withAnimation(.snappy(duration: 0.2)) {
-                    if expandedIDs.contains(row.node.id) {
-                        expandedIDs.remove(row.node.id)
-                    } else {
-                        expandedIDs.insert(row.node.id)
-                    }
-                }
+                toggleExpansion(row.node.id)
             } label: {
                 Image(systemName: row.hasChildren ? "chevron.right" : "circle.fill")
                     .font(.system(size: row.hasChildren ? 11 : 4, weight: .semibold))
@@ -51,8 +69,8 @@ struct StorageResourceTreeView: View {
             .disabled(!row.hasChildren)
             selectionControl(
                 node: row.node,
-                targets: targets,
-                selectedTargetIDs: selectedTargetIDs
+                requestIDs: requestIDs,
+                selectedCount: selectedCount
             )
             Image(systemName: row.node.symbol)
                 .font(.system(size: 14, weight: .semibold))
@@ -91,13 +109,7 @@ struct StorageResourceTreeView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             guard row.hasChildren else { return }
-            withAnimation(.snappy(duration: 0.2)) {
-                if expandedIDs.contains(row.node.id) {
-                    expandedIDs.remove(row.node.id)
-                } else {
-                    expandedIDs.insert(row.node.id)
-                }
-            }
+            toggleExpansion(row.node.id)
         }
         .accessibilityElement(children: .combine)
     }
@@ -105,30 +117,30 @@ struct StorageResourceTreeView: View {
     @ViewBuilder
     private func selectionControl(
         node: StorageResourceNode,
-        targets: [StorageCleanupRequest],
-        selectedTargetIDs: Set<String>
+        requestIDs: Set<String>,
+        selectedCount: Int
     ) -> some View {
-        if targets.isEmpty {
+        if requestIDs.isEmpty {
             Image(systemName: node.isProtected ? "lock.fill" : "minus")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.tertiary)
                 .frame(width: 18, height: 18)
-                .help(node.isProtected ? L10n.text("此资源受保护或必须通过官方工具管理") : L10n.text("此资源不提供直接清理"))
+                .help(cleanupHelp(for: node))
         } else {
             Button {
-                let ids = Set(targets.map(\.id))
-                if selectedTargetIDs.count == ids.count {
-                    selectedIDs.subtract(ids)
+                onSelectionInteraction()
+                if selectedCount == requestIDs.count {
+                    selectedIDs.subtract(requestIDs)
                 } else {
-                    selectedIDs.formUnion(ids)
+                    selectedIDs.formUnion(requestIDs)
                 }
             } label: {
                 Image(systemName: selectionSymbol(
-                    selectedCount: selectedTargetIDs.count,
-                    totalCount: targets.count
+                    selectedCount: selectedCount,
+                    totalCount: requestIDs.count
                 ))
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(selectedTargetIDs.isEmpty ? Color.secondary : Color.accentColor)
+                .foregroundStyle(selectedCount == 0 ? Color.secondary : Color.accentColor)
                 .frame(width: 18, height: 18)
             }
             .buttonStyle(.plain)
@@ -158,14 +170,7 @@ struct StorageResourceTreeView: View {
 
     private func localizedDetail(_ detail: String) -> String {
         let parts = detail.components(separatedBy: " · ")
-        guard let prefix = parts.first,
-              prefix == "主仓库" || prefix == "worktree" else {
-            return L10n.text(detail)
-        }
-        let localizedPrefix = prefix == "主仓库"
-            ? L10n.text("主仓库")
-            : L10n.text("worktree")
-        return ([localizedPrefix] + parts.dropFirst()).joined(separator: " · ")
+        return parts.map(L10n.text).joined(separator: " · ")
     }
 
     private func evidenceTitle(_ evidence: StorageMeasurementEvidence) -> String {
@@ -173,6 +178,24 @@ struct StorageResourceTreeView: View {
         case .fileSystemAllocated: L10n.text("物理分配")
         case .providerReported: L10n.text("提供者报告")
         case .logicalOnly: L10n.text("逻辑大小")
+        }
+    }
+
+    private func cleanupHelp(for node: StorageResourceNode) -> String {
+        guard let target = node.cleanupTarget else {
+            return node.isProtected
+                ? L10n.text("此资源受保护或必须通过官方工具管理")
+                : L10n.text("此资源不提供直接清理")
+        }
+        switch target {
+        case .simulatorDevice:
+            return L10n.text("通过 Xcode Simulator 删除此设备及其数据")
+        case .simulatorRuntime:
+            return L10n.text("通过 Xcode Simulator 删除此运行时")
+        case .simulatorRuntimeAsset:
+            return L10n.text("删除尚未安装的模拟器运行时下载包")
+        default:
+            return L10n.text("选择此资源进行清理")
         }
     }
 
@@ -191,26 +214,178 @@ struct StorageResourceTreeView: View {
         }
     }
 
-    private func defaultExpandedIDs(in nodes: [StorageResourceNode]) -> [String] {
-        nodes.flatMap { node -> [String] in
-            guard !node.children.isEmpty else { return [] }
-            if node.kind == .dockerBuildCache { return [] }
-            let childGroups = node.children
-                .filter { !$0.children.isEmpty && $0.kind != .dockerBuildCache }
-                .map(\.id)
-            return [node.id] + childGroups
+    private func toggleExpansion(_ nodeID: String) {
+        didCustomizeExpansion = true
+        withAnimation(.snappy(duration: 0.2)) {
+            if expandedIDs.contains(nodeID) {
+                expandedIDs.remove(nodeID)
+            } else {
+                expandedIDs.insert(nodeID)
+            }
+        }
+        let requestedExpansion = expandedIDs
+        rowUpdateTask?.cancel()
+        rowUpdateTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            let rows = projection.flatten(expandedIDs: requestedExpansion)
+            guard !Task.isCancelled, requestedExpansion == expandedIDs else { return }
+            withAnimation(.snappy(duration: 0.2)) {
+                visibleRows = rows
+            }
         }
     }
 }
 
-struct StorageResourceTreeRow: Identifiable {
+struct StorageResourceTreeRow: Identifiable, Equatable, Sendable {
     let node: StorageResourceNode
     let depth: Int
     var id: String { node.id }
     var hasChildren: Bool { !node.children.isEmpty }
 }
 
+struct StorageResourceTreeIndex: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let nodes: [StorageResourceNode]
+    let cleanupRequestIDsByNodeID: [String: Set<String>]
+    let requestAncestorNodeIDs: [String: [String]]
+    let requestsByID: [String: StorageCleanupRequest]
+    let requestOrder: [String]
+    let safeRequestIDs: Set<String>
+    let defaultExpandedIDs: Set<String>
+    let defaultRows: [StorageResourceTreeRow]
+
+    static let empty = StorageResourceTreeIndex(nodes: [])
+
+    init(nodes rawNodes: [StorageResourceNode]) {
+        id = UUID()
+        nodes = StorageResourceTreeProjection.presentationNodes(rawNodes)
+
+        var cleanupRequestIDsByNodeID: [String: Set<String>] = [:]
+        var requestAncestorNodeIDs: [String: [String]] = [:]
+        var requestsByID: [String: StorageCleanupRequest] = [:]
+        var requestOrder: [String] = []
+
+        @discardableResult
+        func index(_ node: StorageResourceNode, ancestors: [String]) -> Set<String> {
+            var requestIDs = Set<String>()
+            if let target = node.cleanupTarget {
+                let request = StorageCleanupRequest(
+                    id: node.id,
+                    title: node.title,
+                    displayBytes: node.allocatedBytes,
+                    target: target
+                )
+                if requestsByID.updateValue(request, forKey: request.id) == nil {
+                    requestOrder.append(request.id)
+                }
+                requestIDs.insert(request.id)
+                requestAncestorNodeIDs[request.id] = ancestors + [node.id]
+            }
+            for child in node.children {
+                requestIDs.formUnion(index(child, ancestors: ancestors + [node.id]))
+            }
+            cleanupRequestIDsByNodeID[node.id] = requestIDs
+            return requestIDs
+        }
+
+        for node in nodes { index(node, ancestors: []) }
+        self.cleanupRequestIDsByNodeID = cleanupRequestIDsByNodeID
+        self.requestAncestorNodeIDs = requestAncestorNodeIDs
+        self.requestsByID = requestsByID
+        self.requestOrder = requestOrder
+
+        safeRequestIDs = Set(
+            StorageSafeCleanupProjection.safeRequests(in: nodes).map(\.id)
+        )
+        defaultExpandedIDs = StorageResourceTreeProjection.expansionIDs(
+            to: safeRequestIDs,
+            in: nodes
+        )
+        defaultRows = StorageResourceTreeProjection.flatten(
+            nodes: nodes,
+            expandedIDs: defaultExpandedIDs
+        )
+    }
+
+    func flatten(expandedIDs: Set<String>) -> [StorageResourceTreeRow] {
+        StorageResourceTreeProjection.flatten(nodes: nodes, expandedIDs: expandedIDs)
+    }
+
+    func selectionCounts(for selectedIDs: Set<String>) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for requestID in selectedIDs {
+            guard let ancestors = requestAncestorNodeIDs[requestID] else { continue }
+            for nodeID in ancestors { counts[nodeID, default: 0] += 1 }
+        }
+        return counts
+    }
+
+    func selectedRequests(for selectedIDs: Set<String>) -> [StorageCleanupRequest] {
+        requestOrder.compactMap { requestID in
+            guard selectedIDs.contains(requestID) else { return nil }
+            return requestsByID[requestID]
+        }
+    }
+}
+
 enum StorageResourceTreeProjection {
+    static func presentationNodes(_ nodes: [StorageResourceNode]) -> [StorageResourceNode] {
+        nodes.map(presentationNode)
+    }
+
+    private static func presentationNode(_ node: StorageResourceNode) -> StorageResourceNode {
+        let children = node.children.map(presentationNode)
+        let presentedChildren: [StorageResourceNode]
+        if children.count == 1,
+           let child = children.first,
+           child.children.isEmpty,
+           child.cleanupTarget == nil,
+           child.allocatedBytes == node.allocatedBytes,
+           child.logicalBytes == node.logicalBytes,
+           child.entryCount == node.entryCount {
+            presentedChildren = []
+        } else {
+            presentedChildren = children
+        }
+        return StorageResourceNode(
+            id: node.id,
+            kind: node.kind,
+            title: node.title,
+            detail: node.detail,
+            symbol: node.symbol,
+            allocatedBytes: node.allocatedBytes,
+            logicalBytes: node.logicalBytes,
+            entryCount: node.entryCount,
+            risk: node.risk,
+            evidence: node.evidence,
+            isProtected: node.isProtected,
+            cleanupTarget: node.cleanupTarget,
+            children: presentedChildren
+        )
+    }
+
+    static func expansionIDs(
+        to targetIDs: Set<String>,
+        in nodes: [StorageResourceNode]
+    ) -> Set<String> {
+        var expandedIDs = Set<String>()
+
+        @discardableResult
+        func containsTarget(_ node: StorageResourceNode) -> Bool {
+            let childContainsTarget = node.children.reduce(false) { containsTargetSoFar, child in
+                containsTarget(child) || containsTargetSoFar
+            }
+            if childContainsTarget {
+                expandedIDs.insert(node.id)
+            }
+            return targetIDs.contains(node.id) || childContainsTarget
+        }
+
+        for node in nodes { containsTarget(node) }
+        return expandedIDs
+    }
+
     static func flatten(
         nodes: [StorageResourceNode],
         expandedIDs: Set<String>

@@ -61,6 +61,12 @@ struct AgentStorageCleanupResult: Sendable {
 
     var succeededCount: Int { targets.count(where: { $0.outcome == .succeeded }) }
     var changedStorage: Bool { succeededCount > 0 }
+    var providersRequiringRefresh: Set<AgentStorageProvider> {
+        Set(targets.compactMap { target in
+            guard let outcome = target.outcome, outcome != .cancelled else { return nil }
+            return target.family.provider
+        })
+    }
     var skippedCount: Int {
         targets.count { target in
             if case .skipped = target.outcome { return true }
@@ -542,7 +548,7 @@ private extension UInt64 {
 
 @MainActor
 final class AgentStorageCleanupSession: ObservableObject, Identifiable {
-    enum Phase { case checking, ready, deleting, finished }
+    enum Phase: Equatable { case checking, ready, deleting, finished }
 
     let id = UUID()
     let review: AgentStorageCleanupReview
@@ -601,6 +607,7 @@ struct AgentStorageCleanupReviewView: View {
     @ObservedObject var session: AgentStorageCleanupSession
     let close: () -> Void
     let didFinish: (AgentStorageCleanupResult) -> Void
+    @State private var didReportResult = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -618,6 +625,13 @@ struct AgentStorageCleanupReviewView: View {
         .frame(minWidth: 660, idealWidth: 720, minHeight: 560, idealHeight: 640)
         .background(Color(nsColor: .windowBackgroundColor))
         .task { await session.prepare() }
+        .onChange(of: session.phase) { _, phase in
+            guard phase == .finished,
+                  !didReportResult,
+                  let result = session.result else { return }
+            didReportResult = true
+            didFinish(result)
+        }
         .accessibilityIdentifier("agent-storage-cleanup-review")
     }
 
@@ -834,10 +848,6 @@ struct AgentStorageCleanupReviewView: View {
     }
 
     private func dismissReview() {
-        if session.phase == .finished, let result = session.result {
-            didFinish(result)
-        } else {
-            close()
-        }
+        close()
     }
 }

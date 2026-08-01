@@ -144,6 +144,103 @@ struct StorageAnalyzerTests {
         #expect(openCode.roots.first?.path.hasSuffix("/.local/share/opencode") == true)
     }
 
+    @Test func catalogDetectsVSCodeAsADeveloperToolWithSeparatedStorageRoots() throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        try fixture.createDirectory("Library/Application Support/Code/User")
+        try fixture.createDirectory("Library/Application Support/Code/CachedData")
+        try fixture.createDirectory("Library/Application Support/Code/CachedExtensionVSIXs")
+        try fixture.createDirectory("Library/Application Support/Code/logs")
+        try fixture.createDirectory("Library/Caches/com.microsoft.VSCode")
+        try fixture.createDirectory(".vscode/extensions")
+
+        let candidates = StorageSourceCatalog.detect(
+            configuration: .init(homeDirectory: fixture.home)
+        )
+        let vscode = try #require(candidates.first { $0.id == .vscode })
+
+        #expect(vscode.descriptor.title == "VS Code")
+        #expect(vscode.descriptor.family == .developerTools)
+        #expect(vscode.descriptor.cleanupCapability == .verifiedFiles)
+        #expect(Set(vscode.roots.map(\.id)) == [
+            "vscode.application-support",
+            "vscode.extensions-and-cli",
+            "vscode.cached-data",
+            "vscode.cached-extension-vsixs",
+            "vscode.logs",
+            "vscode.system-cache"
+        ])
+    }
+
+    @Test func vscodeScanProtectsUserDataAndOffersOnlyVerifiedCaches() async throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        try fixture.writeFile("Library/Application Support/Code/User/settings.json")
+        try fixture.writeFile(
+            "Library/Application Support/Code/User/workspaceStorage/workspace/state.vscdb"
+        )
+        try fixture.writeFile("Library/Application Support/Code/Backups/session/backup.txt")
+        try fixture.writeFile(
+            "Library/Application Support/Code/CachedData/commit/workbench.js",
+            byteCount: 8_192
+        )
+        try fixture.writeFile(
+            "Library/Application Support/Code/CachedExtensionVSIXs/extension.vsix",
+            byteCount: 12_288
+        )
+        try fixture.writeFile("Library/Application Support/Code/logs/session/window.log")
+        try fixture.writeFile(".vscode/extensions/publisher.extension/extension.js")
+        try fixture.writeFile("Library/Caches/com.microsoft.VSCode/cache.bin")
+
+        let snapshot = try await StorageAnalyzer(
+            configuration: .init(homeDirectory: fixture.home)
+        ).scan()
+        let vscode = try #require(snapshot.result(for: .vscode))
+
+        #expect(vscode.descriptor.family == .developerTools)
+        #expect(vscode.reclaimableCandidateBytes > 0)
+        #expect(snapshot.conflictBytes == 0)
+        #expect(vscode.components.contains {
+            $0.rootID == "vscode.application-support"
+                && $0.title == "用户设置与扩展状态"
+                && $0.isProtected
+        })
+        #expect(vscode.components.contains {
+            $0.rootID == "vscode.application-support"
+                && $0.title == "工作区状态"
+                && $0.isProtected
+        })
+        #expect(vscode.components.contains {
+            $0.rootID == "vscode.application-support"
+                && $0.title == "本地历史与未保存备份"
+                && $0.isProtected
+        })
+        #expect(vscode.components.contains {
+            $0.rootID == "vscode.extensions-and-cli"
+                && $0.title == "已安装扩展"
+                && $0.isProtected
+        })
+        #expect(vscode.components.contains {
+            $0.rootID == "vscode.cached-extension-vsixs"
+                && $0.title == "扩展安装包缓存"
+                && !$0.isProtected
+        })
+        let safeRootIDs = Set(vscode.resourceTree.compactMap { node -> String? in
+            guard node.cleanupTarget != nil else { return nil }
+            return node.id
+        })
+        #expect(safeRootIDs == [
+            "vscode.cached-data",
+            "vscode.cached-extension-vsixs",
+            "vscode.logs",
+            "vscode.system-cache"
+        ])
+        #expect(vscode.resourceTree.first { $0.id == "vscode.application-support" }?
+            .cleanupTarget == nil)
+        #expect(vscode.resourceTree.first { $0.id == "vscode.extensions-and-cli" }?
+            .cleanupTarget == nil)
+    }
+
     @Test func catalogSeparatesSimulatorDevicesRuntimesCachesAndPendingDeletion() throws {
         let fixture = try StorageFixture()
         defer { fixture.remove() }
@@ -191,19 +288,53 @@ struct StorageAnalyzerTests {
     @Test func simulatorScanKeepsDeviceDataRuntimeAndCachesInDistinctPhysicalGroups() async throws {
         let fixture = try StorageFixture()
         defer { fixture.remove() }
-        try fixture.writeFile(
-            "Library/Developer/CoreSimulator/Devices/device-id/device.plist"
+        try fixture.writePropertyList(
+            "Library/Developer/CoreSimulator/Devices/DEVICE-ONE/device.plist",
+            value: [
+                "name": "iPhone 16 Pro",
+                "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-18-5",
+                "state": 3
+            ]
         )
         try fixture.writeFile(
-            "Library/Developer/CoreSimulator/Devices/device-id/data/Containers/Data/Application/app.db"
+            "Library/Developer/CoreSimulator/Devices/DEVICE-ONE/data/Containers/Data/Application/app.db",
+            byteCount: 12_288
+        )
+        try fixture.writePropertyList(
+            "Library/Developer/CoreSimulator/Devices/DEVICE-TWO/device.plist",
+            value: [
+                "name": "iPad Pro 13-inch (M4)",
+                "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-18-5",
+                "state": 1
+            ]
         )
         try fixture.writeFile(
-            "Library/Developer/CoreSimulator/Profiles/Runtimes/iOS.simruntime/runtime.dmg"
+            "Library/Developer/CoreSimulator/Devices/DEVICE-TWO/data/device-data.bin",
+            byteCount: 4_096
+        )
+        try fixture.writePropertyList(
+            "Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 18.5.simruntime/Contents/Info.plist",
+            value: [
+                "CFBundleName": "iOS 18.5",
+                "CFBundleIdentifier": "com.apple.CoreSimulator.SimRuntime.iOS-18-5"
+            ]
+        )
+        try fixture.writeFile(
+            "Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 18.5.simruntime/Contents/Resources/runtime.dmg",
+            byteCount: 16_384
         )
         try fixture.writeFile("Library/Developer/CoreSimulator/Caches/cache.bin")
         try fixture.writeFile(
             "Library/Developer/CoreSimulator/Temp/BackgroundDelete/stale-device.bin"
         )
+        let fixtureDeviceMetadata = try #require(SimulatorStorageMetadata.device(
+            at: fixture.home.appending(
+                path: "Library/Developer/CoreSimulator/Devices/DEVICE-ONE",
+                directoryHint: .isDirectory
+            ),
+            identifier: "DEVICE-ONE"
+        ))
+        #expect(fixtureDeviceMetadata.title == "iPhone 16 Pro")
 
         let snapshot = try await StorageAnalyzer(
             configuration: .init(homeDirectory: fixture.home)
@@ -218,13 +349,60 @@ struct StorageAnalyzerTests {
         #expect(categories.contains("模拟器待删除数据"))
         #expect(Set(simulators.resourceTree.map(\.id)) == [
             "simulators.devices",
+            "simulators.runtimes",
             "simulators.user-caches",
-            "simulators.pending-deletion",
-            "simulators.user-runtimes"
+            "simulators.pending-deletion"
         ])
+        let devices = try #require(simulators.resourceTree.first { $0.id == "simulators.devices" })
+        #expect(Set(devices.children.map(\.title)) == ["iPhone 16 Pro", "iPad Pro 13-inch (M4)"])
+        let phone = try #require(devices.children.first { $0.title == "iPhone 16 Pro" })
+        #expect(phone.detail == "iOS 18.5 · 已启动")
+        #expect(phone.allocatedBytes > 0)
+        guard case .simulatorDevice("DEVICE-ONE") = phone.cleanupTarget else {
+            Issue.record("Expected simulator device deletion to use simctl")
+            return
+        }
+        let runtimes = try #require(simulators.resourceTree.first { $0.id == "simulators.runtimes" })
+        #expect(runtimes.children.map(\.title) == ["iOS 18.5"])
+        #expect(runtimes.children.first?.detail == "用户安装")
+        #expect(runtimes.children.first?.allocatedBytes ?? 0 > 0)
+        guard case .simulatorRuntime(
+            "com.apple.CoreSimulator.SimRuntime.iOS-18-5",
+            _,
+            _
+        ) = runtimes.children.first?.cleanupTarget else {
+            Issue.record("Expected simulator runtime deletion to use simctl")
+            return
+        }
+        #expect(simulators.resourceTree.first { $0.id == "simulators.user-caches" }?.children.count == 1)
+        #expect(simulators.resourceTree.first { $0.id == "simulators.pending-deletion" }?.children.count == 1)
         #expect(simulators.components.allSatisfy {
             $0.rootPath?.contains("CoreSimulator/Volumes") != true
         })
+    }
+
+    @Test func downloadedSimulatorRuntimeUsesMobileAssetPlatformAndVersion() throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        let asset = try fixture.createDirectory(
+            "AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime/runtime.asset"
+        )
+        try fixture.writePropertyList(
+            "AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime/runtime.asset/Info.plist",
+            value: [
+                "CFBundleIdentifier": "com.apple.MobileAsset.iOSSimulatorRuntime",
+                "MobileAssetProperties": [
+                    "Build": "23E254a",
+                    "SimulatorVersion": "26.4.1"
+                ]
+            ]
+        )
+
+        let metadata = try #require(
+            SimulatorStorageMetadata.runtime(at: asset, identifier: "runtime.asset")
+        )
+
+        #expect(metadata.title == "iOS 26.4.1")
     }
 
     @Test func repositoryDiscoveryStopsAtTopLevelAndGroupsWorktrees() throws {
@@ -365,7 +543,12 @@ struct StorageAnalyzerTests {
     @Test func dockerInventoryUsesUniqueImageBytesAndProtectsActiveObjects() throws {
         let data = Data(#"{"Images":[{"ID":"sha256:image","Repository":"example/app","Tag":"latest","Containers":"2","Size":"3GB","SharedSize":"1GB","UniqueSize":"2GB","VirtualSize":"3GB"}],"Containers":[{"ID":"running","Names":"web","Image":"example/app:latest","State":"running","Status":"Up 1 hour","Size":"12MB"},{"ID":"stopped","Names":"worker","Image":"example/app:latest","State":"exited","Status":"Exited","Size":"4MB"}],"Volumes":[{"Name":"data","Links":"0","Size":"512MB"}],"BuildCache":[{"ID":"cache","Description":"compile","Size":"64MB","InUse":"false","LastUsedSince":"1 day ago"}]}"#.utf8)
 
-        let groups = try DockerStorageInspector.parse(data)
+        let groups = try DockerStorageInspector.parse(
+            data,
+            imageReferencesByID: [
+                "sha256:image": ["example/app:latest"]
+            ]
+        )
         let images = try #require(groups.first { $0.kind == .dockerImages })
         let image = try #require(images.children.first)
         let containers = try #require(groups.first { $0.kind == .dockerContainers })
@@ -379,6 +562,63 @@ struct StorageAnalyzerTests {
         #expect(running.cleanupTarget == nil)
         #expect(stopped.cleanupTarget == .dockerContainer(id: "stopped"))
         #expect(volumes.children.first?.cleanupTarget == .dockerVolume(name: "data"))
+    }
+
+    @Test func dockerInventoryAcceptsModernReportsAndDeduplicatesImageTags() throws {
+        let data = Data(#"{"Images":[{"ID":"sha256:dangling","Repository":"<none>","Tag":"<none>","Containers":"0","Size":"3GB","SharedSize":"1GB","UniqueSize":"2GB"},{"ID":"sha256:tagged","Repository":"example/app","Tag":"latest","Containers":"0","Size":"900MB","SharedSize":"100MB","UniqueSize":"800MB"},{"ID":"sha256:tagged","Repository":"example/app","Tag":"stable","Containers":"0","Size":"900MB","SharedSize":"100MB","UniqueSize":"800MB"}],"Containers":[],"Volumes":[{"Name":"unused","Links":"0","Size":"512MB"},{"Name":"unknown","Links":"N/A","Size":"64MB"}],"BuildCache":[]}"#.utf8)
+
+        let groups = try DockerStorageInspector.parse(
+            data,
+            imageReferencesByID: [
+                "sha256:dangling": [],
+                "sha256:tagged": ["example/app:latest", "example/app:stable"]
+            ]
+        )
+        let images = try #require(groups.first { $0.kind == .dockerImages })
+        let dangling = try #require(images.children.first { $0.id.hasSuffix("sha256:dangling") })
+        let tagged = try #require(images.children.first { $0.id.hasSuffix("sha256:tagged") })
+        let volumes = try #require(groups.first { $0.kind == .dockerVolumes })
+
+        #expect(images.children.count == 2)
+        #expect(images.allocatedBytes == 2_800_000_000)
+        #expect(dangling.risk == .rebuildableCache)
+        #expect(dangling.cleanupTarget == .dockerImage(id: "sha256:dangling"))
+        #expect(tagged.allocatedBytes == 800_000_000)
+        #expect(tagged.logicalBytes == 900_000_000)
+        #expect(tagged.detail?.contains("2 个仓库引用") == true)
+        #expect(volumes.children.first { $0.title == "unused" }?.cleanupTarget == .dockerVolume(name: "unused"))
+        #expect(volumes.children.first { $0.title == "unknown" }?.cleanupTarget == nil)
+    }
+
+    @Test func dockerInventoryUsesInspectReferencesForDigestOnlyImages() throws {
+        let data = Data(#"{"Images":[{"ID":"sha256:digest-only","Repository":"<none>","Tag":"<none>","Containers":"0","Size":"3GB","SharedSize":"1GB","UniqueSize":"2GB"}],"Containers":[],"Volumes":[],"BuildCache":[]}"#.utf8)
+
+        let groups = try DockerStorageInspector.parse(
+            data,
+            imageReferencesByID: [
+                "sha256:digest-only": [
+                    "mirror.example/library/app@sha256:digest-only",
+                    "registry.example/library/app@sha256:digest-only"
+                ]
+            ]
+        )
+        let images = try #require(groups.first { $0.kind == .dockerImages })
+        let image = try #require(images.children.first)
+
+        #expect(image.risk == .environmentOrRuntime)
+        #expect(image.cleanupTarget == .dockerImage(id: "sha256:digest-only"))
+        #expect(image.detail?.contains("2 个仓库引用") == true)
+    }
+
+    @Test func dockerInventoryDoesNotOfferRemovalWhenInspectReferencesAreUnavailable() throws {
+        let data = Data(#"{"Images":[{"ID":"sha256:unknown","Repository":"<none>","Tag":"<none>","Containers":"0","Size":"3GB","SharedSize":"1GB","UniqueSize":"2GB"}],"Containers":[],"Volumes":[],"BuildCache":[]}"#.utf8)
+
+        let groups = try DockerStorageInspector.parse(data)
+        let images = try #require(groups.first { $0.kind == .dockerImages })
+        let image = try #require(images.children.first)
+
+        #expect(image.risk == .environmentOrRuntime)
+        #expect(image.cleanupTarget == nil)
     }
 
     @Test func catalogReadsDockerDesktopConfiguredDataFolder() throws {
@@ -949,6 +1189,20 @@ private struct StorageFixture {
             withIntermediateDirectories: true
         )
         try Data(repeating: 0x5A, count: byteCount).write(to: url)
+    }
+
+    func writePropertyList(_ relativePath: String, value: Any) throws {
+        let url = home.appending(path: relativePath)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: value,
+            format: .binary,
+            options: 0
+        )
+        try data.write(to: url)
     }
 
     func remove() {

@@ -633,25 +633,24 @@ private struct SectionNavigationPlaceholder: View {
 
     private var processPlaceholder: some View {
         VStack(spacing: 0) {
-            HStack {
-                Picker(
-                    L10n.text("时间范围"),
-                    selection: Binding.constant(SampleRange.minute)
-                ) {
-                    ForEach(SampleRange.allCases) { range in
-                        Text(range.localizedTitle).tag(range)
-                    }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 14) {
+                    processRangePlaceholder(showsLabel: true)
+                    Spacer(minLength: 16)
+                    processSearchPlaceholder
+                    EvidenceLabel(
+                        text: "I/O · CPU · 网络 · 当前用户可见",
+                        symbol: "person.crop.circle.badge.checkmark"
+                    )
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 260)
-                .redacted(reason: .placeholder)
-                .disabled(true)
-                Spacer()
-                EvidenceLabel(
-                    text: "I/O · CPU · 网络 · 当前用户可见",
-                    symbol: "person.crop.circle.badge.checkmark"
-                )
+
+                HStack(spacing: 12) {
+                    processRangePlaceholder(showsLabel: false)
+                    Spacer(minLength: 8)
+                    processSearchPlaceholder
+                }
             }
+            .frame(height: 32)
             .padding(16)
 
             Divider()
@@ -668,6 +667,7 @@ private struct SectionNavigationPlaceholder: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .scrollIndicators(.automatic)
+            .defaultScrollAnchor(.topLeading)
             .background {
                 GeometryReader { geometry in
                     Color.clear.preference(
@@ -685,6 +685,49 @@ private struct SectionNavigationPlaceholder: View {
         .contentShape(Rectangle())
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    private func processRangePlaceholder(showsLabel: Bool) -> some View {
+        HStack(spacing: 10) {
+            if showsLabel {
+                Text(L10n.text("时间范围"))
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+
+            Picker("", selection: Binding.constant(SampleRange.minute)) {
+                ForEach(SampleRange.allCases) { range in
+                    Text(range.localizedTitle).tag(range)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 260)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .redacted(reason: .placeholder)
+        .disabled(true)
+    }
+
+    private var processSearchPlaceholder: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            Text(L10n.text("搜索应用或进程"))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 9)
+        .frame(width: 240, height: 28)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
+        }
+        .redacted(reason: .placeholder)
     }
 
     private var resourcePlaceholder: some View {

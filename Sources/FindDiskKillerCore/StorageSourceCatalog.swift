@@ -10,6 +10,7 @@ public enum StorageSourceCatalog {
         .init(id: .bun, title: "Bun", family: .developerTools, symbol: "bolt", cleanupCapability: .analysisOnly),
         .init(id: .pip, title: "Python / pip", family: .developerTools, symbol: "chevron.left.forwardslash.chevron.right", cleanupCapability: .analysisOnly),
         .init(id: .xcode, title: "Xcode", family: .developerTools, symbol: "hammer", cleanupCapability: .analysisOnly),
+        .init(id: .vscode, title: "VS Code", family: .developerTools, symbol: "chevron.left.forwardslash.chevron.right", cleanupCapability: .verifiedFiles),
         .init(id: .simulators, title: "Simulators", family: .developerTools, symbol: "iphone.gen3", cleanupCapability: .openOfficialManager),
         .init(id: .docker, title: "Docker Desktop", family: .containers, symbol: "shippingbox.and.arrow.backward", cleanupCapability: .analysisOnly),
         .init(id: .podman, title: "Podman", family: .containers, symbol: "cube.transparent", cleanupCapability: .analysisOnly),
@@ -287,6 +288,41 @@ public enum StorageSourceCatalog {
             ))
         }
 
+        let vscodeRoots: [StorageSourceRoot] = [
+            root(
+                .vscode,
+                "application-support",
+                "VS Code 用户与工作区数据",
+                "Library/Application Support/Code",
+                "编辑器用户与工作区数据",
+                .protectedUserData,
+                protected: true
+            ),
+            root(
+                .vscode,
+                "extensions-and-cli",
+                "VS Code 扩展与 CLI",
+                ".vscode",
+                "已安装扩展与 CLI",
+                .environmentOrRuntime,
+                protected: true
+            ),
+            root(.vscode, "cached-data", "VS Code 编辑器缓存", "Library/Application Support/Code/CachedData", "编辑器缓存", .rebuildableCache),
+            root(.vscode, "cached-extension-vsixs", "VS Code 扩展安装包缓存", "Library/Application Support/Code/CachedExtensionVSIXs", "扩展安装包缓存", .rebuildableCache),
+            root(.vscode, "web-cache", "VS Code Web 缓存", "Library/Application Support/Code/Cache", "编辑器缓存", .rebuildableCache),
+            root(.vscode, "code-cache", "VS Code 代码缓存", "Library/Application Support/Code/Code Cache", "编辑器缓存", .rebuildableCache),
+            root(.vscode, "gpu-cache", "VS Code 图形缓存", "Library/Application Support/Code/GPUCache", "图形缓存", .rebuildableCache),
+            root(.vscode, "dawn-cache", "VS Code Dawn 缓存", "Library/Application Support/Code/DawnCache", "图形缓存", .rebuildableCache),
+            root(.vscode, "dawn-graphite-cache", "VS Code Graphite 缓存", "Library/Application Support/Code/DawnGraphiteCache", "图形缓存", .rebuildableCache),
+            root(.vscode, "dawn-webgpu-cache", "VS Code WebGPU 缓存", "Library/Application Support/Code/DawnWebGPUCache", "图形缓存", .rebuildableCache),
+            root(.vscode, "cached-profiles", "VS Code Profile 缓存", "Library/Application Support/Code/CachedProfilesData", "编辑器缓存", .rebuildableCache),
+            root(.vscode, "cached-configurations", "VS Code 配置缓存", "Library/Application Support/Code/CachedConfigurations", "编辑器缓存", .rebuildableCache),
+            root(.vscode, "logs", "VS Code 日志", "Library/Application Support/Code/logs", "编辑器日志", .rebuildableCache),
+            root(.vscode, "crash-reports", "VS Code 崩溃报告", "Library/Application Support/Code/Crashpad", "崩溃报告", .rebuildableCache),
+            root(.vscode, "system-cache", "VS Code 系统缓存", "Library/Caches/com.microsoft.VSCode", "编辑器缓存", .rebuildableCache),
+            root(.vscode, "update-cache", "VS Code 更新缓存", "Library/Caches/com.microsoft.VSCode.ShipIt", "更新缓存", .rebuildableCache)
+        ]
+
         return [
             .chrome: chromeRoots,
             .go: [
@@ -317,6 +353,7 @@ public enum StorageSourceCatalog {
                 root(.xcode, "archives", "Archives", "Library/Developer/Xcode/Archives", "归档", .protectedUserData, protected: true),
                 root(.xcode, "device-support", "Device Support", "Library/Developer/Xcode/iOS DeviceSupport", "真机支持文件", .sharedOrExpensive)
             ],
+            .vscode: vscodeRoots,
             .simulators: simulatorRoots,
             .docker: [
                 root(.docker, "raw", "Docker virtual disk", "Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw", "Docker 虚拟磁盘", .environmentOrRuntime, protected: true, kind: .file),

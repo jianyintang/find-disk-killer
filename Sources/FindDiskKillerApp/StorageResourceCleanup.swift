@@ -22,11 +22,188 @@ struct StorageCleanupSummary: Sendable {
     var failedCount: Int { outcomes.count - succeededCount }
 }
 
-actor StorageResourceCleanupExecutor {
-    private let fileManager: FileManager
+struct StorageSafeCleanupGroup: Identifiable, Hashable, Sendable {
+    let sourceID: StorageSourceID
+    let title: String
+    let family: StorageSourceFamily
+    let symbol: String
+    let requests: [StorageCleanupRequest]
 
-    init(fileManager: FileManager = .default) {
+    var id: StorageSourceID { sourceID }
+    var totalBytes: UInt64 {
+        requests.reduce(0) { partial, request in
+            let sum = partial.addingReportingOverflow(request.displayBytes)
+            return sum.overflow ? .max : sum.partialValue
+        }
+    }
+}
+
+struct StorageSafeCleanupIndex: Equatable, Sendable {
+    let groups: [StorageSafeCleanupGroup]
+    let groupsByFamily: [StorageSourceFamily: [StorageSafeCleanupGroup]]
+    let requestIDsByGroup: [StorageSourceID: Set<String>]
+    let requestIDsByFamily: [StorageSourceFamily: Set<String>]
+    let allRequestIDs: Set<String>
+    let requestsByID: [String: StorageCleanupRequest]
+    let sourceIDByRequestID: [String: StorageSourceID]
+    let requestOrder: [String]
+    let totalBytes: UInt64
+
+    static let empty = StorageSafeCleanupIndex(groups: [])
+
+    init(groups: [StorageSafeCleanupGroup]) {
+        self.groups = groups
+        groupsByFamily = Dictionary(grouping: groups, by: \.family)
+
+        var requestIDsByGroup: [StorageSourceID: Set<String>] = [:]
+        var requestIDsByFamily: [StorageSourceFamily: Set<String>] = [:]
+        var requestsByID: [String: StorageCleanupRequest] = [:]
+        var sourceIDByRequestID: [String: StorageSourceID] = [:]
+        var requestOrder: [String] = []
+
+        for group in groups {
+            let requestIDs = Set(group.requests.map(\.id))
+            requestIDsByGroup[group.id] = requestIDs
+            requestIDsByFamily[group.family, default: []].formUnion(requestIDs)
+            for request in group.requests where requestsByID[request.id] == nil {
+                requestsByID[request.id] = request
+                sourceIDByRequestID[request.id] = group.id
+                requestOrder.append(request.id)
+            }
+        }
+
+        self.requestIDsByGroup = requestIDsByGroup
+        self.requestIDsByFamily = requestIDsByFamily
+        allRequestIDs = Set(requestsByID.keys)
+        self.requestsByID = requestsByID
+        self.sourceIDByRequestID = sourceIDByRequestID
+        self.requestOrder = requestOrder
+        totalBytes = StorageSafeCleanupProjection.totalBytes(in: groups)
+    }
+
+    init(snapshot: StorageAnalysisSnapshot?) {
+        self.init(groups: StorageSafeCleanupProjection.groups(in: snapshot))
+    }
+
+    func groups(for family: StorageSourceFamily?) -> [StorageSafeCleanupGroup] {
+        guard let family else { return groups }
+        return groupsByFamily[family] ?? []
+    }
+
+    func requestIDs(for family: StorageSourceFamily?) -> Set<String> {
+        guard let family else { return allRequestIDs }
+        return requestIDsByFamily[family] ?? []
+    }
+
+    func selectedBytes(for selectedIDs: Set<String>) -> UInt64 {
+        selectedIDs.reduce(0) { partial, requestID in
+            guard let bytes = requestsByID[requestID]?.displayBytes else { return partial }
+            let sum = partial.addingReportingOverflow(bytes)
+            return sum.overflow ? .max : sum.partialValue
+        }
+    }
+
+    func selectedEntries(
+        for selectedIDs: Set<String>
+    ) -> [(StorageSourceID, StorageCleanupRequest)] {
+        requestOrder.compactMap { requestID in
+            guard selectedIDs.contains(requestID),
+                  let sourceID = sourceIDByRequestID[requestID],
+                  let request = requestsByID[requestID] else { return nil }
+            return (sourceID, request)
+        }
+    }
+}
+
+enum StorageSafeCleanupProjection {
+    static func groups(in snapshot: StorageAnalysisSnapshot?) -> [StorageSafeCleanupGroup] {
+        guard let snapshot else { return [] }
+        return snapshot.results.compactMap { result in
+            let requests = safeRequests(in: result.resourceTree)
+            guard !requests.isEmpty else { return nil }
+            return StorageSafeCleanupGroup(
+                sourceID: result.id,
+                title: result.descriptor.title,
+                family: result.descriptor.family,
+                symbol: result.descriptor.symbol,
+                requests: requests
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.totalBytes != rhs.totalBytes { return lhs.totalBytes > rhs.totalBytes }
+            let titleOrder = lhs.title.localizedStandardCompare(rhs.title)
+            if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
+            return lhs.id.rawValue < rhs.id.rawValue
+        }
+    }
+
+    static func safeRequests(in nodes: [StorageResourceNode]) -> [StorageCleanupRequest] {
+        var requests: [StorageCleanupRequest] = []
+        var seenIDs = Set<String>()
+
+        func append(_ node: StorageResourceNode) {
+            if let target = safeTarget(for: node),
+               seenIDs.insert(node.id).inserted {
+                requests.append(StorageCleanupRequest(
+                    id: node.id,
+                    title: node.title,
+                    displayBytes: node.allocatedBytes,
+                    target: target
+                ))
+                return
+            }
+            for child in node.children { append(child) }
+        }
+
+        for node in nodes { append(node) }
+        return requests.sorted { lhs, rhs in
+            if lhs.displayBytes != rhs.displayBytes { return lhs.displayBytes > rhs.displayBytes }
+            return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+        }
+    }
+
+    private static func safeTarget(
+        for node: StorageResourceNode
+    ) -> StorageResourceCleanupTarget? {
+        guard node.risk == .rebuildableCache,
+              !node.isProtected,
+              let target = node.cleanupTarget else { return nil }
+        switch target {
+        case .removePathContents:
+            return target
+        case .dockerImage:
+            return node.kind == .dockerImage ? target : nil
+        case .trashRepository, .removeGitWorktree, .dockerContainer, .dockerVolume:
+            return nil
+        case .simulatorDevice, .simulatorRuntime, .simulatorRuntimeAsset:
+            return nil
+        }
+    }
+
+    static func totalBytes(in groups: [StorageSafeCleanupGroup]) -> UInt64 {
+        groups.reduce(0) { partial, group in
+            let sum = partial.addingReportingOverflow(group.totalBytes)
+            return sum.overflow ? .max : sum.partialValue
+        }
+    }
+}
+
+actor StorageResourceCleanupExecutor {
+    typealias DockerCommand = @Sendable ([String]) async throws -> String
+    typealias SimctlCommand = @Sendable ([String]) async throws -> String
+
+    private let fileManager: FileManager
+    private let dockerCommand: DockerCommand?
+    private let simctlCommand: SimctlCommand?
+
+    init(
+        fileManager: FileManager = .default,
+        dockerCommand: DockerCommand? = nil,
+        simctlCommand: SimctlCommand? = nil
+    ) {
         self.fileManager = fileManager
+        self.dockerCommand = dockerCommand
+        self.simctlCommand = simctlCommand
     }
 
     func execute(_ requests: [StorageCleanupRequest]) async -> StorageCleanupSummary {
@@ -50,7 +227,7 @@ actor StorageResourceCleanupExecutor {
     private func execute(_ target: StorageResourceCleanupTarget) async throws {
         switch target {
         case .removePathContents(let path, let identity, let sourceID, let rootID):
-            try validateIdentity(path: path, expected: identity)
+            guard try validateIdentityIfPresent(path: path, expected: identity) else { return }
             let candidates = StorageSourceCatalog.detect(configuration: .init(
                 repositorySearchRoots: [],
                 providerInventoryEnabled: false
@@ -64,7 +241,7 @@ actor StorageResourceCleanupExecutor {
             try fileManager.trashItem(at: url, resultingItemURL: &trashedURL)
             try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
         case .trashRepository(let path, let identity):
-            try validateIdentity(path: path, expected: identity)
+            guard try validateIdentityIfPresent(path: path, expected: identity) else { return }
             guard fileManager.fileExists(atPath: URL(fileURLWithPath: path).appending(path: ".git").path),
                   !containsCurrentDirectory(path) else {
                 throw StorageCleanupError.protectedRepository
@@ -75,7 +252,7 @@ actor StorageResourceCleanupExecutor {
                 resultingItemURL: &trashedURL
             )
         case .removeGitWorktree(let path, let mainRepositoryPath, let identity):
-            try validateIdentity(path: path, expected: identity)
+            guard try validateIdentityIfPresent(path: path, expected: identity) else { return }
             guard !containsCurrentDirectory(path) else {
                 throw StorageCleanupError.protectedRepository
             }
@@ -83,16 +260,76 @@ actor StorageResourceCleanupExecutor {
                 executable: URL(fileURLWithPath: "/usr/bin/git"),
                 arguments: ["-C", mainRepositoryPath, "worktree", "remove", path]
             )
+        case .simulatorDevice(let identifier):
+            do {
+                try await runSimctl(arguments: ["delete", identifier])
+            } catch {
+                guard simulatorResourceIsAbsent(error) else { throw error }
+            }
+        case .simulatorRuntime(let identifier, let path, let identity):
+            guard try validateIdentityIfPresent(path: path, expected: identity) else { return }
+            do {
+                try await runSimctl(arguments: ["runtime", "delete", identifier])
+            } catch {
+                guard simulatorResourceIsAbsent(error) else { throw error }
+            }
+        case .simulatorRuntimeAsset(let path, let identity):
+            guard try validateIdentityIfPresent(path: path, expected: identity) else { return }
+            var trashedURL: NSURL?
+            try fileManager.trashItem(
+                at: URL(fileURLWithPath: path, isDirectory: true),
+                resultingItemURL: &trashedURL
+            )
         case .dockerImage(let id):
-            try await runDocker(arguments: ["image", "rm", id])
+            let referenceOutput: String
+            do {
+                referenceOutput = try await runDocker(arguments: [
+                    "image", "inspect", id, "--format", "{{json .RepoTags}}"
+                ])
+            } catch {
+                if dockerResourceIsAbsent(error) { return }
+                throw error
+            }
+            let references = try await runDocker(arguments: [
+                "container", "ls", "--all", "--quiet", "--filter", "ancestor=\(id)"
+            ])
+            guard references.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw StorageCleanupError.sourceChanged
+            }
+            let repositoryReferences = try parseDockerImageReferences(referenceOutput)
+            if repositoryReferences.isEmpty {
+                try await removeDockerImageReference(id)
+            } else {
+                for reference in repositoryReferences {
+                    try await removeDockerImageReference(reference)
+                }
+            }
         case .dockerContainer(let id):
-            try await runDocker(arguments: ["container", "rm", id])
+            do {
+                try await runDocker(arguments: ["container", "rm", id])
+            } catch {
+                guard dockerResourceIsAbsent(error) else { throw error }
+            }
         case .dockerVolume(let name):
+            do {
+                _ = try await runDocker(arguments: ["volume", "inspect", name])
+            } catch {
+                if dockerResourceIsAbsent(error) { return }
+                throw error
+            }
+            let references = try await runDocker(arguments: [
+                "container", "ls", "--all", "--quiet", "--filter", "volume=\(name)"
+            ])
+            guard references.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw StorageCleanupError.sourceChanged
+            }
             try await runDocker(arguments: ["volume", "rm", name])
         }
     }
 
-    private func runDocker(arguments: [String]) async throws {
+    @discardableResult
+    private func runDocker(arguments: [String]) async throws -> String {
+        if let dockerCommand { return try await dockerCommand(arguments) }
         guard let executable = [
             "/usr/local/bin/docker",
             "/opt/homebrew/bin/docker",
@@ -100,10 +337,31 @@ actor StorageResourceCleanupExecutor {
         ].first(where: { fileManager.isExecutableFile(atPath: $0) }) else {
             throw StorageCleanupError.toolUnavailable("Docker")
         }
-        try await run(executable: URL(fileURLWithPath: executable), arguments: arguments)
+        return try await run(executable: URL(fileURLWithPath: executable), arguments: arguments)
     }
 
-    private func run(executable: URL, arguments: [String]) async throws {
+    @discardableResult
+    private func runSimctl(arguments: [String]) async throws -> String {
+        if let simctlCommand { return try await simctlCommand(arguments) }
+        guard fileManager.isExecutableFile(atPath: "/usr/bin/xcrun") else {
+            throw StorageCleanupError.toolUnavailable("Xcode Simulator")
+        }
+        return try await run(
+            executable: URL(fileURLWithPath: "/usr/bin/xcrun"),
+            arguments: ["simctl"] + arguments
+        )
+    }
+
+    private func simulatorResourceIsAbsent(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        return message.contains("does not exist")
+            || message.contains("not found")
+            || message.contains("unknown device")
+            || message.contains("unknown runtime")
+    }
+
+    @discardableResult
+    private func run(executable: URL, arguments: [String]) async throws -> String {
         let status = try await Task.detached(priority: .userInitiated) {
             let process = Process()
             let output = Pipe()
@@ -122,12 +380,19 @@ actor StorageResourceCleanupExecutor {
                 status.1.trimmingCharacters(in: .whitespacesAndNewlines)
             )
         }
+        return status.1
     }
 
-    private func validateIdentity(path: String, expected: StoragePathIdentity) throws {
+    private func validateIdentityIfPresent(
+        path: String,
+        expected: StoragePathIdentity
+    ) throws -> Bool {
         var linkValue = stat()
-        guard lstat(path, &linkValue) == 0,
-              (linkValue.st_mode & S_IFMT) != S_IFLNK else {
+        guard lstat(path, &linkValue) == 0 else {
+            if errno == ENOENT || errno == ENOTDIR { return false }
+            throw StorageCleanupError.sourceChanged
+        }
+        guard (linkValue.st_mode & S_IFMT) != S_IFLNK else {
             throw StorageCleanupError.sourceChanged
         }
         var value = stat()
@@ -136,6 +401,36 @@ actor StorageResourceCleanupExecutor {
               UInt64(value.st_ino) == expected.inode else {
             throw StorageCleanupError.sourceChanged
         }
+        return true
+    }
+
+    private func parseDockerImageReferences(_ output: String) throws -> [String] {
+        let value = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value != "null" else { return [] }
+        guard let data = value.data(using: .utf8),
+              let references = try? JSONDecoder().decode([String].self, from: data) else {
+            throw StorageCleanupError.sourceChanged
+        }
+        return Set(references)
+            .filter { !$0.isEmpty && $0 != "<none>:<none>" }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    private func removeDockerImageReference(_ reference: String) async throws {
+        do {
+            try await runDocker(arguments: ["image", "rm", reference])
+        } catch {
+            guard dockerResourceIsAbsent(error) else { throw error }
+        }
+    }
+
+    private func dockerResourceIsAbsent(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        return message.contains("no such image")
+            || message.contains("no such volume")
+            || message.contains("no such container")
+            || message.contains("no such object")
+            || message.contains("not found")
     }
 
     private func samePhysicalPath(_ lhs: String, _ rhs: String) -> Bool {

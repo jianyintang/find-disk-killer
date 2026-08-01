@@ -212,6 +212,7 @@ private actor CancellationGate {
 
     #expect(result.failedCount == 1)
     #expect(result.skippedCount == 2)
+    #expect(result.providersRequiringRefresh == [.codex])
     #expect(await adapter.deletedIDs == [fixture.families[0].nativeThreadID])
 }
 

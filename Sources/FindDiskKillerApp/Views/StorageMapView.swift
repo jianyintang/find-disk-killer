@@ -23,6 +23,17 @@ private enum StorageMapScope: String, CaseIterable, Identifiable {
         }
     }
 
+    var family: StorageSourceFamily? {
+        switch self {
+        case .all: nil
+        case .applications: .applications
+        case .developerTools: .developerTools
+        case .containers: .containers
+        case .aiTools: .aiTools
+        case .workspaces: .workspaces
+        }
+    }
+
     func includes(_ family: StorageSourceFamily) -> Bool {
         switch self {
         case .all: true
@@ -37,6 +48,7 @@ private enum StorageMapScope: String, CaseIterable, Identifiable {
 
 private enum StorageMapRoute: Equatable {
     case overview
+    case safeCleanup
     case source(StorageSourceID)
     case agentAnalysis(AgentStorageProvider)
 }
@@ -44,7 +56,9 @@ private enum StorageMapRoute: Equatable {
 private struct StorageMapSourcePresentation: Identifiable {
     let candidate: StorageSourceCandidate
     let result: StorageSourceResult?
+    let snapshotID: UUID?
     let activity: StorageSourceActivityPresentation
+    let compositionSummary: String?
     let displayBytes: UInt64
 
     var id: StorageSourceID { candidate.id }
@@ -57,13 +71,18 @@ struct StorageMapView: View {
 
     @State private var route: StorageMapRoute = .overview
     @State private var scope: StorageMapScope = .all
+    @State private var renderedScope: StorageMapScope = .all
     @State private var displayedSourceOrder: [StorageSourceID] = []
+    @State private var overviewCleanupIndex = StorageSafeCleanupIndex.empty
+    @State private var scopeUpdateTask: Task<Void, Never>?
 
     var body: some View {
         Group {
             switch route {
             case .overview:
                 overview
+            case .safeCleanup:
+                safeCleanup
             case .source(let sourceID):
                 sourceDetail(sourceID)
             case .agentAnalysis(let provider):
@@ -75,6 +94,26 @@ struct StorageMapView: View {
             synchronizeDisplayedOrder(animated: false)
             if shouldStartInitialAnalysis {
                 startFullAnalysis()
+            }
+        }
+        .task(id: model.snapshot?.id) {
+            guard let snapshot = model.snapshot else {
+                overviewCleanupIndex = .empty
+                return
+            }
+            await Task.yield()
+            let index = await Task.detached(priority: .userInitiated) {
+                StorageSafeCleanupIndex(snapshot: snapshot)
+            }.value
+            guard !Task.isCancelled else { return }
+            overviewCleanupIndex = index
+        }
+        .onChange(of: scope) { _, newScope in
+            scopeUpdateTask?.cancel()
+            scopeUpdateTask = Task { @MainActor in
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                renderedScope = newScope
             }
         }
         .onChange(of: model.candidates.map(\.id)) { _, _ in
@@ -117,8 +156,11 @@ struct StorageMapView: View {
                             StorageMapSummaryBand(
                                 model: model,
                                 isAgentScanning: agentStorage.isScanning,
+                                safeCleanupBytes: overviewCleanupIndex.totalBytes,
+                                hasSafeCleanup: !overviewCleanupIndex.groups.isEmpty,
                                 startAnalysis: startFullAnalysis,
-                                stopAnalysis: stopFullAnalysis
+                                stopAnalysis: stopFullAnalysis,
+                                openSafeCleanup: { route = .safeCleanup }
                             )
                             Divider()
                             Section {
@@ -173,9 +215,29 @@ struct StorageMapView: View {
             }
             Spacer(minLength: 8)
             if model.snapshot != nil {
-                Text(L10n.format("%d 个来源", visibleItems.count))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 14) {
+                    if hasSafeCleanupForOverview {
+                        Button { route = .safeCleanup } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "checkmark.shield.fill")
+                                Text(L10n.text("安全清理"))
+                                Text(safeCleanupValueForOverview)
+                                    .monospacedDigit()
+                            }
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Color.teal)
+                            .padding(.horizontal, 9)
+                            .frame(height: 28)
+                            .background(Color.teal.opacity(0.11), in: RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain)
+                        .help(L10n.text("查看可安全清理的缓存"))
+                        .accessibilityIdentifier("storage-map-safe-cleanup-scope")
+                    }
+                    Text(L10n.format("%d 个来源", visibleItems.count))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(.horizontal, 18)
@@ -184,8 +246,23 @@ struct StorageMapView: View {
         .clipped()
     }
 
+    private var hasSafeCleanupForOverview: Bool {
+        !overviewCleanupIndex.groups.isEmpty
+    }
+
+    private var safeCleanupValueForOverview: String {
+        AgentStorageSizeFormatter.string(
+            overviewCleanupIndex.totalBytes
+        )
+    }
+
     private func sourceWorkbench(width: CGFloat) -> some View {
         let items = visibleItems
+        let safeBytesBySource = Dictionary(
+            uniqueKeysWithValues: overviewCleanupIndex.groups.map {
+                ($0.id, $0.totalBytes)
+            }
+        )
         return LazyVStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                 if index > 0 { Divider().padding(.leading, 72) }
@@ -193,6 +270,7 @@ struct StorageMapView: View {
                     item: item,
                     activity: item.activity,
                     displayBytes: item.displayBytes,
+                    safeCleanupBytes: safeBytesBySource[item.id] ?? 0,
                     usesCompactLayout: width < 820,
                     canReanalyze: canReanalyze(item.id),
                     open: { openSource(item.id) },
@@ -234,18 +312,31 @@ struct StorageMapView: View {
         )
     }
 
+    private var safeCleanup: some View {
+        StorageSafeCleanupView(
+            snapshot: model.snapshot,
+            initialProjection: overviewCleanupIndex,
+            isRefreshing: isAnyAnalysisRunning,
+            goBack: { route = .overview },
+            reanalyze: { sourceIDs in
+                for sourceID in sourceIDs { model.refreshAfterCleanup(sourceID: sourceID) }
+            }
+        )
+    }
+
     @ViewBuilder
     private func sourceDetail(_ sourceID: StorageSourceID) -> some View {
         if let item = item(for: sourceID) {
             StorageSourceDetailView(
                 item: item,
                 isScanning: isScanning(sourceID),
+                refreshError: model.refreshErrorsBySource[sourceID],
                 isFullAnalysisRunning: isFullAnalysisRunning,
                 hasFullDiskRepositoryAccess: model.hasFullDiskRepositoryAccess,
                 startAnalysis: { model.startAnalysis(sourceID: sourceID) },
                 refreshRepositoryAuthorization: model.refreshRepositoryAuthorization,
                 goBack: { route = .overview },
-                didCleanup: { model.startAnalysis(sourceID: sourceID) }
+                didCleanup: { model.refreshAfterCleanup(sourceID: sourceID) }
             )
         } else {
             ContentUnavailableView(L10n.text("来源不可用"), systemImage: "questionmark.folder")
@@ -261,7 +352,12 @@ struct StorageMapView: View {
             initialProvider: provider,
             allowsAnalysisActions: false,
             nodeRuntime: nodeRuntime,
-            providerExitAction: { route = .overview }
+            providerExitAction: { route = .overview },
+            cleanupDidAffectProviders: { providers in
+                for provider in providers {
+                    model.refreshAfterCleanup(sourceID: provider.storageSourceID)
+                }
+            }
         )
     }
 
@@ -393,7 +489,7 @@ struct StorageMapView: View {
 
     private var visibleItems: [StorageMapSourcePresentation] {
         let items = model.candidates
-            .filter { scope.includes($0.descriptor.family) }
+            .filter { renderedScope.includes($0.descriptor.family) }
             .map(makePresentation)
         let positions = Dictionary(
             uniqueKeysWithValues: displayedSourceOrder.enumerated().map { ($1, $0) }
@@ -445,7 +541,11 @@ struct StorageMapView: View {
         return StorageMapSourcePresentation(
             candidate: candidate,
             result: result,
+            snapshotID: model.snapshot?.id,
             activity: activity,
+            compositionSummary: agentSummary(for: candidate.id)
+                .flatMap(StorageSourceActivityPresentation.completedAgentComposition)
+                ?? result.flatMap(StorageSourceActivityPresentation.completedComposition),
             displayBytes: activity.processedBytes
                 ?? model.presentationAllocatedBytes(for: candidate.id)
                 ?? result?.allocatedBytes
@@ -794,16 +894,27 @@ private struct StorageSourceWorkbenchRow: View {
     let item: StorageMapSourcePresentation
     let activity: StorageSourceActivityPresentation
     let displayBytes: UInt64
+    let safeCleanupBytes: UInt64
     let usesCompactLayout: Bool
     let canReanalyze: Bool
     let open: () -> Void
     let reanalyze: () -> Void
 
     @State private var isHovering = false
+    @State private var isOpening = false
 
     var body: some View {
         HStack(spacing: 10) {
-            Button(action: open) {
+            Button {
+                guard !isOpening else { return }
+                isOpening = true
+                Task { @MainActor in
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    open()
+                    isOpening = false
+                }
+            } label: {
                 Group {
                     if usesCompactLayout {
                         compactContent
@@ -814,21 +925,28 @@ private struct StorageSourceWorkbenchRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .disabled(isOpening)
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             .clipped()
             .accessibilityHint(L10n.text("查看专属分析"))
 
             reanalysisControl
 
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
-                .frame(width: 12)
+            Group {
+                if isOpening {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(width: 12, height: 16)
         }
         .padding(.horizontal, 14)
-        .frame(minHeight: usesCompactLayout ? 108 : 92)
+        .frame(minHeight: usesCompactLayout ? 94 : 76)
         .frame(maxWidth: .infinity)
-        .background(rowBackground, in: RoundedRectangle(cornerRadius: 7))
+        .background(rowBackground)
         .clipped()
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
@@ -842,9 +960,7 @@ private struct StorageSourceWorkbenchRow: View {
             activityContent
                 .frame(minWidth: 260, maxWidth: .infinity, alignment: .leading)
             metrics
-                .frame(width: 180, alignment: .trailing)
-            stateBadge
-                .frame(width: 106, alignment: .trailing)
+                .frame(width: 300, alignment: .trailing)
         }
     }
 
@@ -862,8 +978,6 @@ private struct StorageSourceWorkbenchRow: View {
                 activityContent
                     .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 48)
-                stateBadge
-                    .fixedSize(horizontal: true, vertical: false)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -888,25 +1002,37 @@ private struct StorageSourceWorkbenchRow: View {
 
     private var activityContent: some View {
         VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 7) {
-                if activity.state == .active {
-                    ProgressView().controlSize(.mini)
-                } else {
-                    Circle()
-                        .fill(stateColor.opacity(0.85))
-                        .frame(width: 6, height: 6)
+            if activity.state == .active || activity.state == .queued || activity.state == .ready {
+                HStack(spacing: 7) {
+                    if activity.state == .active {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Circle()
+                            .fill(stateColor.opacity(0.85))
+                            .frame(width: 6, height: 6)
+                    }
+                    Text(activity.phaseTitle)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(activity.state == .active ? Color.primary : stateColor)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
-                Text(activity.phaseTitle)
+            }
+            if let composition = completedComposition {
+                Text(composition)
                     .font(.callout.weight(.medium))
-                    .foregroundStyle(activity.state == .active ? Color.primary : stateColor)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            } else {
+                Text(activity.workDetail)
+                    .font(activity.state == .complete || activity.state == .partial
+                        ? .callout.weight(.medium)
+                        : .caption)
+                    .foregroundStyle(activity.state == .complete ? .primary : .secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            Text(activity.workDetail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
             if let supportingDetail = activity.supportingDetail {
                 Text(supportingDetail)
                     .font(.caption2)
@@ -917,30 +1043,28 @@ private struct StorageSourceWorkbenchRow: View {
         }
     }
 
+    private var completedComposition: String? {
+        guard activity.state == .complete || activity.state == .partial else { return nil }
+        return item.compositionSummary
+    }
+
     private var metrics: some View {
-        VStack(alignment: .trailing, spacing: 4) {
+        HStack(spacing: 18) {
             Text(AgentStorageSizeFormatter.string(displayBytes))
                 .font(.system(.callout, design: .monospaced, weight: .semibold))
                 .monospacedDigit()
                 .contentTransition(.numericText())
                 .animation(.smooth(duration: 0.28), value: displayBytes)
-            if let count = activity.processedEntryCount {
-                Text(L10n.format("%d 项", count))
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            } else {
-                Text(L10n.text("尚无实测数据"))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+            if safeCleanupBytes > 0 {
+                Text(L10n.format(
+                    "可安全清理 %@",
+                    AgentStorageSizeFormatter.string(safeCleanupBytes)
+                ))
+                .font(.caption.weight(.medium).monospacedDigit())
+                .foregroundStyle(Color.teal)
             }
         }
-    }
-
-    private var stateBadge: some View {
-        Label(stateTitle, systemImage: stateSymbol)
-            .font(.caption.weight(.medium))
-            .foregroundStyle(stateColor)
-            .lineLimit(1)
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
     @ViewBuilder
@@ -956,6 +1080,8 @@ private struct StorageSourceWorkbenchRow: View {
             .buttonStyle(AppIconButtonStyle(size: 30))
             .help(L10n.text("重新分析"))
             .accessibilityLabel(L10n.text("重新分析"))
+            .opacity(isHovering ? 1 : 0)
+            .allowsHitTesting(isHovering)
         case .analyzing:
             ProgressView()
                 .controlSize(.mini)
@@ -976,26 +1102,6 @@ private struct StorageSourceWorkbenchRow: View {
     private var rowBackground: Color {
         if isHovering { return Color.primary.opacity(0.055) }
         return .clear
-    }
-
-    private var stateTitle: String {
-        switch activity.state {
-        case .ready: L10n.text("可分析")
-        case .queued: L10n.text("等待")
-        case .active: L10n.text("分析中")
-        case .complete: L10n.text("已完成")
-        case .partial: L10n.text("部分结果")
-        }
-    }
-
-    private var stateSymbol: String {
-        switch activity.state {
-        case .ready: "arrow.right.circle.fill"
-        case .queued: "clock"
-        case .active: "waveform.path.ecg"
-        case .complete: "checkmark.circle.fill"
-        case .partial: "exclamationmark.triangle.fill"
-        }
     }
 
     private var stateColor: Color {
@@ -1054,6 +1160,10 @@ private struct StorageSourceBrandIcon: View {
             bundleIdentifiers: ["com.apple.dt.Xcode"],
             paths: ["/Applications/Xcode.app"]
         ) ?? resourceImage("xcode")
+        values[.vscode] = applicationIcon(
+            bundleIdentifiers: ["com.microsoft.VSCode"],
+            paths: ["/Applications/Visual Studio Code.app"]
+        )
         values[.simulators] = applicationIcon(
             bundleIdentifiers: ["com.apple.iphonesimulator"],
             paths: ["/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app"]
@@ -1103,11 +1213,506 @@ private struct StorageSourceBrandIcon: View {
     }
 }
 
+private struct StorageSafeCleanupView: View {
+    let snapshot: StorageAnalysisSnapshot?
+    let isRefreshing: Bool
+    let goBack: () -> Void
+    let reanalyze: (Set<StorageSourceID>) -> Void
+
+    @State private var scope: StorageMapScope = .all
+    @State private var renderedScope: StorageMapScope = .all
+    @State private var projection = StorageSafeCleanupIndex.empty
+    @State private var selectedIDs = Set<String>()
+    @State private var expandedSourceIDs = Set<StorageSourceID>()
+    @State private var renderedExpandedSourceIDs = Set<StorageSourceID>()
+    @State private var didInitializeSelection = false
+    @State private var isExecuting = false
+    @State private var currentRequestID: String?
+    @State private var outcomesByID: [String: StorageCleanupOutcome] = [:]
+    @State private var executionTask: Task<Void, Never>?
+    @State private var scopeUpdateTask: Task<Void, Never>?
+    @State private var expansionUpdateTask: Task<Void, Never>?
+    @State private var isPreparingProjection = false
+
+    init(
+        snapshot: StorageAnalysisSnapshot?,
+        initialProjection: StorageSafeCleanupIndex,
+        isRefreshing: Bool,
+        goBack: @escaping () -> Void,
+        reanalyze: @escaping (Set<StorageSourceID>) -> Void
+    ) {
+        self.snapshot = snapshot
+        self.isRefreshing = isRefreshing
+        self.goBack = goBack
+        self.reanalyze = reanalyze
+        _projection = State(initialValue: initialProjection)
+        _selectedIDs = State(initialValue: initialProjection.allRequestIDs)
+        _didInitializeSelection = State(initialValue: !initialProjection.allRequestIDs.isEmpty)
+        if let firstSourceID = initialProjection.groups.first?.id {
+            _expandedSourceIDs = State(initialValue: [firstSourceID])
+            _renderedExpandedSourceIDs = State(initialValue: [firstSourceID])
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            scopeBar
+            Divider()
+            content
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .navigationTitle(L10n.text("安全清理"))
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button(action: goBack) { Image(systemName: "chevron.left") }
+                    .disabled(isExecuting)
+                    .help(L10n.text("返回空间地图"))
+                    .accessibilityLabel(L10n.text("返回空间地图"))
+            }
+        }
+        .task(id: snapshot?.id) { await prepareProjection() }
+        .onChange(of: scope) { _, newScope in
+            scopeUpdateTask?.cancel()
+            scopeUpdateTask = Task { @MainActor in
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                renderedScope = newScope
+            }
+        }
+        .onChange(of: availableScopes.map(\.id)) { _, scopes in
+            guard scopes.contains(scope.id) else {
+                scope = .all
+                return
+            }
+        }
+        .onChange(of: snapshot?.id) { _, _ in
+            guard !isExecuting else { return }
+            outcomesByID.removeAll()
+        }
+        .onDisappear {
+            executionTask?.cancel()
+            scopeUpdateTask?.cancel()
+            expansionUpdateTask?.cancel()
+        }
+    }
+
+    private var header: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 20) {
+                cleanupIdentity
+                Spacer(minLength: 20)
+                selectionSummary
+                cleanupButton
+            }
+            VStack(alignment: .leading, spacing: 16) {
+                cleanupIdentity
+                HStack(spacing: 12) {
+                    selectionSummary
+                    Spacer(minLength: 8)
+                    cleanupButton
+                }
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
+    }
+
+    private var cleanupIdentity: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(L10n.text("安全清理"))
+                .font(.title2.weight(.semibold))
+            HStack(spacing: 12) {
+                Image(systemName: "checkmark.shield.fill")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(Color.teal)
+                Text(AgentStorageSizeFormatter.string(projection.totalBytes))
+                    .font(.system(size: 34, weight: .semibold))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+            }
+            Text(L10n.text("仅包含可重建缓存；发生变化的项目会自动跳过。"))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var selectionSummary: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            Text(L10n.format("已选 %@", AgentStorageSizeFormatter.string(selectedBytes)))
+                .font(.callout.weight(.semibold).monospacedDigit())
+            Text(L10n.format("%d 个项目", selectedIDs.count))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var cleanupButton: some View {
+        Button(action: executeSelected) {
+            HStack(spacing: 8) {
+                if isExecuting { ProgressView().controlSize(.small) }
+                Image(systemName: isExecuting ? "trash.slash" : "trash")
+                Text(isExecuting ? L10n.text("正在清理") : L10n.text("移到废纸篓"))
+            }
+        }
+        .buttonStyle(AppActionButtonStyle(kind: .primary, size: .large))
+        .disabled(selectedIDs.isEmpty || isExecuting || isRefreshing)
+        .accessibilityIdentifier("storage-safe-cleanup-execute")
+    }
+
+    private var scopeBar: some View {
+        ZStack {
+            Picker(L10n.text("来源分类"), selection: $scope) {
+                ForEach(availableScopes) { item in
+                    Text(item.title).tag(item)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 620)
+            .disabled(isExecuting)
+            HStack {
+                Spacer(minLength: 0)
+                if isRefreshing {
+                    HStack(spacing: 7) {
+                        ProgressView().controlSize(.small)
+                        Text(L10n.text("正在刷新"))
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                } else {
+                    Text(L10n.format("%d 个项目", visibleRequestIDs.count))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 24)
+        .frame(height: 54)
+        .background(.bar)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if projection.groups.isEmpty && isPreparingProjection {
+            VStack(spacing: 12) {
+                ProgressView().controlSize(.small)
+                Text(L10n.text("正在准备清理项目"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityElement(children: .combine)
+        } else if projection.groups.isEmpty {
+            ContentUnavailableView {
+                Label(L10n.text("当前没有可安全清理的缓存"), systemImage: "checkmark.shield")
+            } description: {
+                Text(L10n.text("只有经过验证的可重建缓存才会显示在这里。"))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if visibleGroups.isEmpty {
+            ContentUnavailableView {
+                Label(L10n.text("此分类没有可安全清理的缓存"), systemImage: "line.3.horizontal.decrease.circle")
+            } description: {
+                Text(L10n.text("切换到其他来源分类查看可清理项目。"))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    HStack {
+                        Text(L10n.text("清理项目"))
+                            .font(.headline)
+                        Spacer()
+                        Button(visibleSelectionIsComplete
+                            ? L10n.text("取消选择当前分类")
+                            : L10n.text("选择当前分类")) {
+                            toggleVisibleSelection()
+                        }
+                        .buttonStyle(.link)
+                        .disabled(isExecuting)
+                    }
+                    .padding(.horizontal, 24)
+                    .frame(height: 48)
+
+                    ForEach(visibleGroups) { group in
+                        groupView(group)
+                        if group.id != visibleGroups.last?.id { Divider().padding(.leading, 66) }
+                    }
+                }
+                .padding(.bottom, 20)
+            }
+            .scrollIndicators(.visible)
+        }
+    }
+
+    private func groupView(_ group: StorageSafeCleanupGroup) -> some View {
+        let groupIDs = projection.requestIDsByGroup[group.id] ?? []
+        let selectedCount = selectedIDs.intersection(groupIDs).count
+        return VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                selectionButton(
+                    selectedCount: selectedCount,
+                    totalCount: group.requests.count,
+                    accessibilityLabel: L10n.format("选择 %@", group.title)
+                ) {
+                    toggleSelection(groupIDs)
+                }
+                StorageSourceBrandIcon(sourceID: group.id, fallbackSymbol: group.symbol)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.title).font(.callout.weight(.semibold))
+                    Text(group.family.title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                Text(AgentStorageSizeFormatter.string(group.totalBytes))
+                    .font(.system(.callout, design: .monospaced, weight: .semibold))
+                Button {
+                    toggleGroupExpansion(group.id)
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .rotationEffect(.degrees(expandedSourceIDs.contains(group.id) ? 90 : 0))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isExecuting)
+                .accessibilityLabel(expandedSourceIDs.contains(group.id)
+                    ? L10n.text("收起清理项目")
+                    : L10n.text("展开清理项目"))
+            }
+            .padding(.horizontal, 24)
+            .frame(minHeight: 64)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !isExecuting else { return }
+                toggleGroupExpansion(group.id)
+            }
+
+            if renderedExpandedSourceIDs.contains(group.id) {
+                ForEach(group.requests) { request in
+                    Divider().padding(.leading, 86)
+                    requestView(request)
+                }
+            }
+        }
+    }
+
+    private func requestView(_ request: StorageCleanupRequest) -> some View {
+        HStack(spacing: 12) {
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor).opacity(0.5))
+                .frame(width: 1, height: 44)
+                .padding(.leading, 42)
+            selectionButton(
+                selectedCount: selectedIDs.contains(request.id) ? 1 : 0,
+                totalCount: 1,
+                accessibilityLabel: L10n.format("选择 %@", L10n.text(request.title))
+            ) {
+                toggleSelection([request.id])
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.text(request.title))
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                if let outcome = outcomesByID[request.id], let error = outcome.errorDescription {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 12)
+            if currentRequestID == request.id {
+                ProgressView().controlSize(.small)
+            } else if let outcome = outcomesByID[request.id] {
+                Image(systemName: outcome.succeeded ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .foregroundStyle(outcome.succeeded ? Color.green : Color.orange)
+            }
+            Text(AgentStorageSizeFormatter.string(request.displayBytes))
+                .font(.system(.callout, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 112, alignment: .trailing)
+        }
+        .padding(.horizontal, 24)
+        .frame(minHeight: 56)
+    }
+
+    private func selectionButton(
+        selectedCount: Int,
+        totalCount: Int,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: selectionSymbol(selectedCount: selectedCount, totalCount: totalCount))
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(selectedCount == 0 ? Color.secondary : Color.accentColor)
+                .frame(width: 22, height: 22)
+        }
+        .buttonStyle(.plain)
+        .disabled(isExecuting)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(selectionValue(selectedCount: selectedCount, totalCount: totalCount))
+    }
+
+    private var visibleGroups: [StorageSafeCleanupGroup] {
+        projection.groups(for: renderedScope.family)
+    }
+
+    private var availableScopes: [StorageMapScope] {
+        let families = Set(projection.groupsByFamily.keys)
+        return [.all] + StorageMapScope.allCases.filter { item in
+            guard let family = item.family else { return false }
+            return families.contains(family)
+        }
+    }
+
+    private var visibleRequestIDs: Set<String> {
+        projection.requestIDs(for: renderedScope.family)
+    }
+
+    private var visibleSelectionIsComplete: Bool {
+        !visibleRequestIDs.isEmpty && visibleRequestIDs.isSubset(of: selectedIDs)
+    }
+
+    private var selectedBytes: UInt64 {
+        projection.selectedBytes(for: selectedIDs)
+    }
+
+    private var selectedEntries: [(StorageSourceID, StorageCleanupRequest)] {
+        projection.selectedEntries(for: selectedIDs)
+    }
+
+    @MainActor
+    private func prepareProjection() async {
+        guard let snapshot else {
+            projection = .empty
+            selectedIDs.removeAll()
+            isPreparingProjection = false
+            return
+        }
+        isPreparingProjection = projection.groups.isEmpty
+        await Task.yield()
+        let newProjection = await Task.detached(priority: .userInitiated) {
+            StorageSafeCleanupIndex(snapshot: snapshot)
+        }.value
+        guard !Task.isCancelled else { return }
+        projection = newProjection
+        if didInitializeSelection {
+            selectedIDs.formIntersection(newProjection.allRequestIDs)
+        } else if !newProjection.allRequestIDs.isEmpty {
+            selectedIDs = newProjection.allRequestIDs
+            didInitializeSelection = true
+            if let first = newProjection.groups.first {
+                expandedSourceIDs.insert(first.id)
+                renderedExpandedSourceIDs.insert(first.id)
+            }
+        }
+        if !availableScopes.contains(where: { $0.id == scope.id }) {
+            scope = .all
+            renderedScope = .all
+        }
+        isPreparingProjection = false
+    }
+
+    private func toggleGroupExpansion(_ sourceID: StorageSourceID) {
+        withAnimation(.snappy(duration: 0.2)) {
+            if expandedSourceIDs.contains(sourceID) {
+                expandedSourceIDs.remove(sourceID)
+            } else {
+                expandedSourceIDs.insert(sourceID)
+            }
+        }
+        let requestedExpansion = expandedSourceIDs
+        expansionUpdateTask?.cancel()
+        expansionUpdateTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled, requestedExpansion == expandedSourceIDs else { return }
+            withAnimation(.snappy(duration: 0.2)) {
+                renderedExpandedSourceIDs = requestedExpansion
+            }
+        }
+    }
+
+    private func toggleVisibleSelection() {
+        if visibleSelectionIsComplete {
+            selectedIDs.subtract(visibleRequestIDs)
+        } else {
+            selectedIDs.formUnion(visibleRequestIDs)
+        }
+    }
+
+    private func toggleSelection(_ ids: Set<String>) {
+        if ids.isSubset(of: selectedIDs) {
+            selectedIDs.subtract(ids)
+        } else {
+            selectedIDs.formUnion(ids)
+        }
+    }
+
+    private func selectionSymbol(selectedCount: Int, totalCount: Int) -> String {
+        if selectedCount == 0 { return "square" }
+        if selectedCount == totalCount { return "checkmark.square.fill" }
+        return "minus.square.fill"
+    }
+
+    private func selectionValue(selectedCount: Int, totalCount: Int) -> String {
+        if selectedCount == 0 { return L10n.text("未选择") }
+        if selectedCount == totalCount { return L10n.text("已选择") }
+        return L10n.text("部分选择")
+    }
+
+    private func executeSelected() {
+        guard !selectedIDs.isEmpty, !isExecuting, !isRefreshing else { return }
+        isExecuting = true
+        outcomesByID.removeAll()
+        executionTask?.cancel()
+        executionTask = Task {
+            await Task.yield()
+            let entries = selectedEntries
+            guard !entries.isEmpty, !Task.isCancelled else {
+                isExecuting = false
+                return
+            }
+            let executor = StorageResourceCleanupExecutor()
+            var succeededIDs = Set<String>()
+            var attemptedSourceIDs = Set<StorageSourceID>()
+            for (sourceID, request) in entries {
+                guard !Task.isCancelled else { break }
+                attemptedSourceIDs.insert(sourceID)
+                currentRequestID = request.id
+                let summary = await executor.execute([request])
+                guard let outcome = summary.outcomes.first else { continue }
+                outcomesByID[request.id] = outcome
+                if outcome.succeeded {
+                    succeededIDs.insert(request.id)
+                }
+            }
+            currentRequestID = nil
+            isExecuting = false
+            selectedIDs.subtract(succeededIDs)
+            if !attemptedSourceIDs.isEmpty { reanalyze(attemptedSourceIDs) }
+        }
+    }
+}
+
 private struct StorageMapSummaryBand: View {
     let model: StorageMapModel
     let isAgentScanning: Bool
+    let safeCleanupBytes: UInt64
+    let hasSafeCleanup: Bool
     let startAnalysis: () -> Void
     let stopAnalysis: () -> Void
+    let openSafeCleanup: () -> Void
+
+    @State private var isSafeCleanupHovering = false
+    @State private var isAnalysisHovering = false
+    @State private var stopFlowAngle: Double = -42
 
     var body: some View {
         let volumes = model.presentationVolumes
@@ -1156,37 +1761,61 @@ private struct StorageMapSummaryBand: View {
     }
 
     private var wideSummary: some View {
-        HStack(spacing: 20) {
+        HStack(spacing: 12) {
             primarySummary
-                .frame(minWidth: 220, alignment: .leading)
+                .frame(minWidth: 170, alignment: .leading)
             summaryDivider
-            summaryMetric(L10n.text("来源"), sourceCount)
-            summaryMetric(L10n.text("文件条目"), entryCount)
-            summaryMetric(L10n.text("可重建"), reclaimableValue)
-            summaryMetric(L10n.text("磁盘卷"), volumeCount)
+            HStack(spacing: 16) {
+                summaryMetric(L10n.text("来源"), sourceCount)
+                summaryMetric(L10n.text("文件条目"), entryCount)
+                summaryMetric(L10n.text("磁盘卷"), volumeCount)
+            }
             Spacer(minLength: 8)
-            analysisButton
+            actionGroup
+                .frame(width: hasSafeCleanup ? 366 : 178)
         }
     }
 
     private var compactSummary: some View {
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .center, spacing: 12) {
                 primarySummary
-                Spacer(minLength: 12)
-                analysisButton
+                Spacer(minLength: 0)
             }
-            HStack(spacing: 20) {
+            HStack(spacing: 16) {
                 summaryMetric(L10n.text("来源"), sourceCount)
                 summaryMetric(L10n.text("文件条目"), entryCount)
-                summaryMetric(L10n.text("可重建"), reclaimableValue)
                 summaryMetric(L10n.text("磁盘卷"), volumeCount)
+            }
+            ViewThatFits(in: .horizontal) {
+                actionGroup
+                    .frame(maxWidth: .infinity)
+
+                VStack(spacing: 8) {
+                    analysisButton
+                    if hasSafeCleanup {
+                        safeCleanupAction
+                    }
+                }
+                .frame(maxWidth: .infinity)
             }
         }
     }
 
+    @ViewBuilder
+    private var actionGroup: some View {
+        if hasSafeCleanup {
+            HStack(spacing: 10) {
+                analysisButton
+                safeCleanupAction
+            }
+        } else {
+            analysisButton
+        }
+    }
+
     private var primarySummary: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 5) {
             Text(primaryTitle)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -1204,7 +1833,7 @@ private struct StorageMapSummaryBand: View {
     private var summaryDivider: some View {
         Rectangle()
             .fill(Color(nsColor: .separatorColor).opacity(0.7))
-            .frame(width: 1, height: 46)
+            .frame(width: 1, height: 64)
     }
 
     private func summaryMetric(_ title: String, _ value: String) -> some View {
@@ -1217,16 +1846,157 @@ private struct StorageMapSummaryBand: View {
                 .monospacedDigit()
                 .lineLimit(1)
         }
-        .frame(minWidth: 86, alignment: .leading)
+        .frame(minWidth: 66, alignment: .leading)
+    }
+
+    private var safeCleanupAction: some View {
+        Button(action: openSafeCleanup) {
+            HStack(spacing: 11) {
+                Image(systemName: "checkmark.shield.fill")
+                    .font(.system(size: 21, weight: .semibold))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(L10n.text("可安全清理"))
+                        .font(.callout.weight(.semibold))
+                    Text(safeCleanupValue)
+                        .font(.system(.title3, design: .rounded, weight: .semibold))
+                        .monospacedDigit()
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .bold))
+            }
+            .foregroundStyle(Color.teal)
+            .padding(.horizontal, 14)
+            .frame(
+                minWidth: 0,
+                idealWidth: 178,
+                maxWidth: .infinity,
+                minHeight: 58,
+                maxHeight: 58,
+                alignment: .leading
+            )
+            .background(Color.teal.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.teal.opacity(0.34), lineWidth: 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(L10n.text("查看可安全清理的缓存"))
+        .accessibilityIdentifier("storage-map-safe-cleanup")
+        .onHover { isSafeCleanupHovering = $0 }
+        .shadow(
+            color: Color.teal.opacity(isSafeCleanupHovering ? 0.28 : 0.14),
+            radius: isSafeCleanupHovering ? 14 : 9,
+            y: 0
+        )
+        .animation(.easeOut(duration: 0.2), value: isSafeCleanupHovering)
     }
 
     private var analysisButton: some View {
         Button(action: isAnalysisRunning ? stopAnalysis : startAnalysis) {
-            Image(systemName: isAnalysisRunning ? "stop.fill" : "arrow.clockwise")
+            HStack(spacing: 10) {
+                ZStack {
+                    if isAnalysisRunning {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 12, weight: .bold))
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 18, weight: .semibold))
+                    }
+                }
+                .frame(width: 24, height: 24)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.text(isAnalysisRunning ? "停止分析" : "重新分析"))
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+                    Text(L10n.text(isAnalysisRunning ? "中止本次扫描" : "更新空间占用"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(
+                minWidth: 0,
+                idealWidth: 178,
+                maxWidth: .infinity,
+                minHeight: 58,
+                maxHeight: 58,
+                alignment: .leading
+            )
+            .padding(.horizontal, 14)
+            .foregroundStyle(isAnalysisRunning ? Color.orange : Color.accentColor)
+            .background(
+                (isAnalysisRunning ? Color.orange : Color.accentColor)
+                    .opacity(isAnalysisHovering ? 0.16 : 0.09),
+                in: RoundedRectangle(cornerRadius: 9)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 9)
+                    .stroke(
+                        (isAnalysisRunning ? Color.orange : Color.accentColor)
+                            .opacity(isAnalysisHovering ? 0.45 : 0.25),
+                        lineWidth: 1
+                    )
+            }
+            .overlay {
+                if isAnalysisRunning {
+                    RoundedRectangle(cornerRadius: 9)
+                        .stroke(
+                            AngularGradient(
+                                gradient: Gradient(colors: [
+                                    Color.orange.opacity(0.02),
+                                    Color.orange.opacity(0.16),
+                                    Color.orange.opacity(0.72),
+                                    Color.orange.opacity(0.16),
+                                    Color.orange.opacity(0.02)
+                                ]),
+                                center: .center,
+                                angle: .degrees(stopFlowAngle)
+                            ),
+                            lineWidth: 1.6
+                        )
+                        .shadow(color: Color.orange.opacity(0.16), radius: 3)
+                        .allowsHitTesting(false)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 9))
         }
-        .buttonStyle(AppIconButtonStyle(size: 34))
-        .help(isAnalysisRunning ? L10n.text("停止分析") : L10n.text("刷新空间地图"))
+        .buttonStyle(.plain)
+        .help(isAnalysisRunning ? L10n.text("停止分析") : L10n.text("重新分析空间地图"))
+        .accessibilityIdentifier("storage-map-reanalyze")
+        .accessibilityLabel(L10n.text(isAnalysisRunning ? "停止分析" : "重新分析"))
+        .accessibilityHint(L10n.text(isAnalysisRunning ? "中止当前空间扫描" : "重新扫描已识别的应用、工具和数据位置"))
         .disabled(model.phase == .detecting || model.phase == .stopping || model.candidates.isEmpty)
+        .onHover { isAnalysisHovering = $0 }
+        .shadow(
+            color: (isAnalysisRunning ? Color.orange : Color.accentColor)
+                .opacity(isAnalysisHovering ? 0.22 : 0.08),
+            radius: isAnalysisHovering ? 12 : 6,
+            y: 0
+        )
+        .animation(.easeOut(duration: 0.18), value: isAnalysisHovering)
+        .animation(.easeOut(duration: 0.18), value: isAnalysisRunning)
+        .onAppear {
+            startStopFlowIfNeeded()
+        }
+        .onChange(of: isAnalysisRunning) { _, isRunning in
+            if isRunning {
+                startStopFlowIfNeeded()
+            } else {
+                stopFlowAngle = -42
+            }
+        }
+    }
+
+    private func startStopFlowIfNeeded() {
+        guard isAnalysisRunning else { return }
+        stopFlowAngle = -42
+        withAnimation(.linear(duration: 2.8).repeatForever(autoreverses: false)) {
+            stopFlowAngle = 318
+        }
     }
 
     private var isAnalysisRunning: Bool {
@@ -1281,15 +2051,9 @@ private struct StorageMapSummaryBand: View {
         model.presentationEntryCount?.formatted() ?? "—"
     }
 
-    private var reclaimableValue: String {
-        if model.phase == .scanning || model.phase == .stopping {
-            return L10n.text("分析中")
-        }
-        guard let results = model.snapshot?.results else { return "—" }
-        let bytes = results.reduce(UInt64(0)) {
-            $0.addingClamped($1.reclaimableCandidateBytes)
-        }
-        return AgentStorageSizeFormatter.string(bytes)
+    private var safeCleanupValue: String {
+        guard model.snapshot != nil else { return "—" }
+        return AgentStorageSizeFormatter.string(safeCleanupBytes)
     }
 
     private var volumeCount: String {
@@ -1594,6 +2358,7 @@ private struct StorageVolumeComposition: View {
         case .bun: .yellow
         case .pip: .blue
         case .xcode: .indigo
+        case .vscode: Color(red: 0.13, green: 0.56, blue: 0.82)
         case .simulators: .purple
         case .docker: .orange
         case .podman: .brown
@@ -1712,6 +2477,7 @@ private struct StorageSourceStatus: View {
 private struct StorageSourceDetailView: View {
     let item: StorageMapSourcePresentation
     let isScanning: Bool
+    let refreshError: String?
     let isFullAnalysisRunning: Bool
     let hasFullDiskRepositoryAccess: Bool
     let startAnalysis: () -> Void
@@ -1719,6 +2485,9 @@ private struct StorageSourceDetailView: View {
     let goBack: () -> Void
     let didCleanup: () -> Void
     @State private var selectedResourceIDs: Set<String> = []
+    @State private var resourceProjection: StorageResourceTreeIndex?
+    @State private var didInitializeCleanupSelection = false
+    @State private var didCustomizeCleanupSelection = false
     @State private var cleanupReview: StorageCleanupReviewContext?
     @State private var isAwaitingRepositoryAuthorization = false
     @State private var isCheckingRepositoryAuthorization = false
@@ -1749,10 +2518,16 @@ private struct StorageSourceDetailView: View {
                 if isScanning {
                     HStack(spacing: 7) {
                         ProgressView().controlSize(.small)
-                        Text(L10n.text("正在等待整体分析结果"))
+                        Text(L10n.text("正在同步最新状态"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                } else if let refreshError {
+                    Label(refreshError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                        .help(refreshError)
                 }
             }
             .padding(.horizontal, 18)
@@ -1793,8 +2568,9 @@ private struct StorageSourceDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .top)
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if !selectedRequests(result).isEmpty {
-                        cleanupSelectionBar(result)
+                    if let resourceProjection,
+                       !resourceProjection.selectedRequests(for: selectedResourceIDs).isEmpty {
+                        cleanupSelectionBar(resourceProjection)
                     }
                 }
             } else if item.id == .workspace {
@@ -1813,6 +2589,7 @@ private struct StorageSourceDetailView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle(item.candidate.descriptor.title)
+        .task(id: item.snapshotID) { await prepareResourceProjection() }
         .task(id: shouldStartWorkspaceAnalysis) {
             guard shouldStartWorkspaceAnalysis else { return }
             await Task.yield()
@@ -1838,7 +2615,7 @@ private struct StorageSourceDetailView: View {
                 didFinish: { summary in
                     let succeeded = Set(summary.outcomes.filter(\.succeeded).map(\.id))
                     selectedResourceIDs.subtract(succeeded)
-                    if summary.succeededCount > 0 { didCleanup() }
+                    didCleanup()
                 }
             )
         }
@@ -2026,11 +2803,25 @@ private struct StorageSourceDetailView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            StorageResourceTreeView(
-                nodes: resourceNodes(result),
-                categoryDescription: profile.categoryDescription,
-                selectedIDs: $selectedResourceIDs
-            )
+            Group {
+                if let resourceProjection {
+                    StorageResourceTreeView(
+                        projection: resourceProjection,
+                        categoryDescription: profile.categoryDescription,
+                        selectedIDs: $selectedResourceIDs,
+                        onSelectionInteraction: { didCustomizeCleanupSelection = true }
+                    )
+                } else {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text(L10n.text("正在准备资源明细"))
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 112)
+                    .accessibilityElement(children: .combine)
+                }
+            }
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.48))
             .overlay {
                 RoundedRectangle(cornerRadius: 7)
@@ -2053,34 +2844,55 @@ private struct StorageSourceDetailView: View {
         }
     }
 
-    private func resourceNodes(_ result: StorageSourceResult) -> [StorageResourceNode] {
-        guard result.resourceTree.isEmpty else { return result.resourceTree }
-        return StorageComponentPresentation.aggregate(result.components).map { component in
-            StorageResourceNode(
-                id: component.id,
-                kind: .category,
-                title: component.title,
-                detail: component.rootDisplayName,
-                symbol: component.risk.symbol,
-                allocatedBytes: component.allocatedBytes,
-                logicalBytes: component.logicalBytes,
-                entryCount: component.entryCount,
-                risk: component.risk,
-                evidence: component.evidence,
-                isProtected: component.isProtected
-            )
+    private func rawResourceNodes(_ result: StorageSourceResult) -> [StorageResourceNode] {
+        let nodes: [StorageResourceNode]
+        if result.resourceTree.isEmpty {
+            nodes = StorageComponentPresentation.aggregate(result.components).map { component in
+                StorageResourceNode(
+                    id: component.id,
+                    kind: .category,
+                    title: component.title,
+                    detail: component.rootDisplayName,
+                    symbol: component.risk.symbol,
+                    allocatedBytes: component.allocatedBytes,
+                    logicalBytes: component.logicalBytes,
+                    entryCount: component.entryCount,
+                    risk: component.risk,
+                    evidence: component.evidence,
+                    isProtected: component.isProtected
+                )
+            }
+        } else {
+            nodes = result.resourceTree
+        }
+        return nodes
+    }
+
+    @MainActor
+    private func prepareResourceProjection() async {
+        guard let result = item.result else {
+            resourceProjection = nil
+            return
+        }
+        await Task.yield()
+        let nodes = rawResourceNodes(result)
+        let projection = await Task.detached(priority: .userInitiated) {
+            StorageResourceTreeIndex(nodes: nodes)
+        }.value
+        guard !Task.isCancelled else { return }
+        resourceProjection = projection
+
+        if didInitializeCleanupSelection {
+            selectedResourceIDs.formIntersection(Set(projection.requestsByID.keys))
+        } else if !didCustomizeCleanupSelection,
+                  !projection.safeRequestIDs.isEmpty || result.isComplete {
+            selectedResourceIDs = projection.safeRequestIDs
+            didInitializeCleanupSelection = true
         }
     }
 
-    private func selectedRequests(_ result: StorageSourceResult) -> [StorageCleanupRequest] {
-        StorageResourceTreeProjection.selectedRequests(
-            nodes: resourceNodes(result),
-            selectedIDs: selectedResourceIDs
-        )
-    }
-
-    private func cleanupSelectionBar(_ result: StorageSourceResult) -> some View {
-        let requests = selectedRequests(result)
+    private func cleanupSelectionBar(_ projection: StorageResourceTreeIndex) -> some View {
+        let requests = projection.selectedRequests(for: selectedResourceIDs)
         let bytes = requests.reduce(UInt64.zero) { $0.addingClamped($1.displayBytes) }
         return HStack(spacing: 12) {
             Image(systemName: "checkmark.square.fill")
@@ -2093,8 +2905,11 @@ private struct StorageSourceDetailView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button(L10n.text("清除选择")) { selectedResourceIDs.removeAll() }
-                .buttonStyle(AppActionButtonStyle(kind: .secondary))
+            Button(L10n.text("清除选择")) {
+                didCustomizeCleanupSelection = true
+                selectedResourceIDs.removeAll()
+            }
+            .buttonStyle(AppActionButtonStyle(kind: .secondary))
             Button {
                 cleanupReview = StorageCleanupReviewContext(
                     sourceTitle: item.candidate.descriptor.title,
@@ -2105,6 +2920,7 @@ private struct StorageSourceDetailView: View {
                 Label(L10n.text("检查并清理"), systemImage: "trash")
             }
             .buttonStyle(AppActionButtonStyle(kind: .primary))
+            .disabled(isScanning)
         }
         .padding(.horizontal, 18)
         .frame(height: 70)

@@ -20,12 +20,15 @@ final class AgentStorageModel {
     private(set) var progress = AgentStorageScanProgress(phase: .discoveringSources)
     private(set) var progressByProvider: [AgentStorageProvider: AgentStorageScanProgress] = [:]
     private(set) var reanalyzingProviders: Set<AgentStorageProvider> = []
+    private(set) var refreshErrorsByProvider: [AgentStorageProvider: String] = [:]
     private(set) var generation = 0
     private(set) var customRootError: String?
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let locationRepository: AgentDataLocationRepository
     @ObservationIgnored private let cacheURL: URL?
+    @ObservationIgnored private let snapshotCacheWriter = SnapshotCacheWriter<AgentStorageSnapshot>()
+    @ObservationIgnored private var cacheRevision: UInt64 = 0
     @ObservationIgnored private let scanAction: @Sendable (
         AgentStorageScanner.Configuration,
         @escaping @Sendable (AgentStorageScanProgress) -> Void
@@ -33,6 +36,7 @@ final class AgentStorageModel {
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     @ObservationIgnored private var providerScanTasks: [AgentStorageProvider: Task<Void, Never>] = [:]
     @ObservationIgnored private var providerGenerations: [AgentStorageProvider: Int] = [:]
+    @ObservationIgnored private var pendingProviderRefreshes = Set<AgentStorageProvider>()
     @ObservationIgnored private var cacheLoadTask: Task<Void, Never>?
     init(
         defaults: UserDefaults = .standard,
@@ -121,6 +125,7 @@ final class AgentStorageModel {
         progressByProvider = Dictionary(uniqueKeysWithValues: AgentStorageProvider.allCases.map {
             ($0, AgentStorageScanProgress(phase: .discoveringSources, provider: $0))
         })
+        refreshErrorsByProvider = [:]
         state = .scanning(startedAt: Date())
         scanTask = Task { [weak self] in
             await previousTask?.value
@@ -140,15 +145,18 @@ final class AgentStorageModel {
                 self.snapshotRevision &+= 1
                 self.state = .ready
                 self.scanTask = nil
-                await Self.saveSnapshot(snapshot, to: self.cacheURL)
+                await self.persistSnapshot(snapshot)
+                self.drainPendingProviderRefreshes()
             } catch is CancellationError {
                 guard self.generation == requestedGeneration else { return }
                 self.state = self.snapshot == nil ? .stopped : .stale
                 self.scanTask = nil
+                self.drainPendingProviderRefreshes()
             } catch {
                 guard self.generation == requestedGeneration else { return }
                 self.state = .failed(error.localizedDescription)
                 self.scanTask = nil
+                self.drainPendingProviderRefreshes()
             }
         }
     }
@@ -160,6 +168,7 @@ final class AgentStorageModel {
         let requestedGeneration = providerGenerations[provider, default: 0] + 1
         providerGenerations[provider] = requestedGeneration
         reanalyzingProviders.insert(provider)
+        refreshErrorsByProvider.removeValue(forKey: provider)
         progressByProvider[provider] = AgentStorageScanProgress(
             phase: .discoveringSources,
             provider: provider
@@ -190,17 +199,33 @@ final class AgentStorageModel {
                     provider: provider
                 )
                 self.snapshotRevision &+= 1
+                self.refreshErrorsByProvider.removeValue(forKey: provider)
+                self.state = .ready
                 self.finishProviderAnalysis(provider, generation: requestedGeneration)
                 if let snapshot = self.snapshot {
-                    await Self.saveSnapshot(snapshot, to: self.cacheURL)
+                    await self.persistSnapshot(snapshot)
                 }
             } catch is CancellationError {
                 self.finishProviderAnalysis(provider, generation: requestedGeneration)
             } catch {
                 self.finishProviderAnalysis(provider, generation: requestedGeneration)
+                self.refreshErrorsByProvider[provider] = error.localizedDescription
                 self.state = .failed(error.localizedDescription)
             }
         }
+    }
+
+    func refreshAfterCleanup(providers: Set<AgentStorageProvider>) {
+        for provider in providers {
+            providerScanTasks[provider]?.cancel()
+            providerScanTasks.removeValue(forKey: provider)
+            providerGenerations[provider, default: 0] += 1
+            reanalyzingProviders.remove(provider)
+            progressByProvider.removeValue(forKey: provider)
+            refreshErrorsByProvider.removeValue(forKey: provider)
+        }
+        pendingProviderRefreshes.formUnion(providers)
+        drainPendingProviderRefreshes()
     }
 
     func isAnalyzing(_ provider: AgentStorageProvider) -> Bool {
@@ -210,8 +235,16 @@ final class AgentStorageModel {
     func stop() {
         cancelProviderAnalyses()
         generation += 1
+        let stoppedGeneration = generation
+        let stoppedTask = scanTask
         scanTask?.cancel()
         state = snapshot == nil ? .stopped : .stale
+        Task { [weak self] in
+            await stoppedTask?.value
+            guard let self, self.generation == stoppedGeneration else { return }
+            self.scanTask = nil
+            self.drainPendingProviderRefreshes()
+        }
     }
 
     private func accept(_ candidate: AgentStorageScanProgress, for requestedGeneration: Int) {
@@ -288,11 +321,16 @@ final class AgentStorageModel {
         snapshotRevision &+= 1
         progress = AgentStorageScanProgress(phase: .discoveringSources)
         progressByProvider = [:]
+        refreshErrorsByProvider = [:]
+        pendingProviderRefreshes = []
         state = .idle
         cacheLoadTask?.cancel()
         cacheLoadTask = nil
+        cacheRevision &+= 1
+        let revision = cacheRevision
+        let cacheWriter = snapshotCacheWriter
         let cacheURL = self.cacheURL
-        Task { await Self.removeSnapshot(at: cacheURL) }
+        Task { await cacheWriter.remove(at: cacheURL, revision: revision) }
     }
 
     func prepareForSleep() async {
@@ -315,6 +353,15 @@ final class AgentStorageModel {
         providerScanTasks = [:]
         reanalyzingProviders = []
         providerGenerations = providerGenerations.mapValues { $0 + 1 }
+    }
+
+    private func drainPendingProviderRefreshes() {
+        guard !isScanning, scanTask == nil, !pendingProviderRefreshes.isEmpty else { return }
+        let providers = pendingProviderRefreshes
+        pendingProviderRefreshes = []
+        for provider in providers.sorted(by: { $0.rawValue < $1.rawValue }) {
+            startAnalysis(provider: provider)
+        }
     }
 
     private static func merging(
@@ -382,6 +429,7 @@ final class AgentStorageModel {
     func prepareForTermination() async {
         cancelProviderAnalyses()
         generation += 1
+        pendingProviderRefreshes = []
         cacheLoadTask?.cancel()
         cacheLoadTask = nil
         scanTask?.cancel()
@@ -400,26 +448,13 @@ final class AgentStorageModel {
         return try? JSONDecoder().decode(AgentStorageSnapshot.self, from: data)
     }
 
-    nonisolated private static func saveSnapshot(
-        _ snapshot: AgentStorageSnapshot,
-        to url: URL?
-    ) async {
-        guard let url, let data = try? JSONEncoder().encode(snapshot) else { return }
-        do {
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-            try data.write(to: url, options: .atomic)
-        } catch {
-            return
-        }
-    }
-
-    nonisolated private static func removeSnapshot(at url: URL?) async {
-        guard let url else { return }
-        try? FileManager.default.removeItem(at: url)
+    private func persistSnapshot(_ snapshot: AgentStorageSnapshot) async {
+        cacheRevision &+= 1
+        await snapshotCacheWriter.save(
+            snapshot,
+            to: cacheURL,
+            revision: cacheRevision
+        )
     }
 }
 
