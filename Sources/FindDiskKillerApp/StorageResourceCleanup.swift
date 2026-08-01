@@ -246,6 +246,21 @@ actor StorageResourceCleanupExecutor {
                   !containsCurrentDirectory(path) else {
                 throw StorageCleanupError.protectedRepository
             }
+            let worktreeList = try await run(
+                executable: URL(fileURLWithPath: "/usr/bin/git"),
+                arguments: ["-C", path, "worktree", "list", "--porcelain"]
+            )
+            let linkedWorktrees = worktreeList
+                .split(whereSeparator: \.isNewline)
+                .compactMap { line -> String? in
+                    let value = String(line)
+                    guard value.hasPrefix("worktree ") else { return nil }
+                    return String(value.dropFirst("worktree ".count))
+                }
+                .filter { !samePhysicalPath($0, path) }
+            guard linkedWorktrees.isEmpty else {
+                throw StorageCleanupError.repositoryHasWorktrees
+            }
             var trashedURL: NSURL?
             try fileManager.trashItem(
                 at: URL(fileURLWithPath: path, isDirectory: true),
@@ -450,6 +465,7 @@ actor StorageResourceCleanupExecutor {
 private enum StorageCleanupError: LocalizedError {
     case sourceChanged
     case protectedRepository
+    case repositoryHasWorktrees
     case toolUnavailable(String)
     case commandFailed(String)
 
@@ -459,6 +475,8 @@ private enum StorageCleanupError: LocalizedError {
             L10n.text("资源自分析后已发生变化，请重新分析后再试。")
         case .protectedRepository:
             L10n.text("当前正在使用的代码仓库不能清理。")
+        case .repositoryHasWorktrees:
+            L10n.text("主仓库仍有关联的 Worktree，请先移除这些 Worktree 后再删除主仓库。")
         case .toolUnavailable(let tool):
             L10n.format("未找到 %@ 官方命令行工具。", tool)
         case .commandFailed(let detail):

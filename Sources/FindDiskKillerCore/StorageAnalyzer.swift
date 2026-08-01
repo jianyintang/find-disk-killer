@@ -1182,7 +1182,7 @@ public actor StorageAnalyzer {
         let grouped = Dictionary(grouping: nodes) { node in
             rootsByID[node.id]?.resourceContext?.groupID ?? node.id
         }
-        return grouped.values.compactMap { group in
+        let repositories = grouped.values.compactMap { group -> StorageResourceNode? in
             guard let main = group.first(where: { $0.kind == .repository }) else {
                 return group.first
             }
@@ -1203,17 +1203,69 @@ public actor StorageAnalyzer {
                     worktrees.reduce(UInt64.zero) { $0.addingClamped($1.logicalBytes) }
                 ),
                 entryCount: main.entryCount + worktrees.reduce(0) { $0 + $1.entryCount },
-                risk: .protectedUserData,
+                risk: main.risk,
                 evidence: .fileSystemAllocated,
-                isProtected: true,
-                cleanupTarget: nil,
+                isProtected: main.isProtected,
+                cleanupTarget: main.cleanupTarget,
                 children: main.children + worktrees
             )
         }
-        .sorted { lhs, rhs in
+
+        var parentGroups: [String: [StorageResourceNode]] = [:]
+        var standalone: [StorageResourceNode] = []
+        for node in repositories {
+            guard node.kind == .repository,
+                  let root = rootsByID[node.id],
+                  root.resourceContext?.kind == .repository else {
+                standalone.append(node)
+                continue
+            }
+            let parentPath = URL(fileURLWithPath: root.path)
+                .deletingLastPathComponent()
+                .standardizedFileURL
+                .path
+            parentGroups[parentPath, default: []].append(node)
+        }
+
+        var result = standalone
+        for (parentPath, children) in parentGroups {
+            guard children.count > 1 else {
+                result.append(contentsOf: children)
+                continue
+            }
+            let sortedChildren = children.sorted(by: resourceNodeSort)
+            result.append(StorageResourceNode(
+                id: "workspace.parent.\(stablePathHash(parentPath))",
+                kind: .location,
+                title: URL(fileURLWithPath: parentPath).lastPathComponent,
+                detail: "上级目录 · \(parentPath)",
+                symbol: "folder.fill",
+                allocatedBytes: sortedChildren.reduce(UInt64.zero) {
+                    $0.addingClamped($1.allocatedBytes)
+                },
+                logicalBytes: sortedChildren.reduce(UInt64.zero) {
+                    $0.addingClamped($1.logicalBytes)
+                },
+                entryCount: sortedChildren.reduce(0) { $0 + $1.entryCount },
+                risk: .environmentOrRuntime,
+                evidence: .fileSystemAllocated,
+                isProtected: false,
+                children: sortedChildren
+            ))
+        }
+        return result.sorted { lhs, rhs in
             if lhs.allocatedBytes != rhs.allocatedBytes { return lhs.allocatedBytes > rhs.allocatedBytes }
             return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
         }
+    }
+
+    private nonisolated static func stablePathHash(_ path: String) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in path.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
     }
 
     nonisolated private static func collectMountedVolumes() -> [VolumeInfo] {

@@ -487,6 +487,30 @@ struct StorageAnalyzerTests {
         #expect(workspace.allocatedBytes > 0)
     }
 
+    @Test func workspaceScanGroupsRepositoriesByParentAndKeepsMainRepositoryCleanup() async throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        try fixture.createDirectory("Downloads/code/alpha/.git")
+        try fixture.createDirectory("Downloads/code/beta/.git")
+        try fixture.writeFile("Downloads/code/alpha/Sources/App.swift", byteCount: 8_192)
+        try fixture.writeFile("Downloads/code/beta/Sources/App.swift", byteCount: 4_096)
+
+        let snapshot = try await StorageAnalyzer(configuration: .init(
+            homeDirectory: fixture.home,
+            repositorySearchRoots: [fixture.home]
+        )).scan(sourceID: .workspace)
+        let workspace = try #require(snapshot.result(for: .workspace))
+        let parent = try #require(workspace.resourceTree.first)
+
+        #expect(parent.title == "code")
+        #expect(parent.detail?.contains("code") == true)
+        #expect(parent.children.map(\.title) == ["alpha", "beta"])
+        #expect(parent.children.allSatisfy { node in
+            if case .trashRepository = node.cleanupTarget { return true }
+            return false
+        })
+    }
+
     @Test func automaticRepositoryDiscoveryAttemptsReadableProtectedAndExternalLocationsWithoutAuthorization() throws {
         let fixture = try StorageFixture()
         defer { fixture.remove() }
