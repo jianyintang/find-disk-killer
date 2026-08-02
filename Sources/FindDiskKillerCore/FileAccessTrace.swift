@@ -574,6 +574,15 @@ public struct FileAccessTraceProcessSummary: Identifiable, Equatable, Sendable {
     public var id: String { "\(identity.pid):\(identity.startAbstime)" }
 }
 
+public struct FileAccessTraceEventSummary: Identifiable, Equatable, Sendable {
+    public let id: UInt64
+    public let timestamp: Date
+    public let direction: FileAccessTraceDirection
+    public let requestedBytes: UInt64
+    public let path: String?
+    public let process: FileAccessTraceProcessIdentity?
+}
+
 public struct FileAccessTraceSnapshot: Equatable, Sendable {
     public let coverage: FileAccessTraceCoverage
     public let requestedReadBytes: UInt64?
@@ -585,6 +594,8 @@ public struct FileAccessTraceSnapshot: Equatable, Sendable {
     public let lastEventAt: Date?
     public let files: [FileAccessTraceFileSummary]
     public let processes: [FileAccessTraceProcessSummary]
+    public let recentEvents: [FileAccessTraceEventSummary]
+    public let discardedRecentEventCount: UInt64
 }
 
 public struct FileAccessTraceAggregator: Sendable {
@@ -599,6 +610,7 @@ public struct FileAccessTraceAggregator: Sendable {
     private let maximumRateBuckets: Int
     private let maximumFiles: Int
     private let maximumProcesses: Int
+    private let maximumRecentEvents: Int
     private var totals = Totals()
     private var rateBuckets: [Int64: Totals] = [:]
     private var secondBuckets: [Int64: Totals] = [:]
@@ -606,6 +618,10 @@ public struct FileAccessTraceAggregator: Sendable {
     private var peakWrite: UInt64 = 0
     private var files: [String: Totals] = [:]
     private var processes: [FileAccessTraceProcessIdentity: Totals] = [:]
+    private var recentEvents: [FileAccessTraceEventSummary] = []
+    private var nextRecentEventIndex = 0
+    private var nextEventID: UInt64 = 0
+    private var discardedRecentEventCount: UInt64 = 0
     private var lastEventAt: Date?
     private var droppedEventCount: UInt64 = 0
     private var formatIsUnsupported = false
@@ -615,13 +631,15 @@ public struct FileAccessTraceAggregator: Sendable {
         startedAt: Date,
         maximumRateBuckets: Int = 3_604,
         maximumFiles: Int = 4_096,
-        maximumProcesses: Int = 1_024
+        maximumProcesses: Int = 1_024,
+        maximumRecentEvents: Int = 240
     ) {
         self.target = target
         self.startedAt = startedAt
         self.maximumRateBuckets = max(20, maximumRateBuckets)
         self.maximumFiles = max(1, maximumFiles)
         self.maximumProcesses = max(1, maximumProcesses)
+        self.maximumRecentEvents = max(1, maximumRecentEvents)
     }
 
     public mutating func ingest(_ event: FileAccessTraceEvent) {
@@ -707,6 +725,7 @@ public struct FileAccessTraceAggregator: Sendable {
         if hasCoverageGap {
             markDroppedEvents()
         }
+        retainRecentEvent(event)
         lastEventAt = max(lastEventAt ?? event.timestamp, event.timestamp)
     }
 
@@ -730,7 +749,9 @@ public struct FileAccessTraceAggregator: Sendable {
                 peakWriteBytesPerSecond: nil,
                 lastEventAt: lastEventAt,
                 files: [],
-                processes: []
+                processes: [],
+                recentEvents: [],
+                discardedRecentEventCount: discardedRecentEventCount
             )
         }
 
@@ -783,8 +804,37 @@ public struct FileAccessTraceAggregator: Sendable {
             }.sorted {
                 ($0.requestedWriteBytes, $0.requestedReadBytes, $0.id)
                     > ($1.requestedWriteBytes, $1.requestedReadBytes, $1.id)
-            }
+            },
+            recentEvents: orderedRecentEvents,
+            discardedRecentEventCount: discardedRecentEventCount
         )
+    }
+
+    private var orderedRecentEvents: [FileAccessTraceEventSummary] {
+        guard recentEvents.count == maximumRecentEvents, nextRecentEventIndex > 0 else {
+            return recentEvents
+        }
+        return Array(recentEvents[nextRecentEventIndex...]
+            + recentEvents[..<nextRecentEventIndex])
+    }
+
+    private mutating func retainRecentEvent(_ event: FileAccessTraceEvent) {
+        let summary = FileAccessTraceEventSummary(
+            id: nextEventID,
+            timestamp: event.timestamp,
+            direction: event.direction,
+            requestedBytes: event.requestedBytes,
+            path: event.path,
+            process: event.process
+        )
+        nextEventID = nextEventID == UInt64.max ? 0 : nextEventID + 1
+        if recentEvents.count < maximumRecentEvents {
+            recentEvents.append(summary)
+            return
+        }
+        recentEvents[nextRecentEventIndex] = summary
+        nextRecentEventIndex = (nextRecentEventIndex + 1) % maximumRecentEvents
+        discardedRecentEventCount = adding(discardedRecentEventCount, 1) ?? UInt64.max
     }
 
     private mutating func trimRateBuckets() {

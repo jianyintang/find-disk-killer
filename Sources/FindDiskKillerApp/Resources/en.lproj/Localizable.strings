@@ -45,6 +45,8 @@
 "采集已停止" = "Monitoring stopped";
 "采集需要处理" = "Monitoring needs attention";
 "应用资源行为正常" = "App resource activity is normal";
+"这台 Mac 运行正常" = "Your Mac is operating normally";
+"磁盘活动" = "Disk Activity";
 "%@ 当前写入最高 · %@" = "%@ is writing the most · %@";
 "%@ 当前最活跃 · CPU %@" = "%@ is most active · CPU %@";
 "后台持续观察应用的磁盘、CPU 与网络活动" = "Continuously monitoring app disk, CPU, and network activity";
@@ -927,3 +929,10 @@
 "Node.js 运行时解压失败：%@" = "Node.js runtime extraction failed: %@";
 "归档中缺少 node 可执行文件" = "The archive is missing the node executable";
 "tar 退出码非零" = "tar exited with a non-zero status";
+"首次观察" = "First Observed";
+"最后活动" = "Last Activity";
+"最近事件" = "Recent Events";
+"已丢弃 %llu 条较早事件" = "%llu older events discarded";
+"累计读写量不会受事件列表淘汰影响" = "Cumulative read and write totals are unaffected when older events are discarded.";
+"事件" = "Event";
+"字节" = "Bytes";

@@ -2,6 +2,39 @@ import Testing
 import FindDiskKillerCore
 @testable import FindDiskKillerApp
 
+@Test func overviewDiskLayoutFitsOneInternalVolumeWithoutAnEmptyGap() {
+    let layout = OverviewDiskLayout(volumeCount: 1)
+
+    #expect(layout.rowHeight == OverviewDiskLayout.singleVolumeRowHeight)
+    #expect(layout.volumeViewportHeight == OverviewDiskLayout.singleVolumeRowHeight)
+    #expect(abs(layout.contentHeight
+        - OverviewDiskLayout.singleVolumeRowHeight
+        - OverviewDiskLayout.summaryHeight) < 0.001)
+    #expect(!layout.isScrollable)
+}
+
+@Test func overviewDiskLayoutGrowsForSeveralExternalVolumes() {
+    let layout = OverviewDiskLayout(volumeCount: 4)
+
+    #expect(layout.visibleRowCount == 4)
+    #expect(abs(layout.volumeViewportHeight
+        - 4 * OverviewDiskLayout.standardVolumeRowHeight) < 0.001)
+    #expect(abs(layout.contentHeight
+        - layout.volumeViewportHeight
+        - OverviewDiskLayout.summaryHeight) < 0.001)
+    #expect(!layout.isScrollable)
+}
+
+@Test func overviewDiskLayoutCapsManyVolumesAndEnablesLocalScrolling() {
+    let fiveVolumes = OverviewDiskLayout(volumeCount: 5)
+    let eightVolumes = OverviewDiskLayout(volumeCount: 8)
+
+    #expect(eightVolumes.visibleRowCount == OverviewDiskLayout.maximumVisibleVolumeRows)
+    #expect(eightVolumes.volumeViewportHeight == fiveVolumes.volumeViewportHeight)
+    #expect(eightVolumes.contentHeight == fiveVolumes.contentHeight)
+    #expect(eightVolumes.isScrollable)
+}
+
 @Test func processTableKeepsBaseWidthsWhenTheContainerIsNarrow() {
     let base = ProcessColumnWidths.defaults
 

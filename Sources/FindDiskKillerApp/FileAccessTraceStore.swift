@@ -248,6 +248,8 @@ final class FileAccessTraceStore {
     private(set) var coverage: FileAccessTraceCoverage = .complete
     private(set) var files: [FileAccessTraceFileSummary] = []
     private(set) var processes: [FileAccessTraceProcessSummary] = []
+    private(set) var recentEvents: [FileAccessTraceEventSummary] = []
+    private(set) var discardedRecentEventCount: UInt64 = 0
     private(set) var ratePoints: [FileAccessTraceRatePoint] = []
     private(set) var startedAt: Date?
     private(set) var elapsed: TimeInterval = 0
@@ -591,6 +593,8 @@ final class FileAccessTraceStore {
         if now.timeIntervalSince(lastListUpdate) >= 1 {
             files = snapshot.files
             processes = snapshot.processes
+            recentEvents = snapshot.recentEvents
+            discardedRecentEventCount = snapshot.discardedRecentEventCount
             lastListUpdate = now
         }
         if now.timeIntervalSince(lastChartPoint) >= 1,
@@ -699,6 +703,8 @@ final class FileAccessTraceStore {
         coverage = .complete
         files = []
         processes = []
+        recentEvents = []
+        discardedRecentEventCount = 0
         ratePoints = []
         lastEventAt = nil
         lastListUpdate = .distantPast
