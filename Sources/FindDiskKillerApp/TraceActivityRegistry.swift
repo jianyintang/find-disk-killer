@@ -16,6 +16,11 @@ enum UpdateInterlockPolicy {
     }
 }
 
+enum TraceStartBlockReason: Equatable, Sendable {
+    case anotherTrace
+    case updateInstallation
+}
+
 struct TraceActivityLease: Hashable, Sendable {
     fileprivate let id: UUID
 }
@@ -32,8 +37,17 @@ final class TraceActivityRegistry {
     private var updateLease: UpdateActivityLease?
     private var helperStateNeedsReconciliation = false
 
+    var traceStartBlockReason: TraceStartBlockReason? {
+        if updateLease != nil { return .updateInstallation }
+        if traceLease != nil { return .anotherTrace }
+        return nil
+    }
+
     var canStartTrace: Bool {
-        updateLease == nil && traceLease == nil && status == .idle
+        // The helper is authoritative for cross-process activity. A stale launch-time
+        // reconciliation hint must not prevent a trace attempt from repairing or
+        // reconnecting to the helper; local trace and update leases remain exclusive.
+        traceStartBlockReason == nil
     }
 
     // Reading the signed appcast is non-destructive and may run alongside a trace.

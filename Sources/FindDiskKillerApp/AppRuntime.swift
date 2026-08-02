@@ -204,12 +204,7 @@ final class AppRuntime {
             // Replacing an already-registered old helper also terminates any legacy
             // child process, restoring a trustworthy idle/busy signal for updates.
             try await helper.repairService()
-            let status = try await helper.activityStatus()
-            if status == .ready {
-                traceActivityRegistry.markHelperReadyWithoutLocalLease()
-            } else {
-                traceActivityRegistry.markHelperBusyWithoutLocalLease()
-            }
+            traceActivityRegistry.markHelperReadyWithoutLocalLease()
         } catch {
             traceActivityRegistry.markHelperBusyWithoutLocalLease()
         }

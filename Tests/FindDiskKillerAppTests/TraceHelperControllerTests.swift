@@ -26,7 +26,9 @@ private final class FakeTraceHelperService: TraceHelperServiceManaging {
     var registrationStatusDelayReads = 0
     var registerFailures = 0
     var registerError: Error?
+    var legacyCleanupFailures = 0
     var unregisterFailures = 0
+    private(set) var legacyCleanupCount = 0
     private(set) var registerCount = 0
     private(set) var unregisterCount = 0
     private(set) var openSettingsCount = 0
@@ -34,6 +36,14 @@ private final class FakeTraceHelperService: TraceHelperServiceManaging {
 
     init(status: TraceHelperRegistrationStatus) {
         storedStatus = status
+    }
+
+    func cleanupLegacyServices() async throws {
+        legacyCleanupCount += 1
+        if legacyCleanupFailures > 0 {
+            legacyCleanupFailures -= 1
+            throw FakeFailure.expected
+        }
     }
 
     func register() throws {
@@ -202,6 +212,22 @@ func freshInstallRegistersAndBecomesHealthy() async throws {
 }
 
 @Test @MainActor
+func freshInstallRetriesLegacyCleanupBeforeRegisteringCurrentHelper() async throws {
+    let service = FakeTraceHelperService(status: .notRegistered)
+    service.legacyCleanupFailures = 1
+    let controller = makeController(
+        service: service,
+        transport: FakeTraceHelperTransport([.ready])
+    )
+
+    try await controller.prepareForTracing(recoveryMode: .automatic)
+
+    #expect(service.legacyCleanupCount == 2)
+    #expect(service.registerCount == 1)
+    #expect(controller.state == .ready)
+}
+
+@Test @MainActor
 func freshRegistrationWaitsForBootstrapWithoutReplacingTheService() async throws {
     let service = FakeTraceHelperService(status: .notRegistered)
     let transport = FakeTraceHelperTransport([.unavailable, .ready])
@@ -268,16 +294,35 @@ func staleUpgradeRegistrationRefreshesInPlaceAndContinues() async throws {
 }
 
 @Test @MainActor
-func protocolMismatchRefreshesTheRegisteredHelperInPlace() async throws {
+func protocolMismatchWaitsForTheOldEndpointBeforeRegisteringTheNewHelper() async throws {
     let service = FakeTraceHelperService(status: .enabled)
-    let transport = FakeTraceHelperTransport([.protocolMismatch, .ready])
+    let transport = FakeTraceHelperTransport([
+        .protocolMismatch,
+        .protocolMismatch,
+        .unavailable,
+        .ready
+    ])
     let controller = makeController(service: service, transport: transport)
 
     try await controller.prepareForTracing(recoveryMode: .automatic)
 
-    #expect(service.unregisterCount == 0)
+    #expect(service.unregisterCount == 1)
     #expect(service.registerCount == 1)
+    #expect(transport.invalidateCount >= 3)
     #expect(controller.state == .ready)
+}
+
+@Test @MainActor
+func failedActivityProbeInvalidatesItsConnectionBeforeRetry() async throws {
+    let service = FakeTraceHelperService(status: .enabled)
+    let transport = FakeTraceHelperTransport([.unavailable, .ready])
+    let controller = makeController(service: service, transport: transport)
+
+    await #expect(throws: TraceHelperClientError.unavailable) {
+        try await controller.activityStatus()
+    }
+    #expect(transport.invalidateCount == 1)
+    #expect(try await controller.activityStatus() == .ready)
 }
 
 @Test @MainActor
@@ -326,7 +371,7 @@ func automaticRepairRunsOnlyOnceForTheCurrentBuild() async {
 func userInitiatedRepairFallsBackToReplacementAfterInPlaceRefreshFails() async throws {
     let service = FakeTraceHelperService(status: .enabled)
     let transport = FakeTraceHelperTransport([])
-    service.onUnregister = { transport.append([.ready]) }
+    service.onUnregister = { transport.append([.unavailable, .ready]) }
     let controller = makeController(service: service, transport: transport)
 
     try await controller.prepareForTracing(recoveryMode: .userInitiated)
