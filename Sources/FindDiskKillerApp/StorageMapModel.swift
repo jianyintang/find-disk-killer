@@ -46,6 +46,7 @@ final class StorageMapModel {
     @ObservationIgnored private let discoveryPresentationInterval: Duration
     @ObservationIgnored private let snapshotCacheWriter = SnapshotCacheWriter<StorageAnalysisSnapshot>()
     @ObservationIgnored private var cacheRevision: UInt64 = 0
+    @ObservationIgnored private var preparationTask: Task<Void, Never>?
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     @ObservationIgnored private var sourceScanTasks: [StorageSourceID: Task<Void, Never>] = [:]
     @ObservationIgnored private var sourceGenerations: [StorageSourceID: UInt64] = [:]
@@ -236,11 +237,28 @@ final class StorageMapModel {
     }
 
     func prepare() async {
+        if let preparationTask {
+            await preparationTask.value
+            return
+        }
+        if phase == .detecting {
+            // A detecting phase without its owning task is incomplete and must be recoverable.
+            phase = .idle
+        }
         guard phase == .idle else { return }
         phase = .detecting
         errorMessage = nil
 
         let requestedGeneration = generation
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performPreparation(generation: requestedGeneration)
+        }
+        preparationTask = task
+        await task.value
+    }
+
+    private func performPreparation(generation requestedGeneration: UInt64) async {
         async let cached = Self.loadSnapshot(from: cacheURL)
         let newCandidates: [StorageSourceCandidate]
         if let progressiveDetectOperation {
@@ -252,13 +270,22 @@ final class StorageMapModel {
             newCandidates = await detectOperation()
         }
         let cachedSnapshot = await cached
-        guard !Task.isCancelled, requestedGeneration == generation else { return }
+        guard !Task.isCancelled, requestedGeneration == generation else {
+            finishPreparation(generation: requestedGeneration)
+            return
+        }
 
         candidates = newCandidates
         if snapshot == nil {
             snapshot = cachedSnapshot
         }
         phase = .ready
+        finishPreparation(generation: requestedGeneration)
+    }
+
+    private func finishPreparation(generation requestedGeneration: UInt64) {
+        guard requestedGeneration == generation else { return }
+        preparationTask = nil
     }
 
     private func acceptDetectedCandidate(
@@ -478,6 +505,8 @@ final class StorageMapModel {
 
     func retryDetection() {
         generation &+= 1
+        preparationTask?.cancel()
+        preparationTask = nil
         scanTask?.cancel()
         scanTask = nil
         phase = .idle
@@ -514,6 +543,8 @@ final class StorageMapModel {
     private func agentDataLocationsChanged() {
         cancelSourceAnalyses()
         generation &+= 1
+        preparationTask?.cancel()
+        preparationTask = nil
         scanTask?.cancel()
         scanTask = nil
         snapshot = nil
@@ -541,12 +572,16 @@ final class StorageMapModel {
     func prepareForTermination() {
         cancelSourceAnalyses()
         generation &+= 1
+        preparationTask?.cancel()
+        preparationTask = nil
         scanTask?.cancel()
         scanTask = nil
         progress = nil
         progressBySource = [:]
         pendingSourceRefreshIDs = []
-        if phase == .scanning || phase == .stopping {
+        if phase == .detecting {
+            phase = .idle
+        } else if phase == .scanning || phase == .stopping {
             phase = .ready
         }
     }

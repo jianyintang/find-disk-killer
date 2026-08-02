@@ -53,6 +53,26 @@ private enum StorageMapRoute: Equatable {
     case agentAnalysis(AgentStorageProvider)
 }
 
+enum StorageMapOverviewPresentation: Equatable {
+    case discovery
+    case noSources
+    case firstRun
+    case analysis
+
+    static func resolve(
+        isDetecting: Bool,
+        isPendingAutomaticAnalysis: Bool,
+        hasCandidates: Bool,
+        hasUnifiedResults: Bool,
+        isFullAnalysisRunning: Bool
+    ) -> Self {
+        if isDetecting || isPendingAutomaticAnalysis { return .discovery }
+        if !hasCandidates { return .noSources }
+        if !hasUnifiedResults, !isFullAnalysisRunning { return .firstRun }
+        return .analysis
+    }
+}
+
 private struct StorageMapSourcePresentation: Identifiable {
     let candidate: StorageSourceCandidate
     let result: StorageSourceResult?
@@ -75,6 +95,7 @@ struct StorageMapView: View {
     @State private var displayedSourceOrder: [StorageSourceID] = []
     @State private var overviewCleanupIndex = StorageSafeCleanupIndex.empty
     @State private var scopeUpdateTask: Task<Void, Never>?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -91,6 +112,7 @@ struct StorageMapView: View {
         }
         .task {
             await model.prepare()
+            guard !Task.isCancelled else { return }
             synchronizeDisplayedOrder(animated: false)
             if shouldStartInitialAnalysis {
                 startFullAnalysis()
@@ -139,18 +161,22 @@ struct StorageMapView: View {
 
     private var overview: some View {
         GeometryReader { proxy in
-            Group {
-                if model.phase == .detecting {
+            ZStack {
+                switch overviewPresentation {
+                case .discovery:
                     detectorLoading
-                } else if model.candidates.isEmpty {
+                        .transition(.opacity)
+                case .noSources:
                     noSources
-                } else if !hasUnifiedResults, !isFullAnalysisRunning {
+                        .transition(.opacity)
+                case .firstRun:
                     StorageMapFirstRunView(
                         candidates: model.candidates,
                         errorMessage: model.errorMessage,
                         startAnalysis: startFullAnalysis
                     )
-                } else {
+                    .transition(.opacity)
+                case .analysis:
                     ScrollView {
                         LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
                             StorageMapSummaryBand(
@@ -177,12 +203,27 @@ struct StorageMapView: View {
                     .scrollIndicators(.visible)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
+                    .transition(.opacity)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
             .background(Color(nsColor: .windowBackgroundColor))
+            .animation(
+                reduceMotion ? nil : .easeInOut(duration: 0.24),
+                value: overviewPresentation
+            )
         }
+    }
+
+    private var overviewPresentation: StorageMapOverviewPresentation {
+        StorageMapOverviewPresentation.resolve(
+            isDetecting: model.phase == .detecting,
+            isPendingAutomaticAnalysis: shouldStartInitialAnalysis,
+            hasCandidates: !model.candidates.isEmpty,
+            hasUnifiedResults: hasUnifiedResults,
+            isFullAnalysisRunning: isFullAnalysisRunning
+        )
     }
 
     @ViewBuilder

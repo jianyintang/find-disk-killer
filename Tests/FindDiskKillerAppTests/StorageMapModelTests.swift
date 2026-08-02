@@ -46,6 +46,29 @@ import Testing
 }
 
 @MainActor
+@Test func storageMapDiscoverySurvivesLeavingAndImmediatelyReentering() async throws {
+    let probe = StorageMapDetectionProbe()
+    let model = StorageMapModel(
+        cacheURL: nil,
+        detect: { await probe.detect() },
+        scan: { _ in storageMapSnapshot() }
+    )
+
+    let firstEntry = Task { await model.prepare() }
+    try await waitForStorageMapTest { await probe.hasStarted }
+    firstEntry.cancel()
+
+    let secondEntry = Task { await model.prepare() }
+    await probe.finish(with: [storageMapCandidate()])
+    await secondEntry.value
+    await firstEntry.value
+
+    #expect(model.phase == .ready)
+    #expect(model.candidates.map(\.id) == [.npm])
+    #expect(await probe.detectionCount == 1)
+}
+
+@MainActor
 @Test func storageMapPacesConfirmedCandidatesForVisibleInsertions() async throws {
     let npm = storageMapCandidate()
     let chrome = storageMapChromeCandidate()
@@ -988,6 +1011,30 @@ import Testing
     #expect(taskBody.contains("shouldStartInitialAnalysis"))
     #expect(taskBody.contains("startFullAnalysis()"))
     #expect(source.contains("model.phase == .ready"))
+}
+
+@Test func storageMapKeepsDiscoveryVisibleUntilAutomaticAnalysisStarts() {
+    #expect(StorageMapOverviewPresentation.resolve(
+        isDetecting: true,
+        isPendingAutomaticAnalysis: false,
+        hasCandidates: true,
+        hasUnifiedResults: false,
+        isFullAnalysisRunning: false
+    ) == .discovery)
+    #expect(StorageMapOverviewPresentation.resolve(
+        isDetecting: false,
+        isPendingAutomaticAnalysis: true,
+        hasCandidates: true,
+        hasUnifiedResults: false,
+        isFullAnalysisRunning: false
+    ) == .discovery)
+    #expect(StorageMapOverviewPresentation.resolve(
+        isDetecting: false,
+        isPendingAutomaticAnalysis: false,
+        hasCandidates: true,
+        hasUnifiedResults: false,
+        isFullAnalysisRunning: true
+    ) == .analysis)
 }
 
 @Test func storageMapResultAccessDependsOnlyOnTheSelectedSource() {
@@ -1934,6 +1981,25 @@ private actor StorageMapScanProbe {
         progress(.init(phase: .measuring, sourceID: .npm, processedEntryCount: 1))
         try await Task.sleep(for: .seconds(60))
         return storageMapSnapshot()
+    }
+}
+
+private actor StorageMapDetectionProbe {
+    private var continuation: CheckedContinuation<[StorageSourceCandidate], Never>?
+    private(set) var detectionCount = 0
+
+    var hasStarted: Bool { continuation != nil }
+
+    func detect() async -> [StorageSourceCandidate] {
+        detectionCount += 1
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func finish(with candidates: [StorageSourceCandidate]) {
+        continuation?.resume(returning: candidates)
+        continuation = nil
     }
 }
 
