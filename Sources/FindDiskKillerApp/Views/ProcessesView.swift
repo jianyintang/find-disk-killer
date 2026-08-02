@@ -125,8 +125,10 @@ struct ProcessesView: View {
     private func presentProcess(_ process: ProcessActivity) {
         selection = process.id
         processHoverCoordinator.clearForSelection()
-        processDetailWindows.present(ProcessDetailPresentation(process: process, updatesLive: true))
+        let presentation = ProcessDetailPresentation(process: process, updatesLive: true)
+        processDetailWindows.present(presentation)
         openWindow(id: "process-detail", value: process.id)
+        processDetailWindows.activate(presentation)
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(220))
             if selection == process.id { selection = nil }

@@ -298,13 +298,21 @@ struct FileAccessTraceView: View {
     }
 
     private var traceTables: some View {
-        HSplitView {
-            TraceFileTable(items: store.files)
-                .frame(minWidth: 440, idealWidth: 590, minHeight: 320)
-            TraceProcessTable(items: store.processes)
-                .frame(minWidth: 300, idealWidth: 360, minHeight: 320)
+        VStack(alignment: .leading, spacing: 18) {
+            TraceEventTable(
+                items: store.recentEvents,
+                discardedCount: store.discardedRecentEventCount
+            )
+            .frame(height: 320)
+
+            HSplitView {
+                TraceFileTable(items: store.files)
+                    .frame(minWidth: 440, idealWidth: 590, minHeight: 320)
+                TraceProcessTable(items: store.processes)
+                    .frame(minWidth: 300, idealWidth: 360, minHeight: 320)
+            }
+            .frame(height: 360)
         }
-        .frame(height: 360)
     }
 
     private var semanticsNote: some View {
@@ -724,6 +732,155 @@ private struct TraceFileRow: Identifiable, Equatable {
         read = item.requestedReadBytes
         write = item.requestedWriteBytes
         total = read.addingReportingOverflow(write).overflow ? UInt64.max : read + write
+    }
+}
+
+private enum TraceEventFilter: String, CaseIterable, Identifiable {
+    case all
+    case reads
+    case writes
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .all: L10n.text("全部")
+        case .reads: L10n.text("读取")
+        case .writes: L10n.text("写入")
+        }
+    }
+}
+
+private struct TraceEventRow: Identifiable, Equatable {
+    let id: UInt64
+    let timestamp: Date
+    let direction: FileAccessTraceDirection
+    let requestedBytes: UInt64
+    let name: String
+    let path: String?
+    let processName: String?
+
+    init(_ event: FileAccessTraceEventSummary) {
+        id = event.id
+        timestamp = event.timestamp
+        direction = event.direction
+        requestedBytes = event.requestedBytes
+        path = event.path.map(privateTracePath)
+        processName = event.process?.displayName
+        if let path = event.path {
+            let lastComponent = URL(fileURLWithPath: path).lastPathComponent
+            name = lastComponent.isEmpty ? path : lastComponent
+        } else {
+            name = L10n.text("不可用")
+        }
+    }
+}
+
+private struct TraceEventTable: View {
+    let items: [FileAccessTraceEventSummary]
+    let discardedCount: UInt64
+    @State private var filter: TraceEventFilter = .all
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "list.bullet.rectangle")
+                    .foregroundStyle(.secondary)
+                Text(L10n.text("最近事件"))
+                    .font(.headline)
+                Text(filteredRows.count.formatted())
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                if discardedCount > 0 {
+                    Label(
+                        L10n.format("已丢弃 %llu 条较早事件", discardedCount),
+                        systemImage: "clock.arrow.circlepath"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help(L10n.text("累计读写量不会受事件列表淘汰影响"))
+                }
+                Spacer()
+                Picker(L10n.text("文件活动"), selection: $filter) {
+                    ForEach(TraceEventFilter.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 220)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 44)
+
+            Divider()
+
+            Table(filteredRows) {
+                TableColumn(L10n.text("时间")) { row in
+                    Text(row.timestamp, format: .dateTime.hour().minute().second().secondFraction(.fractional(3)))
+                        .font(.caption.monospacedDigit())
+                }
+                .width(min: 88, ideal: 102)
+                TableColumn(L10n.text("事件")) { row in
+                    Label(
+                        L10n.text(row.direction == .read ? "读取" : "写入"),
+                        systemImage: row.direction == .read ? "arrow.down" : "arrow.up"
+                    )
+                    .foregroundStyle(row.direction == .read ? Color.teal : Color.orange)
+                }
+                .width(min: 74, ideal: 88)
+                TableColumn(L10n.text("文件")) { row in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.name).lineLimit(1)
+                        if let path = row.path {
+                            Text(path)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                    .help(row.path ?? row.name)
+                }
+                .width(min: 210, ideal: 340)
+                TableColumn(L10n.text("应用或进程")) { row in
+                    Text(row.processName ?? L10n.text("不可用"))
+                        .lineLimit(1)
+                }
+                .width(min: 110, ideal: 150)
+                TableColumn(L10n.text("字节")) { row in
+                    Text(ByteRateFormatter.bytes(row.requestedBytes))
+                        .monospacedDigit()
+                }
+                .width(min: 74, ideal: 88)
+            }
+            .overlay {
+                if filteredRows.isEmpty {
+                    ContentUnavailableView(
+                        L10n.text("当前没有观察到读写请求"),
+                        systemImage: "waveform.path.ecg"
+                    )
+                    .controlSize(.small)
+                }
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(Color.secondary.opacity(0.16), lineWidth: 0.5)
+        }
+    }
+
+    private var filteredRows: [TraceEventRow] {
+        items.reversed().compactMap { event in
+            switch filter {
+            case .all:
+                return TraceEventRow(event)
+            case .reads:
+                return event.direction == .read ? TraceEventRow(event) : nil
+            case .writes:
+                return event.direction == .write ? TraceEventRow(event) : nil
+            }
+        }
     }
 }
 

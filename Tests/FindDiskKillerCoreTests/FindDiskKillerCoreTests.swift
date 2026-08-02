@@ -697,7 +697,8 @@ private func volumeTraceFixtureDate(hour: Int, minute: Int, second: Int) throws 
         startedAt: start,
         maximumRateBuckets: 20,
         maximumFiles: 8,
-        maximumProcesses: 4
+        maximumProcesses: 4,
+        maximumRecentEvents: 240
     )
     for index in 0..<20_000 {
         aggregator.ingest(traceEvent(
@@ -718,6 +719,10 @@ private func volumeTraceFixtureDate(hour: Int, minute: Int, second: Int) throws 
     #expect(snapshot.files.count == 8)
     #expect(snapshot.processes.count == 4)
     #expect(snapshot.coverage == .partial(droppedEventCount: 19_996))
+    #expect(snapshot.recentEvents.count == 240)
+    #expect(snapshot.discardedRecentEventCount == 19_760)
+    #expect(snapshot.recentEvents.first?.path == "/work/file-19760")
+    #expect(snapshot.recentEvents.last?.path == "/work/file-19999")
 }
 
 @MainActor

@@ -45,6 +45,8 @@
 "采集已停止" = "Recopilación detenida";
 "采集需要处理" = "La recopilación requiere atención";
 "应用资源行为正常" = "La actividad de recursos es normal";
+"这台 Mac 运行正常" = "Este Mac funciona con normalidad";
+"磁盘活动" = "Actividad del disco";
 "%@ 当前写入最高 · %@" = "%@ tiene la mayor escritura actual · %@";
 "%@ 当前最活跃 · CPU %@" = "%@ es la aplicación más activa · CPU %@";
 "后台持续观察应用的磁盘、CPU 与网络活动" = "Supervisando en segundo plano la actividad de disco, CPU y red";
@@ -929,3 +931,10 @@
 "Node.js 运行时解压失败：%@" = "Error al extraer el entorno de Node.js: %@";
 "归档中缺少 node 可执行文件" = "El archivo no contiene el ejecutable node";
 "tar 退出码非零" = "tar terminó con un código de salida distinto de cero";
+"首次观察" = "Primera observacion";
+"最后活动" = "Ultima actividad";
+"最近事件" = "Eventos recientes";
+"已丢弃 %llu 条较早事件" = "Se descartaron %llu eventos anteriores";
+"累计读写量不会受事件列表淘汰影响" = "Los totales acumulados de lectura y escritura no cambian al descartar eventos anteriores.";
+"事件" = "Evento";
+"字节" = "Bytes";

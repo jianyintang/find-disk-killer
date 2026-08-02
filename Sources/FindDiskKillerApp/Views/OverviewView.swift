@@ -14,9 +14,12 @@ struct ProcessDetailPresentation: Identifiable {
 @Observable
 final class ProcessDetailWindowCoordinator {
     private var presentations: [ProcessActivity.ID: ProcessDetailPresentation] = [:]
+    @ObservationIgnored private var activationTask: Task<Void, Never>?
+    @ObservationIgnored private var requestedProcessID: ProcessActivity.ID?
 
     func present(_ presentation: ProcessDetailPresentation) {
         presentations[presentation.id] = presentation
+        requestedProcessID = presentation.id
     }
 
     func presentation(for processID: ProcessActivity.ID) -> ProcessDetailPresentation? {
@@ -25,6 +28,50 @@ final class ProcessDetailWindowCoordinator {
 
     func remove(_ processID: ProcessActivity.ID) {
         presentations.removeValue(forKey: processID)
+    }
+
+    func activate(_ presentation: ProcessDetailPresentation) {
+        requestedProcessID = presentation.id
+        activationTask?.cancel()
+        activationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for delay in [0, 45, 110, 220] {
+                if delay > 0 {
+                    try? await Task.sleep(for: .milliseconds(delay))
+                } else {
+                    await Task.yield()
+                }
+                guard !Task.isCancelled, requestedProcessID == presentation.id else { return }
+                promoteWindow(for: presentation)
+            }
+        }
+    }
+
+    func register(_ window: NSWindow, for processID: ProcessActivity.ID) {
+        window.identifier = Self.windowIdentifier(for: processID)
+        guard requestedProcessID == processID,
+              let presentation = presentations[processID]
+        else { return }
+        promoteWindow(for: presentation)
+    }
+
+    private func promoteWindow(for presentation: ProcessDetailPresentation) {
+        let identifier = Self.windowIdentifier(for: presentation.id)
+        let window = NSApp.windows.first { $0.identifier == identifier }
+            ?? NSApp.windows.first {
+                $0.identifier?.rawValue != "main"
+                    && $0.title == presentation.process.localizedDisplayName
+            }
+        guard let window else { return }
+        window.level = .normal
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private static func windowIdentifier(
+        for processID: ProcessActivity.ID
+    ) -> NSUserInterfaceItemIdentifier {
+        NSUserInterfaceItemIdentifier("process-detail-\(processID)")
     }
 }
 
@@ -35,6 +82,37 @@ private enum OverviewMetric: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
     var title: String { L10n.text(rawValue) }
+}
+
+struct OverviewDiskLayout: Equatable {
+    static let maximumVisibleVolumeRows = 5
+    static let standardVolumeRowHeight: CGFloat = 40
+    static let singleVolumeRowHeight: CGFloat = 68
+    static let summaryHeight: CGFloat = 108
+
+    let volumeCount: Int
+
+    var visibleRowCount: Int {
+        min(max(volumeCount, 1), Self.maximumVisibleVolumeRows)
+    }
+
+    var rowHeight: CGFloat {
+        volumeCount == 1 ? Self.singleVolumeRowHeight : Self.standardVolumeRowHeight
+    }
+
+    var volumeViewportHeight: CGFloat {
+        volumeCount == 1
+            ? Self.singleVolumeRowHeight
+            : CGFloat(visibleRowCount) * Self.standardVolumeRowHeight
+    }
+
+    var contentHeight: CGFloat {
+        volumeViewportHeight + Self.summaryHeight
+    }
+
+    var isScrollable: Bool {
+        volumeCount > Self.maximumVisibleVolumeRows
+    }
 }
 
 struct OverviewView: View {
@@ -50,36 +128,49 @@ struct OverviewView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 24) {
+            LazyVStack(alignment: .leading, spacing: 18) {
                 overviewHeader
                 metricStrip
-                volumeIOSection
-                trendSection
-                Divider()
+                diskActivitySection
                 applicationSection
             }
             .padding(.horizontal, 24)
-            .padding(.top, 20)
+            .padding(.top, 22)
             .padding(.bottom, 28)
         }
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private var overviewHeader: some View {
-        HStack(alignment: .center, spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(alignment: .center, spacing: 16) {
+            Image(systemName: healthSymbol)
+                .font(.system(size: 28, weight: .medium))
+                .foregroundStyle(healthColor)
+                .frame(width: 54, height: 54)
+                .background(healthColor.opacity(0.10), in: Circle())
+                .overlay {
+                    Circle()
+                        .stroke(healthColor.opacity(0.78), lineWidth: 2.5)
+                }
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 4) {
                 Text(headerTitle)
-                    .font(.title2.weight(.semibold))
+                    .font(.title2.weight(.bold))
                 Text(headerSubtitle)
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if store.selectedCoverage < 0.999 {
+                    EvidenceLabel(
+                        text: L10n.format("已观测 %d%%", Int(store.selectedCoverage * 100)),
+                        symbol: "clock.badge.exclamationmark"
+                    )
+                }
             }
+
             Spacer()
-            if store.selectedCoverage < 0.999 {
-                EvidenceLabel(
-                    text: L10n.format("已观测 %d%%", Int(store.selectedCoverage * 100)),
-                    symbol: "clock.badge.exclamationmark"
-                )
-            }
+
             Picker(L10n.text("时间范围"), selection: Bindable(store).selectedRange) {
                 ForEach(SampleRange.allCases) { range in
                     Text(range.localizedTitle).tag(range)
@@ -96,62 +187,86 @@ struct OverviewView: View {
             .buttonStyle(AppIconButtonStyle(size: 32))
             .help(L10n.text(store.isFollowingLive ? "暂停实时跟随" : "返回实时"))
         }
+        .frame(minHeight: 74)
     }
 
     private var metricStrip: some View {
-        HStack(spacing: 14) {
-            cpuMetric
-            Divider().frame(height: 42)
-            diskMetric
-            Divider().frame(height: 42)
-            networkMetric
-            Divider().frame(height: 42)
-            applicationMetric
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                metricCards
+            }
+
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(minimum: 180), spacing: 12),
+                    GridItem(.flexible(minimum: 180), spacing: 12)
+                ],
+                spacing: 12
+            ) {
+                metricCards
+            }
         }
     }
 
+    @ViewBuilder
+    private var metricCards: some View {
+        cpuMetric
+        diskMetric
+        networkMetric
+        applicationMetric
+    }
+
     private var cpuMetric: some View {
-        MetricValue(
+        OverviewMetricCard(
             title: "CPU · 最近 5 秒",
             value: store.isSystemCPUAvailable
                 ? PercentFormatter.cpu(store.currentCPUPercent)
                 : "采样缺口",
             symbol: "cpu",
-            color: .blue
+            color: .blue,
+            sparkline: cpuSparklineValues
         )
     }
 
     private var diskMetric: some View {
-        MetricValue(
+        OverviewMetricCard(
             title: "磁盘写入 · 最近 5 秒",
             value: store.isDiskAvailable
                 ? ByteRateFormatter.rate(store.currentWriteRate)
                 : "采样缺口",
             symbol: "pencil.line",
-            color: .orange
+            color: .orange,
+            sparkline: visibleDiskPoints.map(\.writeBytesPerSecond)
         )
     }
 
     private var networkMetric: some View {
-        NetworkMetricValue(
-            download: store.currentNetworkReceiveRate,
-            upload: store.currentNetworkSendRate,
-            isAvailable: store.isSystemNetworkAvailable
+        OverviewMetricCard(
+            title: "网络 · 最近 5 秒",
+            value: store.isSystemNetworkAvailable
+                ? ByteRateFormatter.rate(
+                    store.currentNetworkReceiveRate + store.currentNetworkSendRate
+                )
+                : "采样缺口",
+            symbol: "network",
+            color: .green,
+            sparkline: networkSparklineValues
         )
     }
 
     private var applicationMetric: some View {
-        MetricValue(
+        OverviewMetricCard(
             title: "可见应用",
             value: store.activeApplicationCount.formatted(),
             symbol: "square.stack.3d.up",
-            color: .purple
+            color: .purple,
+            sparkline: []
         )
     }
 
-    private var trendSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionHeading("资源趋势", subtitle: trendSubtitle) {
+    private var diskActivitySection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SectionHeading("磁盘活动", subtitle: "最近 5 秒的设备读写，按挂载卷名称展示") {
                 Picker(L10n.text("资源"), selection: $selectedMetric) {
                     ForEach(OverviewMetric.allCases) { metric in
                         Text(metric.title).tag(metric)
@@ -162,34 +277,25 @@ struct OverviewView: View {
                 .frame(width: 250)
             }
 
-            switch selectedMetric {
-            case .disk:
-                MonitorChart(points: visibleDiskPoints, height: 176)
-            case .cpu:
-                SystemCPUChart(points: visibleSystemPoints, height: 176)
-            case .network:
-                SystemNetworkChart(points: visibleSystemPoints, height: 176)
-            }
-        }
-    }
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 16) {
+                    volumeColumn
+                        .frame(minWidth: 320, idealWidth: 380, maxWidth: 430)
 
-    private var volumeIOSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading("磁盘实时", subtitle: "最近 5 秒的设备读写，按挂载卷名称展示")
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 280), spacing: 20)],
-                alignment: .leading,
-                spacing: 0
-            ) {
-                ForEach(visibleVolumes) { volume in
-                    VolumeIOItem(
-                        volume: volume,
-                        disks: physicalDisks(for: volume),
-                        sharesDevice: sharesPhysicalDevice(volume)
-                    )
+                    Divider()
+
+                    trendChart
+                        .frame(minWidth: 430, maxWidth: .infinity)
+                }
+
+                VStack(alignment: .leading, spacing: 14) {
+                    volumeColumn
+                    Divider()
+                    trendChart
                 }
             }
         }
+        .overviewPanel()
     }
 
     private var applicationSection: some View {
@@ -219,32 +325,109 @@ struct OverviewView: View {
                 isLoading: store.lastUpdatedAt == nil
             )
         }
+        .overviewPanel(horizontalPadding: 16, verticalPadding: 14)
+    }
+
+    private var volumeList: some View {
+        ScrollView(.vertical) {
+            LazyVStack(spacing: 0) {
+                ForEach(visibleVolumes) { volume in
+                    VolumeIOItem(
+                        volume: volume,
+                        disks: physicalDisks(for: volume),
+                        sharesDevice: sharesPhysicalDevice(volume)
+                    )
+                    .frame(height: resolvedVolumeRowHeight)
+                }
+            }
+        }
+        .scrollDisabled(!diskLayout.isScrollable)
+        .scrollIndicators(diskLayout.isScrollable ? .visible : .hidden)
+        .frame(height: diskLayout.volumeViewportHeight, alignment: .top)
+    }
+
+    private var volumeColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            volumeList
+            DiskThroughputSummary(
+                readRate: visibleDiskSourcePoints.last?.readBytesPerSecond,
+                writeRate: visibleDiskSourcePoints.last?.writeBytesPerSecond,
+                peakWriteRate: visibleDiskSourcePoints.compactMap(\.writeBytesPerSecond).max()
+            )
+            .frame(height: OverviewDiskLayout.summaryHeight, alignment: .top)
+        }
+        .frame(height: diskLayout.contentHeight, alignment: .top)
+    }
+
+    @ViewBuilder
+    private var trendChart: some View {
+        switch selectedMetric {
+        case .disk:
+            MonitorChart(points: visibleDiskPoints, height: diskLayout.contentHeight)
+        case .cpu:
+            SystemCPUChart(points: visibleSystemPoints, height: diskLayout.contentHeight)
+        case .network:
+            SystemNetworkChart(points: visibleSystemPoints, height: diskLayout.contentHeight)
+        }
+    }
+
+    private var resolvedVolumeRowHeight: CGFloat {
+        diskLayout.rowHeight
+    }
+
+    private var diskLayout: OverviewDiskLayout {
+        OverviewDiskLayout(volumeCount: visibleVolumes.count)
     }
 
     private var visibleDiskPoints: [ThroughputPoint] {
-        let end = frozenAt ?? Date()
-        let cutoff = end.addingTimeInterval(-store.selectedRange.seconds)
-        let visible = store.points.filter { $0.timestamp >= cutoff && $0.timestamp <= end }
-        return downsampledChartPoints(visible, segment: { $0.segment }) {
+        downsampledChartPoints(visibleDiskSourcePoints, segment: { $0.segment }) {
             [$0.readBytesPerSecond, $0.writeBytesPerSecond]
         }
     }
 
-    private var visibleSystemPoints: [SystemResourcePoint] {
+    private var visibleDiskSourcePoints: [ThroughputPoint] {
         let end = frozenAt ?? Date()
         let cutoff = end.addingTimeInterval(-store.selectedRange.seconds)
-        let visible = store.systemPoints.filter { $0.timestamp >= cutoff && $0.timestamp <= end }
+        return store.points.filter { $0.timestamp >= cutoff && $0.timestamp <= end }
+    }
+
+    private var visibleSystemPoints: [SystemResourcePoint] {
         switch selectedMetric {
         case .cpu:
-            return downsampledChartPoints(visible, segment: { $0.cpuSegment }) {
+            return downsampledChartPoints(visibleSystemSourcePoints, segment: { $0.cpuSegment }) {
                 [$0.cpuPercent]
             }
         case .network:
-            return downsampledChartPoints(visible, segment: { $0.networkSegment }) {
+            return downsampledChartPoints(visibleSystemSourcePoints, segment: { $0.networkSegment }) {
                 [$0.networkReceiveBytesPerSecond, $0.networkSendBytesPerSecond]
             }
         case .disk:
             return []
+        }
+    }
+
+    private var visibleSystemSourcePoints: [SystemResourcePoint] {
+        let end = frozenAt ?? Date()
+        let cutoff = end.addingTimeInterval(-store.selectedRange.seconds)
+        return store.systemPoints.filter { $0.timestamp >= cutoff && $0.timestamp <= end }
+    }
+
+    private var cpuSparklineValues: [Double?] {
+        downsampledChartPoints(visibleSystemSourcePoints, segment: { $0.cpuSegment }) {
+            [$0.cpuPercent]
+        }
+        .map(\.cpuPercent)
+    }
+
+    private var networkSparklineValues: [Double?] {
+        downsampledChartPoints(visibleSystemSourcePoints, segment: { $0.networkSegment }) {
+            [$0.networkReceiveBytesPerSecond, $0.networkSendBytesPerSecond]
+        }
+        .map { point in
+            guard let receive = point.networkReceiveBytesPerSecond,
+                  let send = point.networkSendBytesPerSecond
+            else { return nil }
+            return receive + send
         }
     }
 
@@ -260,11 +443,13 @@ struct OverviewView: View {
     private func presentProcess(_ process: ProcessActivity) {
         selectedProcessID = process.id
         processHoverCoordinator.clearForSelection()
-        processDetailWindows.present(ProcessDetailPresentation(
+        let presentation = ProcessDetailPresentation(
             process: process,
             updatesLive: store.isFollowingLive
-        ))
+        )
+        processDetailWindows.present(presentation)
         openWindow(id: "process-detail", value: process.id)
+        processDetailWindows.activate(presentation)
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(220))
             if selectedProcessID == process.id { selectedProcessID = nil }
@@ -316,7 +501,8 @@ struct OverviewView: View {
         case .elevated: L10n.text("发现持续磁盘活动")
         case .stopped: L10n.text("采集已停止")
         case .unavailable: L10n.text("采集需要处理")
-        default: L10n.text("应用资源行为正常")
+        case .starting: L10n.text("正在建立采样")
+        case .normal: L10n.text("这台 Mac 运行正常")
         }
     }
 
@@ -336,6 +522,242 @@ struct OverviewView: View {
             )
         }
         return L10n.text("后台持续观察应用的磁盘、CPU 与网络活动")
+    }
+
+    private var healthColor: Color {
+        switch store.health {
+        case .normal: .green
+        case .elevated: .orange
+        case .starting: .blue
+        case .stopped: .secondary
+        case .unavailable: .red
+        }
+    }
+
+    private var healthSymbol: String {
+        switch store.health {
+        case .normal: "checkmark"
+        case .elevated: "exclamationmark"
+        case .starting: "ellipsis"
+        case .stopped: "pause.fill"
+        case .unavailable: "exclamationmark.triangle.fill"
+        }
+    }
+}
+
+private struct OverviewMetricCard: View {
+    let title: String
+    let value: String
+    let symbol: String
+    let color: Color
+    let sparkline: [Double?]
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(color)
+                .frame(width: 40, height: 40)
+                .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L10n.text(title))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(L10n.text(value))
+                    .font(.system(.title3, design: .monospaced, weight: .semibold))
+                    .contentTransition(.numericText())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if sparkline.contains(where: { $0 != nil }) {
+                MetricSparkline(values: sparkline, color: color)
+                    .frame(width: 72, height: 28)
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(minWidth: 180, maxWidth: .infinity, minHeight: 82)
+        .overviewPanel(horizontalPadding: 0, verticalPadding: 0)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct MetricSparkline: View {
+    let values: [Double?]
+    let color: Color
+
+    var body: some View {
+        Canvas { context, size in
+            let finiteValues = values.compactMap { value in
+                guard let value, value.isFinite else { return nil as Double? }
+                return value
+            }
+            guard finiteValues.count > 1,
+                  let minimum = finiteValues.min(),
+                  let maximum = finiteValues.max()
+            else { return }
+
+            let valueRange = max(maximum - minimum, maximum * 0.08, 1)
+            let widthStep = size.width / CGFloat(max(values.count - 1, 1))
+            var path = Path()
+            var isDrawing = false
+
+            for (index, value) in values.enumerated() {
+                guard let value, value.isFinite else {
+                    isDrawing = false
+                    continue
+                }
+                let x = CGFloat(index) * widthStep
+                let normalized = (value - minimum) / valueRange
+                let y = size.height - CGFloat(normalized) * max(size.height - 2, 1) - 1
+                let point = CGPoint(x: x, y: y)
+                if isDrawing {
+                    path.addLine(to: point)
+                } else {
+                    path.move(to: point)
+                    isDrawing = true
+                }
+            }
+
+            context.stroke(path, with: .color(color), lineWidth: 1.6)
+        }
+    }
+}
+
+private struct DiskThroughputSummary: View {
+    let readRate: Double?
+    let writeRate: Double?
+    let peakWriteRate: Double?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Divider()
+
+            Label(L10n.text("物理设备总吞吐"), systemImage: "internaldrive")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            HStack(alignment: .top, spacing: 8) {
+                value(
+                    "读取",
+                    readRate,
+                    color: .teal,
+                    stackAlignment: .leading,
+                    frameAlignment: .leading
+                )
+                value(
+                    "写入",
+                    writeRate,
+                    color: .orange,
+                    stackAlignment: .center,
+                    frameAlignment: .center
+                )
+                value(
+                    "写入峰值",
+                    peakWriteRate,
+                    color: .secondary,
+                    stackAlignment: .trailing,
+                    frameAlignment: .trailing
+                )
+            }
+            .frame(maxWidth: .infinity)
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 16) {
+                    DiskLineLegend()
+                    Spacer(minLength: 12)
+                    EvidenceLabel(text: "虚拟磁盘不计入总量", symbol: "checkmark.shield")
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    DiskLineLegend()
+                    EvidenceLabel(text: "虚拟磁盘不计入总量", symbol: "checkmark.shield")
+                }
+            }
+        }
+        .padding(.top, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func value(
+        _ title: String,
+        _ rate: Double?,
+        color: Color,
+        stackAlignment: HorizontalAlignment,
+        frameAlignment: Alignment
+    ) -> some View {
+        VStack(alignment: stackAlignment, spacing: 2) {
+            Text(L10n.text(title))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text(rate.map(ByteRateFormatter.rate) ?? L10n.text("采样缺口"))
+                .font(.system(.caption, design: .monospaced, weight: .semibold))
+                .foregroundStyle(color)
+                .contentTransition(.numericText())
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+        }
+        .frame(maxWidth: .infinity, alignment: frameAlignment)
+    }
+}
+
+private struct DiskLineLegend: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            item("读取", color: .teal, dash: [])
+            item("写入", color: .orange, dash: [5, 3])
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(L10n.text("读取实线、写入虚线"))
+    }
+
+    private func item(_ title: String, color: Color, dash: [CGFloat]) -> some View {
+        HStack(spacing: 4) {
+            Canvas { context, size in
+                var path = Path()
+                path.move(to: CGPoint(x: 0, y: size.height / 2))
+                path.addLine(to: CGPoint(x: size.width, y: size.height / 2))
+                context.stroke(
+                    path,
+                    with: .color(color),
+                    style: StrokeStyle(lineWidth: 1.7, lineCap: .round, dash: dash)
+                )
+            }
+            .frame(width: 24, height: 8)
+            .accessibilityHidden(true)
+
+            Text(L10n.text(title))
+                .lineLimit(1)
+        }
+    }
+}
+
+private extension View {
+    func overviewPanel(
+        horizontalPadding: CGFloat = 16,
+        verticalPadding: CGFloat = 14
+    ) -> some View {
+        padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
+            .background(
+                Color(nsColor: .controlBackgroundColor).opacity(0.42),
+                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(Color(nsColor: .separatorColor).opacity(0.72), lineWidth: 0.6)
+            }
     }
 }
 
@@ -652,7 +1074,6 @@ struct ProcessTable: View {
             }
             .background {
                 ProcessRowMouseDownMonitor(
-                    isEnabled: hoverCoordinator.presentation?.process.id == process.id,
                     onMouseDown: { select(process) }
                 )
             }
@@ -1104,7 +1525,6 @@ private struct SystemLayerExplanationView: View {
 }
 
 private struct ProcessRowMouseDownMonitor: NSViewRepresentable {
-    let isEnabled: Bool
     let onMouseDown: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -1120,11 +1540,11 @@ private struct ProcessRowMouseDownMonitor: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.view = nsView
         context.coordinator.onMouseDown = onMouseDown
-        context.coordinator.setEnabled(isEnabled)
+        context.coordinator.installIfNeeded()
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-        coordinator.setEnabled(false)
+        coordinator.uninstall()
     }
 
     @MainActor
@@ -1133,24 +1553,33 @@ private struct ProcessRowMouseDownMonitor: NSViewRepresentable {
         var onMouseDown: (() -> Void)?
         private var monitor: Any?
 
-        func setEnabled(_ isEnabled: Bool) {
-            if isEnabled, monitor == nil {
-                monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) {
-                    [weak self] event in
-                    guard let self, let view = self.view,
-                          event.window === view.window,
-                          view.bounds.contains(view.convert(event.locationInWindow, from: nil))
-                    else { return event }
+        func installIfNeeded() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) {
+                [weak self] event in
+                guard !event.modifierFlags.contains(.control),
+                      let self,
+                      let view = self.view,
+                      self.containsCurrentPointer(in: view)
+                else { return event }
 
-                    self.setEnabled(false)
-                    let action = self.onMouseDown
-                    Task { @MainActor in action?() }
-                    return nil
-                }
-            } else if !isEnabled, let monitor {
-                NSEvent.removeMonitor(monitor)
-                self.monitor = nil
+                let action = self.onMouseDown
+                Task { @MainActor in action?() }
+                return nil
             }
+        }
+
+        func uninstall() {
+            guard let monitor else { return }
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+
+        private func containsCurrentPointer(in view: NSView) -> Bool {
+            guard let window = view.window else { return false }
+            let rowRectInWindow = view.convert(view.bounds, to: nil)
+            let rowRectOnScreen = window.convertToScreen(rowRectInWindow)
+            return rowRectOnScreen.contains(NSEvent.mouseLocation)
         }
     }
 }
@@ -1376,106 +1805,12 @@ struct ProcessDetailSheet: View {
 
     private var detail: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                ProcessIcon(process: process, size: 40)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(process.localizedDisplayName)
-                        .font(.title3.weight(.semibold))
-                        .accessibilityFocused($headerIsFocused)
-                    Text(process.memberCount == 1
-                        ? L10n.format("PID %d", process.pids.first ?? 0)
-                        : L10n.format("%d 个进程聚合", process.memberCount))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Picker(L10n.text("详情视图"), selection: $selectedSection) {
-                    ForEach(ProcessDetailSection.allCases) { section in
-                        Text(section.title).tag(section)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 240)
-                EvidenceLabel(
-                    text: isProcessAvailable ? "当前用户实测" : "应用样本已结束",
-                    symbol: isProcessAvailable ? "checkmark.circle" : "clock.badge.xmark"
-                )
-            }
-            .padding(18)
+            detailHeader
 
             Divider()
 
             if selectedSection == .overview {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                    HStack(spacing: 14) {
-                        MetricValue(
-                            title: "CPU · 最近 5 秒",
-                            value: PercentFormatter.cpu(process.currentCPUPercent),
-                            symbol: "cpu",
-                            color: .blue
-                        )
-                        MetricValue(
-                            title: "区间总写入",
-                            value: ByteRateFormatter.bytes(process.totalWriteBytes),
-                            symbol: "pencil.line",
-                            color: .orange
-                        )
-                        MetricValue(
-                            title: "当前写入",
-                            value: ByteRateFormatter.rate(process.currentWriteBytesPerSecond),
-                            symbol: "gauge.with.dots.needle.50percent",
-                            color: .teal
-                        )
-                        MetricValue(
-                            title: "写入峰值",
-                            value: ByteRateFormatter.rate(process.peakWriteBytesPerSecond),
-                            symbol: "bolt",
-                            color: .purple
-                        )
-                    }
-
-                    Grid(horizontalSpacing: 22, verticalSpacing: 18) {
-                        GridRow(alignment: .top) {
-                            processChartSection(
-                                "CPU",
-                                subtitle: "一个逻辑核满载为 100%",
-                                kind: .cpu
-                            )
-                            processChartSection(
-                                "磁盘 I/O",
-                                subtitle: "读取实线、写入虚线",
-                                kind: .disk
-                            )
-                        }
-
-                        GridRow(alignment: .top) {
-                            processChartSection(
-                                "网络",
-                                subtitle: process.isNetworkAvailable
-                                    ? "下载实线、上传虚线 · 当前应用进程聚合"
-                                    : "网络采样存在缺口",
-                                kind: .network
-                            )
-                            .gridCellColumns(2)
-                        }
-                    }
-
-                    HStack {
-                        EvidenceLabel(text: "应用 I/O 当前为全盘合计", symbol: "internaldrive")
-                        Spacer()
-                        Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(process.executablePath, forType: .string)
-                        } label: {
-                            Label(L10n.text("复制路径"), systemImage: "doc.on.doc")
-                        }
-                        .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .compact))
-                    }
-                    }
-                    .padding(18)
-                }
+                overviewContent
             } else {
                 ProcessFileActivityView(
                     process: process,
@@ -1490,22 +1825,223 @@ struct ProcessDetailSheet: View {
         }
     }
 
+    private var detailHeader: some View {
+        HStack(spacing: 18) {
+            HStack(spacing: 13) {
+                ProcessIcon(process: process, size: 48)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(process.localizedDisplayName)
+                        .font(.title2.weight(.semibold))
+                        .lineLimit(1)
+                        .accessibilityFocused($headerIsFocused)
+                    Text(process.memberCount == 1
+                        ? L10n.format("PID %d", process.pids.first ?? 0)
+                        : L10n.format("%d 个进程聚合", process.memberCount))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(minWidth: 190, maxWidth: .infinity, alignment: .leading)
+
+            Picker(L10n.text("详情视图"), selection: $selectedSection) {
+                ForEach(ProcessDetailSection.allCases) { section in
+                    Text(section.title).tag(section)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 250)
+
+            EvidenceLabel(
+                text: isProcessAvailable ? "当前用户实测" : "应用样本已结束",
+                symbol: isProcessAvailable ? "checkmark.circle" : "clock.badge.xmark",
+                color: isProcessAvailable ? .green : .secondary
+            )
+            .frame(minWidth: 150, maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 17)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.72))
+    }
+
+    private var overviewContent: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                overviewMetrics
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 15)
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 20) {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: 24) {
+                            processChartSection(
+                                "CPU",
+                                subtitle: "一个逻辑核满载为 100%",
+                                kind: .cpu,
+                                height: 176
+                            )
+                            .frame(minWidth: 340)
+                            processChartSection(
+                                "磁盘 I/O",
+                                subtitle: "读取实线、写入虚线",
+                                kind: .disk,
+                                height: 176
+                            )
+                            .frame(minWidth: 340)
+                        }
+
+                        VStack(alignment: .leading, spacing: 20) {
+                            processChartSection(
+                                "CPU",
+                                subtitle: "一个逻辑核满载为 100%",
+                                kind: .cpu,
+                                height: 176
+                            )
+                            processChartSection(
+                                "磁盘 I/O",
+                                subtitle: "读取实线、写入虚线",
+                                kind: .disk,
+                                height: 176
+                            )
+                        }
+                    }
+
+                    Divider()
+
+                    processChartSection(
+                        "网络",
+                        subtitle: process.isNetworkAvailable
+                            ? "下载实线、上传虚线 · 当前应用进程聚合"
+                            : "网络采样存在缺口",
+                        kind: .network,
+                        height: 190
+                    )
+                }
+                .padding(.horizontal, 22)
+                .padding(.vertical, 20)
+
+                Divider()
+                executableEvidence
+            }
+        }
+    }
+
+    private var overviewMetrics: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 16) {
+                metric(.cpu)
+                Divider().frame(height: 42)
+                metric(.totalWrite)
+                Divider().frame(height: 42)
+                metric(.currentWrite)
+                Divider().frame(height: 42)
+                metric(.peakWrite)
+            }
+            VStack(spacing: 12) {
+                HStack(spacing: 16) {
+                    metric(.cpu)
+                    Divider().frame(height: 42)
+                    metric(.totalWrite)
+                }
+                HStack(spacing: 16) {
+                    metric(.currentWrite)
+                    Divider().frame(height: 42)
+                    metric(.peakWrite)
+                }
+            }
+        }
+    }
+
+    private enum OverviewMetricKind {
+        case cpu, totalWrite, currentWrite, peakWrite
+    }
+
+    @ViewBuilder
+    private func metric(_ kind: OverviewMetricKind) -> some View {
+        switch kind {
+        case .cpu:
+            MetricValue(
+                title: "CPU · 最近 5 秒",
+                value: PercentFormatter.cpu(process.currentCPUPercent),
+                symbol: "cpu",
+                color: .blue
+            )
+        case .totalWrite:
+            MetricValue(
+                title: "区间总写入",
+                value: ByteRateFormatter.bytes(process.totalWriteBytes),
+                symbol: "pencil.line",
+                color: .orange
+            )
+        case .currentWrite:
+            MetricValue(
+                title: "当前写入",
+                value: ByteRateFormatter.rate(process.currentWriteBytesPerSecond),
+                symbol: "gauge.with.dots.needle.50percent",
+                color: .teal
+            )
+        case .peakWrite:
+            MetricValue(
+                title: "写入峰值",
+                value: ByteRateFormatter.rate(process.peakWriteBytesPerSecond),
+                symbol: "bolt",
+                color: .purple
+            )
+        }
+    }
+
+    private var executableEvidence: some View {
+        HStack(spacing: 18) {
+            EvidenceLabel(
+                text: "应用 I/O 当前为全盘合计",
+                symbol: "checkmark.circle",
+                color: .green
+            )
+            Divider().frame(height: 32)
+            Label {
+                Text(process.executablePath)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            } icon: {
+                Image(systemName: "internaldrive")
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 10)
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(process.executablePath, forType: .string)
+            } label: {
+                Label(L10n.text("复制路径"), systemImage: "doc.on.doc")
+            }
+            .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .compact))
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 15)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.5))
+    }
+
     private func processChartSection(
         _ title: String,
         subtitle: String,
-        kind: ProcessChartKind
+        kind: ProcessChartKind,
+        height: CGFloat
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             SectionHeading(title, subtitle: subtitle)
             Group {
                 if chartsReady {
-                    ProcessMetricChart(points: chartPoints, kind: kind, height: 150)
+                    ProcessMetricChart(points: chartPoints, kind: kind, height: height)
                 } else {
                     ZStack {
                         Color.secondary.opacity(0.035)
                         ProgressView().controlSize(.small)
                     }
-                    .frame(height: 150)
+                    .frame(height: height)
                 }
             }
         }
@@ -1585,6 +2121,7 @@ private struct FileAccessDirectory: Identifiable, Sendable {
 
 private struct TrackedFileLocation: Sendable {
     let row: FileAccessDirectory
+    let firstObservedAt: Date
     let lastSeenOpenAt: Date
 }
 
@@ -1636,6 +2173,7 @@ private struct ProcessFileActivityView: View {
     @State private var monitoredVolumes: [VolumeInfo]
     @State private var isFileActivityHelpPresented = false
     @State private var tracedPath: String?
+    @State private var isObservationPaused = false
 
     init(
         process: ProcessActivity,
@@ -1715,6 +2253,14 @@ private struct ProcessFileActivityView: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
+                Button {
+                    isObservationPaused.toggle()
+                } label: {
+                    Image(systemName: isObservationPaused ? "play.fill" : "pause.fill")
+                }
+                .buttonStyle(AppIconButtonStyle(size: 30))
+                .help(L10n.text(isObservationPaused ? "返回实时" : "暂停实时跟随"))
+                .accessibilityLabel(L10n.text(isObservationPaused ? "返回实时" : "暂停实时跟随"))
             }
 
             HStack(spacing: 18) {
@@ -1868,12 +2414,29 @@ private struct ProcessFileActivityView: View {
     }
 
     private var fileWorkspace: some View {
-        HSplitView {
-            locationBrowser
-                .frame(minWidth: 300, idealWidth: 350, maxWidth: 430)
-            locationDetail
-                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { geometry in
+            if geometry.size.width >= 720 {
+                HStack(spacing: 0) {
+                    locationBrowser
+                        .frame(width: fileBrowserWidth(for: geometry.size.width))
+                    Divider()
+                    locationDetail
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else {
+                VStack(spacing: 0) {
+                    locationBrowser
+                        .frame(height: min(320, geometry.size.height * 0.46))
+                    Divider()
+                    locationDetail
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
         }
+    }
+
+    private func fileBrowserWidth(for availableWidth: CGFloat) -> CGFloat {
+        min(390, max(320, availableWidth * 0.36))
     }
 
     private var locationBrowser: some View {
@@ -2008,6 +2571,17 @@ private struct ProcessFileActivityView: View {
                         )
                         locationMetadataRow("打开文件", selectedRow.fileCount.formatted())
                         locationMetadataRow("所在卷", selectedRow.volumeName)
+                        if let tracked = selectedTrackedLocation {
+                            locationMetadataRow(
+                                "首次观察",
+                                tracked.firstObservedAt.formatted(date: .omitted, time: .standard)
+                            )
+                            locationMetadataRow(
+                                "最后活动",
+                                (selectedRow.lastChangedAt ?? tracked.lastSeenOpenAt)
+                                    .formatted(date: .omitted, time: .standard)
+                            )
+                        }
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
@@ -2117,6 +2691,11 @@ private struct ProcessFileActivityView: View {
         return filteredRows.first { $0.id == selectedPath }
     }
 
+    private var selectedTrackedLocation: TrackedFileLocation? {
+        guard let selectedRow else { return nil }
+        return trackedLocations[selectedRow.path]
+    }
+
     private func isWritable(_ row: FileAccessDirectory) -> Bool {
         row.modes.contains(.writeOnly) || row.modes.contains(.readWrite)
     }
@@ -2221,6 +2800,14 @@ private struct ProcessFileActivityView: View {
 
     private func refreshLoop() async {
         while !Task.isCancelled {
+            if isObservationPaused {
+                do {
+                    try await Task.sleep(for: .milliseconds(250))
+                } catch {
+                    return
+                }
+                continue
+            }
             let sessions = monitoredSessions
             let next: OpenFileSnapshot
             if sessions.isEmpty {
@@ -2260,9 +2847,11 @@ private struct ProcessFileActivityView: View {
                     || retainedChange != nil
             }
             for row in currentRows {
-                let retainedRow = nextTrackedLocations[row.path]?.row ?? row
+                let existing = nextTrackedLocations[row.path]
+                let retainedRow = existing?.row ?? row
                 nextTrackedLocations[row.path] = TrackedFileLocation(
                     row: retainedRow,
+                    firstObservedAt: existing?.firstObservedAt ?? next.capturedAt,
                     lastSeenOpenAt: next.capturedAt
                 )
             }
@@ -2297,6 +2886,7 @@ private struct ProcessFileActivityView: View {
                 guard let tracked = nextTrackedLocations[row.path] else { continue }
                 nextTrackedLocations[row.path] = TrackedFileLocation(
                     row: row,
+                    firstObservedAt: tracked.firstObservedAt,
                     lastSeenOpenAt: tracked.lastSeenOpenAt
                 )
             }
@@ -2380,6 +2970,7 @@ private struct ProcessFileActivityView: View {
         trackedLocations = trackedLocations.mapValues { tracked in
             TrackedFileLocation(
                 row: Self.rebindingVolume(tracked.row, volumes: volumes),
+                firstObservedAt: tracked.firstObservedAt,
                 lastSeenOpenAt: tracked.lastSeenOpenAt
             )
         }
@@ -2651,5 +3242,55 @@ struct ProcessDetailWindowRoot: View {
         )
         .frame(minWidth: 780, minHeight: 560)
         .navigationTitle(presentation.process.localizedDisplayName)
+        .background {
+            ProcessDetailWindowRegistration(
+                processID: presentation.id,
+                coordinator: coordinator
+            )
+        }
+    }
+}
+
+private struct ProcessDetailWindowRegistration: NSViewRepresentable {
+    let processID: ProcessActivity.ID
+    let coordinator: ProcessDetailWindowCoordinator
+
+    func makeNSView(context: Context) -> RegistrationView {
+        RegistrationView(processID: processID, coordinator: coordinator)
+    }
+
+    func updateNSView(_ nsView: RegistrationView, context: Context) {
+        nsView.processID = processID
+        nsView.coordinator = coordinator
+        nsView.registerWindow()
+    }
+
+    final class RegistrationView: NSView {
+        var processID: ProcessActivity.ID
+        weak var coordinator: ProcessDetailWindowCoordinator?
+
+        init(
+            processID: ProcessActivity.ID,
+            coordinator: ProcessDetailWindowCoordinator
+        ) {
+            self.processID = processID
+            self.coordinator = coordinator
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            registerWindow()
+        }
+
+        func registerWindow() {
+            guard let window else { return }
+            coordinator?.register(window, for: processID)
+        }
     }
 }
