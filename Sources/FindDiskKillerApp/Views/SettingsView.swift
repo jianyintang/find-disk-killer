@@ -93,6 +93,8 @@ struct SettingsPage: View {
                     }
                 }
 
+                AutomaticUpdateSettingsSection(updates: updates)
+
                 Section {
                     Toggle(L10n.text("在菜单栏显示写入速率"), isOn: $showRateInMenuBar)
                     VStack(spacing: 8) {
@@ -455,9 +457,6 @@ struct SettingsPage: View {
             }
             .formStyle(.grouped)
 
-                case .softwareUpdate:
-                    UpdaterSettingsSection(updates: updates)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
             }
         }

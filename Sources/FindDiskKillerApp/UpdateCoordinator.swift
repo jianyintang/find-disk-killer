@@ -19,6 +19,7 @@ final class UpdateCoordinator: NSObject, SPUUpdaterDelegate {
     @ObservationIgnored private let bundle: Bundle
     @ObservationIgnored private let installationInterlock: UpdateInstallationInterlock
     @ObservationIgnored private var hasStartedUpdater = false
+    @ObservationIgnored private var sessionReconciliationTask: Task<Void, Never>?
 
     init(activityRegistry: TraceActivityRegistry, bundle: Bundle = .main) {
         self.activityRegistry = activityRegistry
@@ -94,6 +95,8 @@ final class UpdateCoordinator: NSObject, SPUUpdaterDelegate {
 
         if !updaterController.updater.sessionInProgress {
             isChecking = false
+        } else {
+            monitorUpdateSession()
         }
     }
 
@@ -115,6 +118,7 @@ final class UpdateCoordinator: NSObject, SPUUpdaterDelegate {
         mayPerform updateCheck: SPUUpdateCheck
     ) throws {
         isChecking = true
+        monitorUpdateSession()
     }
 
     func updater(
@@ -122,7 +126,9 @@ final class UpdateCoordinator: NSObject, SPUUpdaterDelegate {
         shouldPostponeRelaunchForUpdate item: SUAppcastItem,
         untilInvokingBlock installHandler: @escaping () -> Void
     ) -> Bool {
-        installationInterlock.postponeIfNeeded(untilReady: installHandler)
+        let shouldPostpone = installationInterlock.postponeIfNeeded(untilReady: installHandler)
+        monitorUpdateSession()
+        return shouldPostpone
     }
 
     func updater(
@@ -153,13 +159,29 @@ final class UpdateCoordinator: NSObject, SPUUpdaterDelegate {
     private func releaseUpdateLeases() {
         installationInterlock.release()
         isChecking = false
-        refreshState()
+        sessionReconciliationTask?.cancel()
+        sessionReconciliationTask = nil
     }
 
     private func refreshState() {
-        if !updaterController.updater.sessionInProgress,
-           !installationInterlock.isActive {
-            isChecking = false
+        guard !updaterController.updater.sessionInProgress else { return }
+        installationInterlock.reconcile(sessionInProgress: false)
+        isChecking = false
+        sessionReconciliationTask?.cancel()
+        sessionReconciliationTask = nil
+    }
+
+    private func monitorUpdateSession() {
+        sessionReconciliationTask?.cancel()
+        sessionReconciliationTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard let self, !Task.isCancelled else { return }
+                self.refreshState()
+                if !self.isChecking, !self.installationInterlock.isActive {
+                    return
+                }
+            }
         }
     }
 

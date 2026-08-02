@@ -8,9 +8,9 @@ func sidebarNavigationPreservesMonitoringAndRoutesSettingsPanes() {
     let navigation = AppNavigationCoordinator()
 
     navigation.select(.monitoring(.processes))
-    navigation.showSettings(.softwareUpdate)
+    navigation.showSettings(.dataAndPrivacy)
     #expect(navigation.destination == .settings)
-    #expect(navigation.settingsPane == .softwareUpdate)
+    #expect(navigation.settingsPane == .dataAndPrivacy)
     #expect(navigation.lastMonitoringDestination == .processes)
 
     navigation.showAbout()
@@ -191,6 +191,25 @@ func cancelingPostponedInstallationDoesNotInvokeItsHandler() async throws {
     #expect(!continued)
     #expect(!interlock.isActive)
     #expect(registry.canStartTrace)
+}
+
+@Test @MainActor
+func completedUpdateSessionReleasesAnOrphanedInstallationLease() throws {
+    let registry = TraceActivityRegistry()
+    let interlock = UpdateInstallationInterlock(activityRegistry: registry)
+
+    #expect(!interlock.postponeIfNeeded {})
+    #expect(interlock.isActive)
+    #expect(registry.status == .updatePendingOrRunning)
+
+    interlock.reconcile(sessionInProgress: true)
+    #expect(interlock.isActive)
+    #expect(registry.acquireTrace() == nil)
+
+    interlock.reconcile(sessionInProgress: false)
+    #expect(!interlock.isActive)
+    #expect(registry.status == .idle)
+    #expect(registry.acquireTrace() != nil)
 }
 
 @Test

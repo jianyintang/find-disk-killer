@@ -22,6 +22,13 @@
 - Do not treat barely functional behavior as complete. Workflows, state feedback, copy, keyboard interaction, accessibility, and visual hierarchy must meet the standard of a polished, restrained, professional macOS SaaS product.
 - Do not create `backup/*` or any other backup branch unless the user explicitly requests one.
 
+## UI Localization Is Mandatory
+
+- Every user-visible label, status, error, tooltip, accessibility description, menu item, and dynamically formatted message must resolve through the app localization layer. Do not render a Chinese or English source literal directly as interface copy.
+- Core and service modules must not assemble localized sentences. When they produce user-visible dynamic content, return a structured localization key and arguments so the app layer can format it for the selected language. Provider names, file paths, process names, and other user or system data remain literal values.
+- New localization keys must have native translations for the locales changed by the feature. Every other shipped non-Chinese locale must receive at least an English fallback; a non-Chinese interface must never fall back to a Chinese lookup key.
+- Localization completeness tests must cover both app source and Core-generated presentation text. Treat missing localization coverage as a release blocker.
+
 ## Test App Registration Hygiene
 
 - Test, debug, archive, and release-validation builds must never leave duplicate FindDiskKiller entries in Launchpad, Spotlight, Launch Services, or other macOS application indexes.

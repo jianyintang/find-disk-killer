@@ -152,6 +152,11 @@ final class UpdateInstallationInterlock {
         activeLease = nil
     }
 
+    func reconcile(sessionInProgress: Bool) {
+        guard !sessionInProgress else { return }
+        release()
+    }
+
     private func cancelPostponedTask() {
         postponedTask?.cancel()
         postponedTask = nil

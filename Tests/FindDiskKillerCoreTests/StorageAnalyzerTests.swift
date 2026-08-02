@@ -60,6 +60,32 @@ struct StorageAnalyzerTests {
         #expect(decoded.volumes.isEmpty)
     }
 
+    @Test func legacyResourceNodeWithoutLocalizationDescriptorsStillDecodes() throws {
+        let legacyJSON = #"""
+        {
+          "id": "docker.image.example",
+          "kind": "dockerImage",
+          "title": "example:latest",
+          "detail": "legacy detail",
+          "symbol": "shippingbox",
+          "allocatedBytes": 4096,
+          "logicalBytes": 8192,
+          "entryCount": 1,
+          "risk": 2,
+          "evidence": "providerReported",
+          "isProtected": false,
+          "children": []
+        }
+        """#.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(StorageResourceNode.self, from: legacyJSON)
+
+        #expect(decoded.title == "example:latest")
+        #expect(decoded.detail == "legacy detail")
+        #expect(decoded.titleLocalization == nil)
+        #expect(decoded.detailLocalization == nil)
+    }
+
     @Test func catalogUsesStableSourceAndRootIdentifiers() throws {
         let fixture = try StorageFixture()
         defer { fixture.remove() }
@@ -503,7 +529,9 @@ struct StorageAnalyzerTests {
         let parent = try #require(workspace.resourceTree.first)
 
         #expect(parent.title == "code")
-        #expect(parent.detail?.contains("code") == true)
+        #expect(parent.detailLocalization?.first?.arguments.contains(where: {
+            $0.contains("code")
+        }) == true)
         #expect(parent.children.map(\.title) == ["alpha", "beta"])
         #expect(parent.children.allSatisfy { node in
             if case .trashRepository = node.cleanupTarget { return true }
@@ -609,7 +637,9 @@ struct StorageAnalyzerTests {
         #expect(dangling.cleanupTarget == .dockerImage(id: "sha256:dangling"))
         #expect(tagged.allocatedBytes == 800_000_000)
         #expect(tagged.logicalBytes == 900_000_000)
-        #expect(tagged.detail?.contains("2 个仓库引用") == true)
+        #expect(tagged.detailLocalization?.contains(
+            StorageLocalizedText("%@ 个仓库引用", arguments: ["2"])
+        ) == true)
         #expect(volumes.children.first { $0.title == "unused" }?.cleanupTarget == .dockerVolume(name: "unused"))
         #expect(volumes.children.first { $0.title == "unknown" }?.cleanupTarget == nil)
     }
@@ -631,7 +661,9 @@ struct StorageAnalyzerTests {
 
         #expect(image.risk == .environmentOrRuntime)
         #expect(image.cleanupTarget == .dockerImage(id: "sha256:digest-only"))
-        #expect(image.detail?.contains("2 个仓库引用") == true)
+        #expect(image.detailLocalization?.contains(
+            StorageLocalizedText("%@ 个仓库引用", arguments: ["2"])
+        ) == true)
     }
 
     @Test func dockerInventoryDoesNotOfferRemovalWhenInspectReferencesAreUnavailable() throws {

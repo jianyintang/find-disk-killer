@@ -120,6 +120,23 @@ enum L10n {
         )
     }
 
+    static func format(_ key: String, arguments: [String]) -> String {
+        format(key, arguments: arguments, language: effectiveLanguage)
+    }
+
+    static func format(
+        _ key: String,
+        arguments: [String],
+        language: AppLanguage
+    ) -> String {
+        let resolvedLanguage = language == .system ? preferredLanguage : language
+        return String(
+            format: text(key, language: resolvedLanguage),
+            locale: Locale(identifier: resolvedLanguage.localeIdentifier),
+            arguments: arguments.map { $0 as NSString }
+        )
+    }
+
     static func date(
         _ value: Date,
         date: Date.FormatStyle.DateStyle,
@@ -463,6 +480,26 @@ enum L10n {
         "应用与浏览器": "Apps & Browsers",
         "开发工具": "Developer Tools",
         "容器": "Containers",
+        "镜像": "Images",
+        "独占 %@": "Unique %@",
+        "共享 %@": "Shared %@",
+        "总大小 %@": "Total %@",
+        "%@ 个仓库引用": "%@ repository references",
+        "%@ 个容器": "%@ containers",
+        "容器引用未知": "Container references unknown",
+        "被 %@ 个容器引用": "Referenced by %@ containers",
+        "当前未被容器引用": "Not currently referenced by a container",
+        "容器引用关系未知": "Container reference status unknown",
+        "正在使用": "In Use",
+        "未使用": "Not in Use",
+        "%@ 项": "%@ items",
+        "Docker Engine 报告，组间可能共享底层数据": "Docker Engine report; groups may share underlying data",
+        "%@ 宿主机物理存储": "%@ Host Physical Storage",
+        "%@ Engine 资源": "%@ Engine Resources",
+        "Podman machine、容器层与宿主机状态": "Podman machines, container layers, and host state",
+        "提供者报告的镜像、容器、Volume 与构建缓存；对象可能共享底层数据": "Provider-reported images, containers, volumes, and build cache; objects may share underlying data",
+        "Docker Engine 容量报告不可用，已使用对象清单": "Docker Engine capacity report unavailable; using object inventory",
+        "Podman 容量报告不可用，已使用对象清单": "Podman capacity report unavailable; using object inventory",
         "AI 工具": "AI Tools",
         "未知磁盘": "Unknown Volume",
         "默认目录": "Default Location",
