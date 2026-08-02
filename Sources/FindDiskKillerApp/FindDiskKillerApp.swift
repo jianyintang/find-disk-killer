@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import FindDiskKillerCore
 import FindDiskKillerTraceProtocol
 import SwiftUI
@@ -224,9 +225,9 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
             NSApp.setActivationPolicy(.prohibited)
             Task { @MainActor in
                 let controller = TraceHelperController()
-                controller.unregister()
+                let succeeded = controller.unregister()
                 print("trace-helper-unregister=\(controller.state)")
-                NSApp.terminate(nil)
+                Self.exitCommandLineOperation(with: succeeded ? EXIT_SUCCESS : EXIT_FAILURE)
             }
             return
         }
@@ -237,10 +238,11 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
                 do {
                     try await controller.repairService()
                     print("trace-helper-repair=\(controller.state)")
+                    Self.exitCommandLineOperation(with: EXIT_SUCCESS)
                 } catch {
                     print("trace-helper-repair-failure=\(error)")
+                    Self.exitCommandLineOperation(with: EXIT_FAILURE)
                 }
-                NSApp.terminate(nil)
             }
             return
         }
@@ -249,9 +251,9 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
             NSApp.activate(ignoringOtherApps: true)
             Task { @MainActor in
                 if await authorizeAndTestTraceHelperOnce() {
-                    NSApp.terminate(nil)
+                    Self.exitCommandLineOperation(with: EXIT_SUCCESS)
                 } else {
-                    exit(EXIT_FAILURE)
+                    Self.exitCommandLineOperation(with: EXIT_FAILURE)
                 }
             }
             return
@@ -287,6 +289,11 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    private static func exitCommandLineOperation(with status: Int32) -> Never {
+        fflush(stdout)
+        exit(status)
     }
 
     func applicationShouldHandleReopen(
