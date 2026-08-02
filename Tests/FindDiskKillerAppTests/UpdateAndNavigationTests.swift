@@ -61,6 +61,7 @@ func traceAndUpdateInstallationReservationsAreMutuallyExclusive() throws {
     let registry = TraceActivityRegistry()
     let traceLease = try #require(registry.acquireTrace())
 
+    #expect(registry.traceStartBlockReason == .anotherTrace)
     #expect(registry.reserveUpdateInstallation() == nil)
     registry.markTraceStopping(traceLease)
     #expect(registry.status == .traceStopping)
@@ -71,28 +72,50 @@ func traceAndUpdateInstallationReservationsAreMutuallyExclusive() throws {
 
     registry.releaseTrace(traceLease)
     let updateLease = try #require(registry.reserveUpdateInstallation())
+    #expect(registry.traceStartBlockReason == .updateInstallation)
     #expect(registry.acquireTrace() == nil)
     registry.releaseUpdate(updateLease)
     #expect(registry.status == .idle)
 }
 
 @Test @MainActor
-func orphanedHelperStateRequiresReconciliation() {
+func traceStoreReportsTheActualLocalInterlockReason() throws {
+    let directory = FileManager.default.temporaryDirectory
+    let tracingRegistry = TraceActivityRegistry()
+    let existingTrace = try #require(tracingRegistry.acquireTrace())
+    let traceBlockedStore = FileAccessTraceStore(activityRegistry: tracingRegistry)
+    traceBlockedStore.select(directory)
+
+    traceBlockedStore.start()
+
+    #expect(traceBlockedStore.state == .failed(
+        L10n.text("已有追踪正在运行或结束中，请稍后重试")
+    ))
+    tracingRegistry.releaseTrace(existingTrace)
+
+    let updatingRegistry = TraceActivityRegistry()
+    let update = try #require(updatingRegistry.reserveUpdateInstallation())
+    let updateBlockedStore = FileAccessTraceStore(activityRegistry: updatingRegistry)
+    updateBlockedStore.select(directory)
+
+    updateBlockedStore.start()
+
+    #expect(updateBlockedStore.state == .failed(
+        L10n.text("正在检查或安装更新，请稍后再开始追踪")
+    ))
+    updatingRegistry.releaseUpdate(update)
+}
+
+@Test @MainActor
+func orphanedHelperStateCanRecoverThroughAnAuthoritativeTraceAttempt() throws {
     let registry = TraceActivityRegistry()
     registry.markHelperBusyWithoutLocalLease()
 
     #expect(registry.needsHelperReconciliation)
-    #expect(registry.acquireTrace() == nil)
-    let updateLease = registry.reserveUpdateInstallation()
-    #expect(updateLease != nil)
-    if let updateLease {
-        registry.releaseUpdate(updateLease)
-    }
-    #expect(registry.needsHelperReconciliation)
-    #expect(registry.acquireTrace() == nil)
-
+    let traceLease = try #require(registry.acquireTrace())
     registry.markHelperReadyWithoutLocalLease()
     #expect(!registry.needsHelperReconciliation)
+    registry.releaseTrace(traceLease)
     #expect(registry.canStartTrace)
     #expect(registry.canBeginUpdateInstallation)
 }
@@ -112,7 +135,7 @@ func orphanedHelperStateDoesNotPostponeAUserApprovedInstall() {
     interlock.release()
     #expect(registry.status == .stopUnconfirmed)
     #expect(registry.needsHelperReconciliation)
-    #expect(registry.acquireTrace() == nil)
+    #expect(registry.acquireTrace() != nil)
 }
 
 @Test @MainActor
@@ -214,5 +237,5 @@ func completedUpdateSessionReleasesAnOrphanedInstallationLease() throws {
 
 @Test
 func traceHelperProtocolUsesExplicitSystemTraceVersion() {
-    #expect(TraceHelperProtocolConfiguration.version == 6)
+    #expect(TraceHelperProtocolConfiguration.version == 7)
 }

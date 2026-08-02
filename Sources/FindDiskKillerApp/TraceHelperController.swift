@@ -55,6 +55,7 @@ enum TraceHelperRegistrationStatus: Equatable {
 @MainActor
 protocol TraceHelperServiceManaging: AnyObject {
     var status: TraceHelperRegistrationStatus { get }
+    func cleanupLegacyServices() async throws
     func register() throws
     func unregister() throws
     func unregisterAndWait() async throws
@@ -101,8 +102,18 @@ private final class TraceHelperServiceManager: TraceHelperServiceManaging {
     }
 
     func register() throws {
-        removeLegacyServiceIfNeeded()
         try service.register()
+    }
+
+    func cleanupLegacyServices() async throws {
+        switch legacyService.status {
+        case .enabled, .requiresApproval:
+            try await unregisterAndWait(legacyService)
+        case .notRegistered, .notFound:
+            break
+        @unknown default:
+            break
+        }
     }
 
     func unregister() throws {
@@ -110,6 +121,10 @@ private final class TraceHelperServiceManager: TraceHelperServiceManaging {
     }
 
     func unregisterAndWait() async throws {
+        try await unregisterAndWait(service)
+    }
+
+    private func unregisterAndWait(_ service: SMAppService) async throws {
         try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<Void, Error>) in
             service.unregister { error in
@@ -124,17 +139,6 @@ private final class TraceHelperServiceManager: TraceHelperServiceManaging {
 
     func openSystemSettings() {
         SMAppService.openSystemSettingsLoginItems()
-    }
-
-    private func removeLegacyServiceIfNeeded() {
-        switch legacyService.status {
-        case .enabled, .requiresApproval:
-            try? legacyService.unregister()
-        case .notRegistered, .notFound:
-            break
-        @unknown default:
-            break
-        }
     }
 }
 
@@ -512,6 +516,11 @@ final class TraceHelperController {
             throw TraceHelperClientError.installationRequired(isDiskImage: isDiskImage)
         }
         try await replaceOutdatedService()
+        guard service.status != .requiresApproval else {
+            state = .requiresApproval
+            throw TraceHelperClientError.approvalRequired
+        }
+        try await waitUntilReachable()
     }
 
     func prepareForTracing(
@@ -573,6 +582,23 @@ final class TraceHelperController {
         } catch TraceHelperClientError.busy {
             state = .connectionUnavailable
             throw TraceHelperClientError.busy
+        } catch TraceHelperClientError.protocolMismatch {
+            state = .repairing
+            onPhaseChange(.repairing)
+            do {
+                try await replaceOutdatedService()
+                guard service.status != .requiresApproval else {
+                    state = .requiresApproval
+                    throw TraceHelperClientError.approvalRequired
+                }
+                try await waitUntilReachable()
+                return
+            } catch TraceHelperClientError.approvalRequired {
+                throw TraceHelperClientError.approvalRequired
+            } catch {
+                state = .repairAvailable
+                throw TraceHelperClientError.repairRequired
+            }
         } catch let error as TraceHelperClientError {
             guard shouldRepair(after: error, recoveryMode: recoveryMode) else {
                 state = .repairAvailable
@@ -668,17 +694,22 @@ final class TraceHelperController {
     }
 
     func activityStatus(timeout: Duration = .seconds(3)) async throws -> TraceHelperActivityStatus {
-        let result = try await transport.ping(
-            clientProtocolVersion: TraceHelperProtocolConfiguration.version,
-            timeout: timeout
-        )
-        guard result.0 == TraceHelperProtocolConfiguration.version else {
-            throw TraceHelperClientError.protocolMismatch
-        }
-        switch result.1 {
-        case "ready": return .ready
-        case "busy": return .busy
-        default: throw TraceHelperClientError.protocolMismatch
+        do {
+            let result = try await transport.ping(
+                clientProtocolVersion: TraceHelperProtocolConfiguration.version,
+                timeout: timeout
+            )
+            guard result.0 == TraceHelperProtocolConfiguration.version else {
+                throw TraceHelperClientError.protocolMismatch
+            }
+            switch result.1 {
+            case "ready": return .ready
+            case "busy": return .busy
+            default: throw TraceHelperClientError.protocolMismatch
+            }
+        } catch {
+            invalidateConnection()
+            throw error
         }
     }
 
@@ -731,6 +762,7 @@ final class TraceHelperController {
         if service.status != .notRegistered && service.status != .notFound {
             try await unregisterWithRetry()
             try await waitForUnregisteredStatus()
+            try await waitForServiceEndpointToDisappear()
         }
         try await registerWithRetry()
         try await waitForRegisteredStatus()
@@ -742,6 +774,26 @@ final class TraceHelperController {
         guard service.status == .enabled else {
             throw TraceHelperClientError.unavailable
         }
+    }
+
+    private func waitForServiceEndpointToDisappear() async throws {
+        let deadline = ContinuousClock.now.advanced(by: readinessTimeout)
+        while ContinuousClock.now < deadline {
+            invalidateConnection()
+            do {
+                _ = try await transport.ping(
+                    clientProtocolVersion: TraceHelperProtocolConfiguration.version,
+                    timeout: .milliseconds(250)
+                )
+            } catch TraceHelperClientError.unavailable {
+                invalidateConnection()
+                return
+            } catch {
+                // A protocol mismatch still proves that the old endpoint is alive.
+            }
+            try await Task.sleep(for: retryDelay)
+        }
+        throw TraceHelperClientError.unavailable
     }
 
     func drainTrace(
@@ -825,6 +877,7 @@ final class TraceHelperController {
     }
 
     private func registerWithRetry() async throws {
+        try await cleanupLegacyServicesWithRetry()
         var finalError: Error?
         for attempt in 0...1 {
             do {
@@ -841,6 +894,22 @@ final class TraceHelperController {
                     state = .requiresApproval
                     throw TraceHelperClientError.approvalRequired
                 }
+                if attempt == 0 {
+                    try await Task.sleep(for: retryDelay)
+                }
+            }
+        }
+        throw finalError ?? TraceHelperClientError.unavailable
+    }
+
+    private func cleanupLegacyServicesWithRetry() async throws {
+        var finalError: Error?
+        for attempt in 0...1 {
+            do {
+                try await service.cleanupLegacyServices()
+                return
+            } catch {
+                finalError = error
                 if attempt == 0 {
                     try await Task.sleep(for: retryDelay)
                 }

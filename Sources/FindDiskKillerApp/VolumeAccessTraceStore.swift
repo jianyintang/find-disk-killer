@@ -384,6 +384,7 @@ final class VolumeAccessTraceStore {
                         self.state = .repairing
                     }
                 }
+                activityRegistry.markHelperReadyWithoutLocalLease()
                 guard !Task.isCancelled else { return }
                 let sessionID = try await helper.startSystemTrace(maximumDurationSeconds: 900)
                 startedSessionID = sessionID
@@ -614,11 +615,20 @@ final class VolumeAccessTraceStore {
     private func reserveTraceIntent() -> Bool {
         if activityLease != nil { return true }
         guard let lease = activityRegistry.acquireTrace() else {
-            state = .failed(L10n.text("正在检查或安装更新，请稍后再开始追踪"))
+            state = .failed(traceStartBlockMessage)
             return false
         }
         activityLease = lease
         return true
+    }
+
+    private var traceStartBlockMessage: String {
+        switch activityRegistry.traceStartBlockReason {
+        case .updateInstallation:
+            L10n.text("正在检查或安装更新，请稍后再开始追踪")
+        case .anotherTrace, nil:
+            L10n.text("已有追踪正在运行或结束中，请稍后重试")
+        }
     }
 
     private func markStopUnconfirmed() {
