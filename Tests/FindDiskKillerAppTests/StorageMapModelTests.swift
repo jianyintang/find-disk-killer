@@ -144,7 +144,7 @@ import Testing
 }
 
 @MainActor
-@Test func storageMapRejectsLateResultsAfterStop() async {
+@Test func storageMapRejectsLateResultsAfterStop() async throws {
     let probe = StorageMapScanProbe()
     let model = StorageMapModel(
         cacheURL: nil,
@@ -154,9 +154,9 @@ import Testing
     await model.prepare()
 
     model.startAnalysis()
-    await Task.yield()
+    try await waitForStorageMapTest { await probe.scanCount == 1 }
     model.stopAnalysis()
-    try? await Task.sleep(for: .milliseconds(240))
+    try await waitForStorageMapTest { model.phase == .ready }
 
     #expect(model.phase == .ready)
     #expect(model.snapshot == nil)
