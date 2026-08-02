@@ -2525,8 +2525,18 @@ private final class BlockingProcessNetworkSource: @unchecked Sendable {
     await watcher.configure(volumes: [volume])
     try await Task.sleep(for: .milliseconds(250))
     try Data("change".utf8).write(to: directory.appendingPathComponent("changed.txt"))
-    try await Task.sleep(for: .milliseconds(1_500))
-    let result = await watcher.recentChanges(for: [directory.path])
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(5))
+    var result = await watcher.recentChanges(for: [directory.path])
+    var retry = 0
+    while result.latestByPath[directory.path] == nil && clock.now < deadline {
+        retry += 1
+        try Data("change-\(retry)".utf8).write(
+            to: directory.appendingPathComponent("changed.txt")
+        )
+        try await Task.sleep(for: .milliseconds(100))
+        result = await watcher.recentChanges(for: [directory.path])
+    }
     await watcher.injectGapForTesting(volumeID: volume.id)
     let resultAfterGap = await watcher.recentChanges(for: [directory.path])
     let replacement = VolumeInfo(
