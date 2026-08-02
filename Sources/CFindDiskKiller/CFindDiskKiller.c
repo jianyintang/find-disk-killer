@@ -25,7 +25,8 @@
 #include <sys/proc_info.h>
 #include <time.h>
 
-#define DM_FILE_EVENT_RING_CAPACITY 4096
+#define DM_FILE_EVENT_RING_CAPACITY 512
+#define DM_FILE_EVENT_MAX_ROOTS 512
 
 struct DMFSEventWatcher {
     FSEventStreamRef stream;
@@ -93,8 +94,11 @@ static void dm_fsevent_callback(
     pthread_mutex_unlock(&watcher->lock);
 }
 
-DMFSEventWatcher *dm_fsevent_watcher_create(const char *root_path) {
-    if (root_path == NULL || root_path[0] != '/') {
+DMFSEventWatcher *dm_fsevent_watcher_create_paths(
+    const char *const root_paths[],
+    int path_count
+) {
+    if (root_paths == NULL || path_count <= 0 || path_count > DM_FILE_EVENT_MAX_ROOTS) {
         return NULL;
     }
     DMFSEventWatcher *watcher = calloc(1, sizeof(DMFSEventWatcher));
@@ -108,22 +112,35 @@ DMFSEventWatcher *dm_fsevent_watcher_create(const char *root_path) {
         return NULL;
     }
 
-    CFStringRef root = CFStringCreateWithCString(
+    CFMutableArrayRef paths = CFArrayCreateMutable(
         kCFAllocatorDefault,
-        root_path,
-        kCFStringEncodingUTF8
+        path_count,
+        &kCFTypeArrayCallBacks
     );
-    if (root == NULL) {
+    if (paths == NULL) {
         dm_fsevent_watcher_destroy(watcher);
         return NULL;
     }
-    const void *values[] = {root};
-    CFArrayRef paths = CFArrayCreate(
-        kCFAllocatorDefault,
-        values,
-        1,
-        &kCFTypeArrayCallBacks
-    );
+    for (int index = 0; index < path_count; index++) {
+        const char *root_path = root_paths[index];
+        if (root_path == NULL || root_path[0] != '/') {
+            CFRelease(paths);
+            dm_fsevent_watcher_destroy(watcher);
+            return NULL;
+        }
+        CFStringRef root = CFStringCreateWithCString(
+            kCFAllocatorDefault,
+            root_path,
+            kCFStringEncodingUTF8
+        );
+        if (root == NULL) {
+            CFRelease(paths);
+            dm_fsevent_watcher_destroy(watcher);
+            return NULL;
+        }
+        CFArrayAppendValue(paths, root);
+        CFRelease(root);
+    }
     FSEventStreamContext context = {0, watcher, NULL, NULL, NULL};
     watcher->stream = FSEventStreamCreate(
         kCFAllocatorDefault,
@@ -131,14 +148,11 @@ DMFSEventWatcher *dm_fsevent_watcher_create(const char *root_path) {
         &context,
         paths,
         kFSEventStreamEventIdSinceNow,
-        1.0,
+        2.0,
         kFSEventStreamCreateFlagUseCFTypes
-            | kFSEventStreamCreateFlagFileEvents
             | kFSEventStreamCreateFlagWatchRoot
-            | kFSEventStreamCreateFlagNoDefer
     );
     CFRelease(paths);
-    CFRelease(root);
     if (watcher->stream == NULL) {
         dm_fsevent_watcher_destroy(watcher);
         return NULL;
@@ -146,6 +160,11 @@ DMFSEventWatcher *dm_fsevent_watcher_create(const char *root_path) {
     watcher->queue = dispatch_queue_create("com.find-disk-killer.fsevents", DISPATCH_QUEUE_SERIAL);
     FSEventStreamSetDispatchQueue(watcher->stream, watcher->queue);
     return watcher;
+}
+
+DMFSEventWatcher *dm_fsevent_watcher_create(const char *root_path) {
+    const char *paths[] = {root_path};
+    return dm_fsevent_watcher_create_paths(paths, 1);
 }
 
 int dm_fsevent_watcher_start(DMFSEventWatcher *watcher) {

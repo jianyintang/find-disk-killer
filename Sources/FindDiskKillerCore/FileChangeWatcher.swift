@@ -30,10 +30,14 @@ public enum RecentFileChangeRetention {
 public actor FileChangeWatcher {
     public static let shared = FileChangeWatcher()
     public nonisolated static let recentChangeWindow: TimeInterval = 300
+    private nonisolated static let eventBufferCapacity = 512
+    private nonisolated static let maximumHistoryCount = 4_096
+    private nonisolated static let maximumWatchedPathsPerVolume = 512
 
     private struct Stream: @unchecked Sendable {
         let volumeID: String
         let mountPath: String
+        let watchedPaths: Set<String>
         let pointer: OpaquePointer
         let startedAt: Date
     }
@@ -92,9 +96,6 @@ public actor FileChangeWatcher {
             history.removeAll { $0.volumeID == id }
         }
 
-        for (id, volume) in eligible where streams[id] == nil {
-            streams[id] = makeStream(volumeID: id, mountPath: volume.mountPath)
-        }
     }
 
     public func beginSession(volumes: [VolumeInfo]) -> UUID {
@@ -125,7 +126,7 @@ public actor FileChangeWatcher {
 
     func injectHistoryOverflowForTesting(volumeID: String) {
         guard let stream = streams[volumeID] else { return }
-        history.append(contentsOf: (0..<10_001).map { index in
+        history.append(contentsOf: (0...Self.maximumHistoryCount).map { index in
             ObservedChange(
                 path: stream.mountPath + "/fixture-\(index)",
                 volumeID: volumeID,
@@ -134,11 +135,18 @@ public actor FileChangeWatcher {
         })
     }
 
+    func watchedPathsForTesting(volumeID: String) -> Set<String> {
+        streams[volumeID]?.watchedPaths ?? []
+    }
+
     public func recentChanges(
         for paths: [String],
         within interval: TimeInterval = FileChangeWatcher.recentChangeWindow
     ) -> FileChangeLookup {
         poll()
+        let canonicalPaths = paths.map { ($0, Self.canonicalPath($0)) }
+        let requestedByVolume = requestedWatchPaths(for: canonicalPaths.map { $0.1 })
+        reconcileStreams(with: requestedByVolume)
         let now = Date()
         let cutoff = now.addingTimeInterval(-interval)
         history.removeAll { $0.observedAt < cutoff }
@@ -146,8 +154,7 @@ public actor FileChangeWatcher {
         var latest: [String: Date] = [:]
         var statuses: [String: FileChangeObservationStatus] = [:]
         var relevantVolumes: Set<String> = []
-        for originalPath in paths {
-            let path = Self.canonicalPath(originalPath)
+        for (originalPath, path) in canonicalPaths {
             guard let scope = volumeScopes
                 .filter({ Self.contains(path: path, in: $0.mountPath) })
                 .max(by: { $0.mountPath.count < $1.mountPath.count })
@@ -155,7 +162,10 @@ public actor FileChangeWatcher {
                 statuses[originalPath] = .unavailable
                 continue
             }
-            guard scope.isObservable, let stream = streams[scope.volumeID] else {
+            guard scope.isObservable,
+                  let stream = streams[scope.volumeID],
+                  stream.watchedPaths.contains(path)
+            else {
                 statuses[originalPath] = .unavailable
                 continue
             }
@@ -186,9 +196,12 @@ public actor FileChangeWatcher {
 
     private func poll() {
         let observedAt = Date()
-        var streamsToRestart: [String] = []
+        var streamsToRestart: Set<String> = []
+        var buffer = Array(
+            repeating: DMFileChangeEvent(),
+            count: Self.eventBufferCapacity
+        )
         for stream in Array(streams.values) {
-            var buffer = Array(repeating: DMFileChangeEvent(), count: 4_096)
             var hadGap: Int32 = 0
             let count = Int(dm_fsevent_watcher_drain(
                 stream.pointer,
@@ -198,7 +211,7 @@ public actor FileChangeWatcher {
             ))
             if hadGap != 0 {
                 gapObservedAt[stream.volumeID] = observedAt
-                streamsToRestart.append(stream.volumeID)
+                streamsToRestart.insert(stream.volumeID)
             }
             history.append(contentsOf: buffer.prefix(max(0, count)).compactMap { raw in
                 var raw = raw
@@ -211,13 +224,13 @@ public actor FileChangeWatcher {
                 )
             })
         }
-        if history.count > 10_000 {
-            let overflow = history.count - 10_000
+        if history.count > Self.maximumHistoryCount {
+            let overflow = history.count - Self.maximumHistoryCount
             let affectedVolumes = Set(history.prefix(overflow).map(\.volumeID))
             history.removeFirst(overflow)
             for volumeID in affectedVolumes {
                 gapObservedAt[volumeID] = observedAt
-                streamsToRestart.append(volumeID)
+                streamsToRestart.insert(volumeID)
             }
         }
         for volumeID in streamsToRestart {
@@ -228,12 +241,67 @@ public actor FileChangeWatcher {
     private func restartStream(volumeID: String) {
         guard let old = streams.removeValue(forKey: volumeID) else { return }
         dm_fsevent_watcher_destroy(old.pointer)
-        streams[volumeID] = makeStream(volumeID: volumeID, mountPath: old.mountPath)
+        streams[volumeID] = makeStream(
+            volumeID: volumeID,
+            mountPath: old.mountPath,
+            watchedPaths: old.watchedPaths
+        )
     }
 
-    private func makeStream(volumeID: String, mountPath: String) -> Stream? {
+    private func requestedWatchPaths(for paths: [String]) -> [String: Set<String>] {
+        var requested: [String: Set<String>] = [:]
+        for path in paths {
+            guard let scope = volumeScopes
+                .filter({ $0.isObservable && Self.contains(path: path, in: $0.mountPath) })
+                .max(by: { $0.mountPath.count < $1.mountPath.count })
+            else { continue }
+            requested[scope.volumeID, default: []].insert(path)
+        }
+        return requested.mapValues { paths in
+            Set(paths.sorted().prefix(Self.maximumWatchedPathsPerVolume))
+        }
+    }
+
+    private func reconcileStreams(with requestedByVolume: [String: Set<String>]) {
+        let removedVolumeIDs = streams.keys.filter { requestedByVolume[$0]?.isEmpty != false }
+        for volumeID in removedVolumeIDs {
+            guard let stream = streams.removeValue(forKey: volumeID) else { continue }
+            dm_fsevent_watcher_destroy(stream.pointer)
+            history.removeAll { $0.volumeID == volumeID }
+            gapObservedAt.removeValue(forKey: volumeID)
+        }
+
+        for (volumeID, watchedPaths) in requestedByVolume where !watchedPaths.isEmpty {
+            guard let scope = volumeScopes.first(where: { $0.volumeID == volumeID }) else { continue }
+            if streams[volumeID]?.watchedPaths == watchedPaths { continue }
+            guard let replacement = makeStream(
+                volumeID: volumeID,
+                mountPath: scope.mountPath,
+                watchedPaths: watchedPaths
+            ) else { continue }
+            let old = streams.updateValue(replacement, forKey: volumeID)
+            if let old {
+                dm_fsevent_watcher_destroy(old.pointer)
+            }
+            history.removeAll { change in
+                change.volumeID == volumeID && !watchedPaths.contains { watchedPath in
+                    Self.contains(path: change.path, in: watchedPath)
+                }
+            }
+        }
+    }
+
+    private func makeStream(
+        volumeID: String,
+        mountPath: String,
+        watchedPaths: Set<String>
+    ) -> Stream? {
         let path = Self.canonicalPath(mountPath)
-        guard let pointer = path.withCString({ dm_fsevent_watcher_create($0) }) else {
+        let retainedPaths = watchedPaths.sorted().map { $0 as NSString }
+        let pointers = retainedPaths.map(\.utf8String)
+        guard let pointer = pointers.withUnsafeBufferPointer({ buffer in
+            dm_fsevent_watcher_create_paths(buffer.baseAddress, Int32(buffer.count))
+        }) else {
             return nil
         }
         guard dm_fsevent_watcher_start(pointer) != 0 else {
@@ -243,6 +311,7 @@ public actor FileChangeWatcher {
         return Stream(
             volumeID: volumeID,
             mountPath: path,
+            watchedPaths: watchedPaths,
             pointer: pointer,
             startedAt: Date()
         )
@@ -251,7 +320,6 @@ public actor FileChangeWatcher {
     nonisolated private static func canonicalPath(_ path: String) -> String {
         URL(fileURLWithPath: path)
             .standardizedFileURL
-            .resolvingSymlinksInPath()
             .path
     }
 
