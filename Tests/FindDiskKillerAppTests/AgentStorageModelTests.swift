@@ -829,7 +829,7 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
     let defaults = UserDefaults(suiteName: suiteName)!
     defer { defaults.removePersistentDomain(forName: suiteName) }
     let probe = AgentStorageScanProbe(returnsAfterCancellation: true)
-    let model = AgentStorageModel(defaults: defaults) { configuration in
+    let model = AgentStorageModel(defaults: defaults, cacheURL: nil) { configuration in
         try await probe.scan(configuration)
     }
 
