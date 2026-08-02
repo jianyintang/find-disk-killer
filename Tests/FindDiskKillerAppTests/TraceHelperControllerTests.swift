@@ -341,7 +341,21 @@ func healthyHelperDoesNotReregisterAcrossAppBuilds() async throws {
 }
 
 @Test @MainActor
-func automaticRepairRunsOnlyOnceForTheCurrentBuild() async {
+func automaticRepairReplacesAnEndpointRejectedByTheCurrentCodeRequirement() async throws {
+    let service = FakeTraceHelperService(status: .enabled)
+    let transport = FakeTraceHelperTransport([])
+    service.onUnregister = { transport.append([.unavailable, .ready]) }
+    let controller = makeController(service: service, transport: transport)
+
+    try await controller.prepareForTracing(recoveryMode: .automatic)
+
+    #expect(service.unregisterCount == 1)
+    #expect(service.registerCount == 2)
+    #expect(controller.state == .ready)
+}
+
+@Test @MainActor
+func automaticReplacementRunsOnlyOnceForTheCurrentBuild() async {
     let service = FakeTraceHelperService(status: .enabled)
     let store = FakeRegistrationStore()
     let firstController = makeController(
@@ -354,7 +368,7 @@ func automaticRepairRunsOnlyOnceForTheCurrentBuild() async {
         try await firstController.prepareForTracing(recoveryMode: .automatic)
     }
     let unregisterCount = service.unregisterCount
-    #expect(unregisterCount == 0)
+    #expect(unregisterCount == 1)
 
     let secondController = makeController(
         service: service,

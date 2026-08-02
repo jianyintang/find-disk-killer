@@ -623,13 +623,12 @@ final class TraceHelperController {
             return
         } catch TraceHelperClientError.approvalRequired {
             throw TraceHelperClientError.approvalRequired
-        } catch {
-            guard recoveryMode == .userInitiated else {
-                state = .repairAvailable
-                throw TraceHelperClientError.repairRequired
-            }
-        }
+        } catch {}
 
+        // An older helper can fail the current code-signing requirement before
+        // it can report a protocol mismatch. In that case an in-place register
+        // leaves the stale endpoint running, so complete the transactional
+        // replacement on the first automatic repair attempt as well.
         do {
             try await replaceOutdatedService()
             if service.status == .requiresApproval {
