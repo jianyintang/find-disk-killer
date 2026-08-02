@@ -140,7 +140,7 @@ struct RootView: View {
                 nodeRuntime: claudeNodeRuntime
             )
         case .about:
-            AboutPage()
+            AboutPage(updates: updates)
         case .monitoring:
             EmptyView()
         }

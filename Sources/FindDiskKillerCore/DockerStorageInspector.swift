@@ -95,22 +95,30 @@ struct DockerStorageInspector: Sendable {
             let isDangling = referencesAreVerified && references.isEmpty
             let canRemove = referencesAreVerified && containerCount == 0
             let title = references.first ?? String(id.prefix(19))
-            var detailParts = [
-                "独占 \(formatBytes(unique))",
-                "共享 \(formatBytes(shared))",
-                "总大小 \(formatBytes(virtual))"
+            var detailLocalization = [
+                StorageLocalizedText("独占 %@", arguments: [formatBytes(unique)]),
+                StorageLocalizedText("共享 %@", arguments: [formatBytes(shared)]),
+                StorageLocalizedText("总大小 %@", arguments: [formatBytes(virtual)])
             ]
-            if references.count > 1 { detailParts.append("\(references.count) 个仓库引用") }
+            if references.count > 1 {
+                detailLocalization.append(StorageLocalizedText(
+                    "%@ 个仓库引用",
+                    arguments: [String(references.count)]
+                ))
+            }
             if let containerCount {
-                detailParts.append("\(containerCount) 个容器")
+                detailLocalization.append(StorageLocalizedText(
+                    "%@ 个容器",
+                    arguments: [String(containerCount)]
+                ))
             } else {
-                detailParts.append("容器引用未知")
+                detailLocalization.append(StorageLocalizedText("容器引用未知"))
             }
             return StorageResourceNode(
                 id: "docker.image.\(id)",
                 kind: .dockerImage,
                 title: title,
-                detail: detailParts.joined(separator: " · "),
+                detailLocalization: detailLocalization,
                 symbol: "shippingbox.fill",
                 allocatedBytes: unique,
                 logicalBytes: virtual,
@@ -147,17 +155,19 @@ struct DockerStorageInspector: Sendable {
             let bytes = parseSize(volume.size) ?? 0
             let linkCount = Int(volume.links)
             let canRemove = linkCount == 0
-            let detail: String
+            let detailLocalization: StorageLocalizedText
             if let linkCount {
-                detail = linkCount > 0 ? "被 \(linkCount) 个容器引用" : "当前未被容器引用"
+                detailLocalization = linkCount > 0
+                    ? StorageLocalizedText("被 %@ 个容器引用", arguments: [String(linkCount)])
+                    : StorageLocalizedText("当前未被容器引用")
             } else {
-                detail = "容器引用关系未知"
+                detailLocalization = StorageLocalizedText("容器引用关系未知")
             }
             return StorageResourceNode(
                 id: "docker.volume.\(volume.name)",
                 kind: .dockerVolume,
                 title: volume.name,
-                detail: detail,
+                detailLocalization: [detailLocalization],
                 symbol: "externaldrive.fill",
                 allocatedBytes: bytes,
                 logicalBytes: bytes,
@@ -330,7 +340,10 @@ struct DockerStorageInspector: Sendable {
             id: id,
             kind: kind,
             title: title,
-            detail: "\(children.count) 项 · Docker Engine 报告，组间可能共享底层数据",
+            detailLocalization: [
+                StorageLocalizedText("%@ 项", arguments: [String(children.count)]),
+                StorageLocalizedText("Docker Engine 报告，组间可能共享底层数据")
+            ],
             symbol: symbol,
             allocatedBytes: children.reduce(UInt64.zero) { sumClamped($0, $1.allocatedBytes) },
             logicalBytes: children.reduce(UInt64.zero) { sumClamped($0, $1.logicalBytes) },

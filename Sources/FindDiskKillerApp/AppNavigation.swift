@@ -4,7 +4,6 @@ import Observation
 enum SettingsPane: String, CaseIterable, Hashable, Identifiable, Sendable {
     case general
     case dataAndPrivacy
-    case softwareUpdate
 
     var id: String { rawValue }
 
@@ -12,7 +11,6 @@ enum SettingsPane: String, CaseIterable, Hashable, Identifiable, Sendable {
         switch self {
         case .general: L10n.text("通用")
         case .dataAndPrivacy: L10n.text("数据与隐私")
-        case .softwareUpdate: L10n.text("软件更新")
         }
     }
 }

@@ -2,14 +2,17 @@ import AppKit
 import SwiftUI
 
 struct AboutPage: View {
+    let updates: UpdateCoordinator
     private let links: BrandLinks
     private let openURL: @MainActor (URL) -> Bool
     @State private var failedURL: URL?
 
     init(
+        updates: UpdateCoordinator,
         links: BrandLinks = .current(),
         openURL: @escaping @MainActor (URL) -> Bool = { NSWorkspace.shared.open($0) }
     ) {
+        self.updates = updates
         self.links = links
         self.openURL = openURL
     }
@@ -19,6 +22,7 @@ struct AboutPage: View {
             VStack(alignment: .leading, spacing: 28) {
                 brandHeader
                 Divider()
+                AboutUpdateSection(updates: updates)
                 VStack(spacing: 0) {
                     ExternalBrandLinkRow(
                         title: L10n.text("官网"),
@@ -80,7 +84,7 @@ struct AboutPage: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("FindDiskKiller")
                     .font(.title.bold())
-                Text(versionDescription)
+                Text(AppVersionDescription.localized)
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.secondary)
                 Text(L10n.text("在本机发现持续写盘、异常负载和磁盘健康信号。"))
@@ -111,13 +115,6 @@ struct AboutPage: View {
         }
     }
 
-    private var versionDescription: String {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
-            as? String ?? "-"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion")
-            as? String ?? "-"
-        return L10n.format("版本 %@（%@）", version, build)
-    }
 }
 
 private struct ExternalBrandLinkRow: View {

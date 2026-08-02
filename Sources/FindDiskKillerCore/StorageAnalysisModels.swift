@@ -402,11 +402,23 @@ public enum StorageResourceCleanupTarget: Codable, Hashable, Sendable {
     case podmanVolume(name: String)
 }
 
+public struct StorageLocalizedText: Codable, Equatable, Sendable {
+    public let key: String
+    public let arguments: [String]
+
+    public init(_ key: String, arguments: [String] = []) {
+        self.key = key
+        self.arguments = arguments
+    }
+}
+
 public struct StorageResourceNode: Identifiable, Codable, Equatable, Sendable {
     public let id: String
     public let kind: StorageResourceKind
     public let title: String
     public let detail: String?
+    public let titleLocalization: StorageLocalizedText?
+    public let detailLocalization: [StorageLocalizedText]?
     public let symbol: String
     public let allocatedBytes: UInt64
     public let logicalBytes: UInt64
@@ -422,6 +434,8 @@ public struct StorageResourceNode: Identifiable, Codable, Equatable, Sendable {
         kind: StorageResourceKind,
         title: String,
         detail: String? = nil,
+        titleLocalization: StorageLocalizedText? = nil,
+        detailLocalization: [StorageLocalizedText]? = nil,
         symbol: String,
         allocatedBytes: UInt64,
         logicalBytes: UInt64 = 0,
@@ -436,6 +450,8 @@ public struct StorageResourceNode: Identifiable, Codable, Equatable, Sendable {
         self.kind = kind
         self.title = title
         self.detail = detail
+        self.titleLocalization = titleLocalization
+        self.detailLocalization = detailLocalization
         self.symbol = symbol
         self.allocatedBytes = allocatedBytes
         self.logicalBytes = logicalBytes

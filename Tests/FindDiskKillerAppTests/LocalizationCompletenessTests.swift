@@ -1,4 +1,5 @@
 import Foundation
+import FindDiskKillerCore
 import Testing
 @testable import FindDiskKillerApp
 
@@ -37,6 +38,52 @@ import Testing
     )
 }
 
+@Test func coreUIStringLiteralsResolveWithoutChineseInEnglish() throws {
+    let coreSources = repositoryRoot
+        .appendingPathComponent("Sources/FindDiskKillerCore", isDirectory: true)
+    let files = try swiftFiles(in: coreSources)
+    var unresolved: [String] = []
+
+    for file in files {
+        let source = try String(contentsOf: file, encoding: .utf8)
+        for literal in swiftStringLiterals(in: source) where literal.containsCJKUnifiedIdeograph {
+            if literal.contains(#"\("#) {
+                if literal != #"\(name)（可能关联）"# {
+                    unresolved.append("\(relativePath(file)): dynamic text must use StorageLocalizedText: \(literal)")
+                }
+                continue
+            }
+            let english = L10n.text(literal, language: .english)
+            if english.containsCJKUnifiedIdeograph {
+                unresolved.append("\(relativePath(file)): \(literal)")
+            }
+        }
+    }
+
+    #expect(
+        unresolved.isEmpty,
+        "Core UI text without an English resolution:\n\(unresolved.sorted().joined(separator: "\n"))"
+    )
+}
+
+@Test func structuredStorageTextFormatsWithoutLeakingChineseKeys() {
+    let descriptors = [
+        StorageLocalizedText("独占 %@", arguments: ["5.16 GB"]),
+        StorageLocalizedText("%@ 个仓库引用", arguments: ["2"]),
+        StorageLocalizedText("被 %@ 个容器引用", arguments: ["3"]),
+        StorageLocalizedText("%@ 宿主机物理存储", arguments: ["Docker"])
+    ]
+
+    for descriptor in descriptors {
+        let localized = L10n.format(
+            descriptor.key,
+            arguments: descriptor.arguments,
+            language: .english
+        )
+        #expect(!localized.containsCJKUnifiedIdeograph)
+    }
+}
+
 private let repositoryRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -54,6 +101,10 @@ private func swiftFiles(in root: URL) throws -> [URL] {
         guard let url = item as? URL, url.pathExtension == "swift" else { return nil }
         return url
     }
+}
+
+private func relativePath(_ file: URL) -> String {
+    file.path.replacingOccurrences(of: repositoryRoot.path + "/", with: "")
 }
 
 private func swiftStringLiterals(in source: String) -> [String] {

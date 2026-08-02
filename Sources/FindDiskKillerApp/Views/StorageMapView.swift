@@ -2973,7 +2973,7 @@ private struct StorageSourceDetailView: View {
             .clipShape(RoundedRectangle(cornerRadius: 7))
 
             if let diagnostic = result.inventoryDiagnostic {
-                Label(diagnostic, systemImage: "exclamationmark.triangle")
+                Label(L10n.text(diagnostic), systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }

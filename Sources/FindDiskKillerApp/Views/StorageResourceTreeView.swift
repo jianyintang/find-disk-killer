@@ -79,7 +79,7 @@ struct StorageResourceTreeView: View {
                 .frame(width: 24, height: 24)
                 .background(riskColor(row.node.risk).opacity(0.09), in: RoundedRectangle(cornerRadius: 5))
             VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.text(row.node.title))
+                Text(localizedTitle(for: row.node))
                     .font(.callout.weight(row.depth == 0 ? .semibold : .medium))
                     .lineLimit(1)
                 Text(detail(for: row.node))
@@ -163,10 +163,23 @@ struct StorageResourceTreeView: View {
     }
 
     private func detail(for node: StorageResourceNode) -> String {
+        if let localization = node.detailLocalization {
+            return localization.map(localizedText).joined(separator: " · ")
+        }
         if let detail = node.detail, !detail.isEmpty {
             return localizedDetail(detail)
         }
         return categoryDescription(node.title)
+    }
+
+    private func localizedTitle(for node: StorageResourceNode) -> String {
+        node.titleLocalization.map(localizedText) ?? L10n.text(node.title)
+    }
+
+    private func localizedText(_ text: StorageLocalizedText) -> String {
+        text.arguments.isEmpty
+            ? L10n.text(text.key)
+            : L10n.format(text.key, arguments: text.arguments)
     }
 
     private func localizedDetail(_ detail: String) -> String {
@@ -369,6 +382,8 @@ enum StorageResourceTreeProjection {
             kind: node.kind,
             title: node.title,
             detail: node.detail,
+            titleLocalization: node.titleLocalization,
+            detailLocalization: node.detailLocalization,
             symbol: node.symbol,
             allocatedBytes: node.allocatedBytes,
             logicalBytes: node.logicalBytes,
@@ -501,6 +516,8 @@ enum StorageResourceTreeProjection {
             kind: node.kind,
             title: node.title,
             detail: node.detail,
+            titleLocalization: node.titleLocalization,
+            detailLocalization: node.detailLocalization,
             symbol: node.symbol,
             allocatedBytes: node.allocatedBytes,
             logicalBytes: node.logicalBytes,

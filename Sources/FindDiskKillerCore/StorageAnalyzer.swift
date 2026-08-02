@@ -831,10 +831,14 @@ public actor StorageAnalyzer {
         var nodes = [StorageResourceNode(
             id: "\(sourceID.rawValue).physical-storage",
             kind: .dockerStorage,
-            title: "\(sourceTitle) 宿主机物理存储",
+            title: sourceTitle,
             detail: isPodman
                 ? "Podman machine、容器层与宿主机状态"
                 : "Docker Desktop 虚拟磁盘、维护副本、日志与状态",
+            titleLocalization: StorageLocalizedText(
+                "%@ 宿主机物理存储",
+                arguments: [sourceTitle]
+            ),
             symbol: "internaldrive.fill",
             allocatedBytes: physicalBytes,
             logicalBytes: physicalNodes.reduce(UInt64.zero) {
@@ -850,8 +854,12 @@ public actor StorageAnalyzer {
             nodes.append(StorageResourceNode(
                 id: "\(sourceID.rawValue).engine-objects",
                 kind: .dockerStorage,
-                title: "\(sourceTitle) Engine 资源",
+                title: sourceTitle,
                 detail: "提供者报告的镜像、容器、Volume 与构建缓存；对象可能共享底层数据",
+                titleLocalization: StorageLocalizedText(
+                    "%@ Engine 资源",
+                    arguments: [sourceTitle]
+                ),
                 symbol: "point.3.connected.trianglepath.dotted",
                 allocatedBytes: 0,
                 logicalBytes: 0,
@@ -886,6 +894,8 @@ public actor StorageAnalyzer {
                 kind: node.kind,
                 title: node.title,
                 detail: node.detail,
+                titleLocalization: node.titleLocalization,
+                detailLocalization: node.detailLocalization,
                 symbol: node.symbol,
                 allocatedBytes: node.allocatedBytes,
                 logicalBytes: node.logicalBytes,
@@ -1286,7 +1296,10 @@ public actor StorageAnalyzer {
                 id: "workspace.parent.\(stablePathHash(parentPath))",
                 kind: .location,
                 title: URL(fileURLWithPath: parentPath).lastPathComponent,
-                detail: "上级目录 · \(parentPath)",
+                detailLocalization: [StorageLocalizedText(
+                    "上级目录 · %@",
+                    arguments: [parentPath]
+                )],
                 symbol: "folder.fill",
                 allocatedBytes: sortedChildren.reduce(UInt64.zero) {
                     $0.addingClamped($1.allocatedBytes)
