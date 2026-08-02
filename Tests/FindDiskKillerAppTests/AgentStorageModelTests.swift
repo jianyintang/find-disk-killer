@@ -974,7 +974,10 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
     defer { defaults.removePersistentDomain(forName: suiteName) }
     let initial = agentStorageProviderSnapshot(codexBytes: 100, claudeBytes: 200)
     let replacement = agentStorageProviderSnapshot(codexBytes: 150, claudeBytes: nil)
-    let probe = AgentStorageProviderRefreshProbe(result: replacement)
+    let probe = AgentStorageProviderRefreshProbe(
+        result: replacement,
+        holdsPartialResult: true
+    )
     let model = AgentStorageModel(
         defaults: defaults,
         initialSnapshot: initial,
@@ -993,6 +996,7 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
     #expect(!model.reanalyzingProviders.contains(.claude))
     #expect(model.progressByProvider[.claude] == nil)
 
+    await probe.finishPartialScan()
     try await waitUntil { !model.reanalyzingProviders.contains(.codex) }
     #expect(await probe.providerSets == [Set([.codex])])
     #expect(model.snapshot?.providers.first { $0.provider == .codex }?.exclusiveBytes == 150)
@@ -1222,13 +1226,17 @@ private actor AgentStorageProviderRefreshProbe {
     private(set) var providerSets: [Set<AgentStorageProvider>] = []
     private let result: AgentStorageSnapshot
     private let partialDelay: Duration
+    private let holdsPartialResult: Bool
+    private var partialContinuation: CheckedContinuation<Void, Never>?
 
     init(
         result: AgentStorageSnapshot,
-        partialDelay: Duration = .milliseconds(80)
+        partialDelay: Duration = .milliseconds(80),
+        holdsPartialResult: Bool = false
     ) {
         self.result = result
         self.partialDelay = partialDelay
+        self.holdsPartialResult = holdsPartialResult
     }
 
     func scan(
@@ -1245,9 +1253,18 @@ private actor AgentStorageProviderRefreshProbe {
                 provider: provider,
                 processedBytes: 40
             ))
-            try await Task.sleep(for: partialDelay)
+            if holdsPartialResult {
+                await withCheckedContinuation { partialContinuation = $0 }
+            } else {
+                try await Task.sleep(for: partialDelay)
+            }
         }
         return result
+    }
+
+    func finishPartialScan() {
+        partialContinuation?.resume()
+        partialContinuation = nil
     }
 }
 
