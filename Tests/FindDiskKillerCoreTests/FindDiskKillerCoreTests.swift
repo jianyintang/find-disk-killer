@@ -2528,6 +2528,7 @@ private final class BlockingProcessNetworkSource: @unchecked Sendable {
         physicalDiskBSDNames: []
     )
     await watcher.configure(volumes: [volume])
+    let baseline = await watcher.recentChanges(for: [directory.path])
     try await Task.sleep(for: .milliseconds(250))
     try Data("change".utf8).write(to: directory.appendingPathComponent("changed.txt"))
     let clock = ContinuousClock()
@@ -2560,6 +2561,7 @@ private final class BlockingProcessNetworkSource: @unchecked Sendable {
     let replacementResult = await watcher.recentChanges(for: [directory.path])
     await watcher.configure(volumes: [])
 
+    #expect(baseline.observedSince != nil)
     #expect(result.observedSince != nil)
     #expect(result.latestByPath[directory.path] != nil)
     #expect(!result.hasCoverageGap)
@@ -2584,6 +2586,28 @@ private final class BlockingProcessNetworkSource: @unchecked Sendable {
     #expect(before.observedSince != nil)
     #expect(whileSecondSessionIsActive.observedSince == before.observedSince)
     #expect(afterAllSessionsEnd.observedSince == nil)
+}
+
+@Test func fileChangeWatcherScopesStreamsToRequestedDirectories() async throws {
+    let watcher = FileChangeWatcher()
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("find-disk-killer-fsevents-scope-\(UUID().uuidString)", isDirectory: true)
+    let first = root.appendingPathComponent("first", isDirectory: true)
+    let second = root.appendingPathComponent("second", isDirectory: true)
+    try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let volumeID = UUID().uuidString
+    await watcher.configure(volumes: [fixtureVolume(id: volumeID, mountPath: root.path)])
+
+    _ = await watcher.recentChanges(for: [first.path])
+    let initialPaths = await watcher.watchedPathsForTesting(volumeID: volumeID)
+    _ = await watcher.recentChanges(for: [first.path, second.path])
+    let expandedPaths = await watcher.watchedPathsForTesting(volumeID: volumeID)
+
+    #expect(initialPaths == [first.path])
+    #expect(expandedPaths == [first.path, second.path])
+    #expect(!expandedPaths.contains(root.path))
 }
 
 @Test func recentFileChangeRetentionKeepsConfirmedChangesForTheFullWindow() {

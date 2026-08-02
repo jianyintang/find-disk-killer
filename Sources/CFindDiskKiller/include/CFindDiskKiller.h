@@ -88,6 +88,10 @@ int dm_file_descriptor_kind(
     int32_t file_descriptor
 );
 DMFSEventWatcher *dm_fsevent_watcher_create(const char *root_path);
+DMFSEventWatcher *dm_fsevent_watcher_create_paths(
+    const char *const root_paths[],
+    int path_count
+);
 int dm_fsevent_watcher_start(DMFSEventWatcher *watcher);
 int dm_fsevent_watcher_drain(
     DMFSEventWatcher *watcher,
