@@ -364,10 +364,13 @@ enum StorageResourceTreeProjection {
 
     private static func presentationNode(_ rawNode: StorageResourceNode) -> StorageResourceNode {
         let node = migratedRepositoryNode(rawNode)
-        let children = repositoryParentGroups(node.children.map(presentationNode))
+        let mappedChildren = node.children.map(presentationNode)
+        let groupedChildren = node.id.hasPrefix("workspace.parent.")
+            ? mappedChildren
+            : repositoryParentGroups(mappedChildren)
         let presentedChildren: [StorageResourceNode]
-        if children.count == 1,
-           let child = children.first,
+        if groupedChildren.count == 1,
+           let child = groupedChildren.first,
            child.children.isEmpty,
            child.cleanupTarget == nil,
            child.allocatedBytes == node.allocatedBytes,
@@ -375,7 +378,7 @@ enum StorageResourceTreeProjection {
            child.entryCount == node.entryCount {
             presentedChildren = []
         } else {
-            presentedChildren = children
+            presentedChildren = groupedChildren
         }
         return StorageResourceNode(
             id: node.id,

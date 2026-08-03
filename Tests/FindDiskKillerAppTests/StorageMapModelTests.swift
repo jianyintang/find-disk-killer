@@ -1654,6 +1654,59 @@ import Testing
     #expect(index.defaultExpandedIDs.contains(parent.id))
 }
 
+@Test func storageResourceTreeDoesNotRegroupRepositoriesInsideWorkspaceParent() throws {
+    func repository(_ id: String, title: String, path: String) -> StorageResourceNode {
+        StorageResourceNode(
+            id: id,
+            kind: .repository,
+            title: title,
+            detail: "主仓库 · main · \(path)",
+            symbol: "folder.badge.gearshape",
+            allocatedBytes: 1,
+            risk: .protectedUserData,
+            evidence: .fileSystemAllocated,
+            isProtected: true,
+            cleanupTarget: .trashRepository(
+                path: path,
+                identity: StoragePathIdentity(device: 1, inode: 1)
+            )
+        )
+    }
+
+    let parent = StorageResourceNode(
+        id: "workspace.parent.code",
+        kind: .location,
+        title: "code",
+        detail: "上级目录 · /Volumes/Workspace/code",
+        symbol: "folder.fill",
+        allocatedBytes: 2,
+        risk: .environmentOrRuntime,
+        evidence: .fileSystemAllocated,
+        isProtected: false,
+        children: [
+            repository(
+                "workspace.repository.alpha",
+                title: "alpha",
+                path: "/Volumes/Workspace/code/alpha"
+            ),
+            repository(
+                "workspace.repository.beta",
+                title: "beta",
+                path: "/Volumes/Workspace/code/beta"
+            )
+        ]
+    )
+
+    let index = StorageResourceTreeIndex(nodes: [parent])
+    let presentedParent = try #require(index.nodes.first)
+
+    #expect(presentedParent.children.map(\.id) == [
+        "workspace.repository.alpha",
+        "workspace.repository.beta"
+    ])
+    #expect(index.defaultRows.map(\.depth) == [0, 1, 1])
+}
+
 @Test func storageResourceTreeExpandsContainerObjectGroupsByDefault() {
     let image = StorageResourceNode(
         id: "docker.image.sha256:test",
