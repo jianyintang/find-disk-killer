@@ -124,48 +124,50 @@ enum HistoryReportExporter {
         return data as Data
     }
 
-    static func pdfText(for report: HistoryReport) -> String {
+    static func pdfText(
+        for report: HistoryReport,
+        language: AppLanguage = L10n.effectiveLanguage
+    ) -> String {
         let dateFormatter = ISO8601DateFormatter()
         dateFormatter.formatOptions = [.withInternetDateTime]
-        let coverage = String(format: "%.1f%%", report.summary.coverage * 100)
-        let diskCoverage = String(format: "%.1f%%", report.summary.diskCoverage * 100)
-        let networkCoverage = String(format: "%.1f%%", report.summary.networkCoverage * 100)
-        let cpuCoverage = String(format: "%.1f%%", report.summary.cpuCoverage * 100)
+        let coverage = L10n.percent(report.summary.coverage, fractionDigits: 1, language: language)
+        let diskCoverage = L10n.percent(report.summary.diskCoverage, fractionDigits: 1, language: language)
+        let networkCoverage = L10n.percent(report.summary.networkCoverage, fractionDigits: 1, language: language)
+        let cpuCoverage = L10n.percent(report.summary.cpuCoverage, fractionDigits: 1, language: language)
         let applications = report.applications.prefix(12).enumerated().map { index, app in
             "\(index + 1). \(app.name)  "
-                + "write \(applicationMetric(app.writeBytes, .write, app))  "
-                + "read \(applicationMetric(app.readBytes, .read, app))"
+                + "\(L10n.text("写入", language: language)) \(applicationMetric(app.writeBytes, .write, app, language: language))  "
+                + "\(L10n.text("读取", language: language)) \(applicationMetric(app.readBytes, .read, app, language: language))"
         }.joined(separator: "\n")
         return """
-        FindDiskKiller - History Analysis
+        FindDiskKiller - \(L10n.text("历史分析", language: language))
 
-        Range: \(dateFormatter.string(from: report.start)) to \(dateFormatter.string(from: report.end))
-        Generated: \(dateFormatter.string(from: Date()))
-        Coverage: \(coverage)
-        Disk coverage: \(diskCoverage)
-        CPU coverage: \(cpuCoverage)
-        Network coverage: \(networkCoverage)
+        \(L10n.text("分析周期", language: language)): \(dateFormatter.string(from: report.start)) - \(dateFormatter.string(from: report.end))
+        \(L10n.text("数据覆盖", language: language)): \(coverage)
+        \(L10n.text("磁盘 I/O", language: language)) · \(L10n.text("数据覆盖", language: language)): \(diskCoverage)
+        CPU · \(L10n.text("数据覆盖", language: language)): \(cpuCoverage)
+        \(L10n.text("网络", language: language)) · \(L10n.text("数据覆盖", language: language)): \(networkCoverage)
 
-        Physical disk writes: \(report.summary.diskObservedSeconds > 0
+        \(L10n.text("物理写入", language: language)): \(report.summary.diskObservedSeconds > 0
             ? ByteRateFormatter.bytes(report.summary.diskWriteBytes)
-            : "Unavailable")
-        Physical disk reads: \(report.summary.diskObservedSeconds > 0
+            : L10n.text("不可用", language: language))
+        \(L10n.text("物理读取", language: language)): \(report.summary.diskObservedSeconds > 0
             ? ByteRateFormatter.bytes(report.summary.diskReadBytes)
-            : "Unavailable")
-        Average CPU: \(report.summary.averageCPUPercent.map(PercentFormatter.cpu) ?? "Unavailable")
-        Network transfer: \(report.summary.networkObservedSeconds > 0
+            : L10n.text("不可用", language: language))
+        \(L10n.text("平均 CPU", language: language)): \(report.summary.averageCPUPercent.map(PercentFormatter.cpu) ?? L10n.text("不可用", language: language))
+        \(L10n.text("网络传输", language: language)): \(report.summary.networkObservedSeconds > 0
             ? ByteRateFormatter.bytes(
                 report.summary.networkReceiveBytes + report.summary.networkSendBytes
             )
-            : "Unavailable")
+            : L10n.text("不可用", language: language))
 
-        Leading applications (logical activity)
-        \(applications.isEmpty ? "No application detail for this period." : applications)
+        \(L10n.text("主要应用", language: language))
+        \(applications.isEmpty ? L10n.text("这个周期还没有应用级活动。", language: language) : applications)
 
-        Data quality
-        Findings and comparisons are based only on covered intervals. Missing time is not filled with zeroes.
+        \(L10n.text("数据质量", language: language))
+        \(L10n.text("上一周期数据不足；当前结论仅基于已覆盖时间，不会用零值补齐缺口。", language: language))
 
-        Generated locally on this Mac. This file contains aggregate resource statistics and application names.
+        \(L10n.text("导出包含聚合资源统计和应用名称；请选择可信的位置。", language: language))
         """
     }
 
@@ -184,10 +186,11 @@ enum HistoryReportExporter {
     private static func applicationMetric(
         _ value: UInt64,
         _ metric: HistoryApplicationMetricSet,
-        _ application: HistoryApplicationReport
+        _ application: HistoryApplicationReport,
+        language: AppLanguage
     ) -> String {
         application.unavailableMetrics.contains(metric)
-            ? "Unavailable"
+            ? L10n.text("不可用", language: language)
             : ByteRateFormatter.bytes(value)
     }
 }

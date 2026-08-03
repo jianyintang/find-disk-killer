@@ -55,7 +55,7 @@ final class LoginItemSettingsModel {
             effectiveStatus = service.status
             desiredEnabled = effectiveStatus == .enabled || effectiveStatus == .requiresApproval
         } catch {
-            effectiveStatus = .failed(error.localizedDescription)
+            effectiveStatus = .failed(L10n.errorDescription(error))
             desiredEnabled = !value
         }
     }

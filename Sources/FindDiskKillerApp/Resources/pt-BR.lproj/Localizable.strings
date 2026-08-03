@@ -950,3 +950,8 @@
 "Codex 官方删除调用失败" = "Official Codex Delete Call Failed";
 "Codex 聊天身份或父子关系已变化" = "The Codex chat identity or parent relationship changed";
 "所有 Codex 官方执行器均失败：%@" = "All official Codex runtimes failed: %@";
+"Agent 数据" = "Agent data";
+"Agent 缓存" = "Agent cache";
+"操作失败（%@，错误代码 %@）" = "Falha na operação (%@, erro %@)";
+"Simulators" = "Simuladores";
+"Git Workspaces" = "Espaços de trabalho Git";

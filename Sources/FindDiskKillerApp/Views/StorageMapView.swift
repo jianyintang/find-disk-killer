@@ -742,7 +742,7 @@ private struct StorageMapDiscoveryView: View {
                     Label(L10n.text("刚刚确认"), systemImage: "checkmark.circle.fill")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.green)
-                    Text(candidate.descriptor.title)
+                    Text(L10n.text(candidate.descriptor.title))
                         .font(.headline)
                         .lineLimit(1)
                     Text(discoveryDetail(for: candidate))
@@ -802,7 +802,7 @@ private struct StorageMapDiscoveryView: View {
                                 fallbackSymbol: candidate.descriptor.symbol
                             )
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(candidate.descriptor.title)
+                                Text(L10n.text(candidate.descriptor.title))
                                     .font(.callout.weight(.semibold))
                                     .lineLimit(1)
                                 Text(discoveryDetail(for: candidate))
@@ -1076,7 +1076,7 @@ private struct StorageSourceWorkbenchRow: View {
         HStack(spacing: 12) {
             StorageSourceBrandIcon(sourceID: item.id, fallbackSymbol: item.candidate.descriptor.symbol)
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.candidate.descriptor.title)
+                Text(L10n.text(item.candidate.descriptor.title))
                     .font(.body.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -2243,11 +2243,11 @@ private struct StorageMapSummaryBand: View {
            progress.totalSourceCount > 0 {
             return "\(min(progress.completedSourceCount, progress.totalSourceCount)) / \(progress.totalSourceCount)"
         }
-        return (model.snapshot?.results.count ?? model.candidates.count).formatted()
+        return L10n.number(model.snapshot?.results.count ?? model.candidates.count)
     }
 
     private var entryCount: String {
-        model.presentationEntryCount?.formatted() ?? "—"
+        model.presentationEntryCount.map { L10n.number($0) } ?? "—"
     }
 
     private var safeCleanupValue: String {
@@ -2257,7 +2257,7 @@ private struct StorageMapSummaryBand: View {
 
     private var volumeCount: String {
         let count = model.presentationVolumes.count
-        return count > 0 ? count.formatted() : "—"
+        return count > 0 ? L10n.number(count) : "—"
     }
 
     private var primaryTitle: String {
@@ -2425,9 +2425,7 @@ private struct StorageVolumeComposition: View {
 
     private var usedPercentage: String {
         guard volume.totalCapacity > 0 else { return "0%" }
-        return (Double(volume.usedBytes) / Double(volume.totalCapacity)).formatted(
-            .percent.precision(.fractionLength(0))
-        )
+        return L10n.percent(Double(volume.usedBytes) / Double(volume.totalCapacity))
     }
 
     private var factDivider: some View {
@@ -2627,7 +2625,7 @@ private struct StorageSourceIdentity: View {
                 .foregroundStyle(item.candidate.descriptor.family.color)
                 .frame(width: 24, height: 24)
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.candidate.descriptor.title)
+                Text(L10n.text(item.candidate.descriptor.title))
                     .lineLimit(1)
                 Text(item.candidate.descriptor.family.title)
                     .font(.caption)
@@ -2705,7 +2703,7 @@ private struct StorageSourceDetailView: View {
                     fallbackSymbol: item.candidate.descriptor.symbol
                 )
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(item.candidate.descriptor.title).font(.headline)
+                    Text(L10n.text(item.candidate.descriptor.title)).font(.headline)
                     Text(item.candidate.descriptor.family.title)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -2796,7 +2794,7 @@ private struct StorageSourceDetailView: View {
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .navigationTitle(item.candidate.descriptor.title)
+        .navigationTitle(L10n.text(item.candidate.descriptor.title))
         .task(id: item.resultRevision) { await prepareResourceProjection() }
         .task(id: shouldStartWorkspaceAnalysis) {
             guard shouldStartWorkspaceAnalysis else { return }
@@ -3137,7 +3135,7 @@ private struct StorageSourceDetailView: View {
             .buttonStyle(AppActionButtonStyle(kind: .secondary))
             Button {
                 cleanupReview = StorageCleanupReviewContext(
-                    sourceTitle: item.candidate.descriptor.title,
+                    sourceTitle: L10n.text(item.candidate.descriptor.title),
                     sourceID: item.id,
                     requests: requests,
                     remainingRequestCount: actionableRequestIDs.subtracting(requests.map(\.id)).count

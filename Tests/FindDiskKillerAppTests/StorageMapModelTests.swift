@@ -1497,6 +1497,39 @@ import Testing
     #expect(summary.failedCount == 0)
 }
 
+@Test func customCodexHomeCacheCleanupRevalidatesItsParentAndRecreatesTheRoot() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "FindDiskKiller-custom-codex-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let cache = root.appending(path: "cache", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+    try Data([0x01]).write(to: root.appending(path: "state_5.sqlite"))
+    try Data(repeating: 0x41, count: 4_096).write(to: cache.appending(path: "download.bin"))
+    var value = stat()
+    try #require(stat(cache.path, &value) == 0)
+    let request = StorageCleanupRequest(
+        id: "codex.custom.cache",
+        title: "Codex CLI · cache",
+        displayBytes: 4_096,
+        target: .removePathContents(
+            path: cache.path,
+            identity: StoragePathIdentity(
+                device: UInt64(value.st_dev),
+                inode: UInt64(value.st_ino)
+            ),
+            sourceID: .codex,
+            rootID: "codex.custom.fixture.cache.123"
+        )
+    )
+
+    let summary = await StorageResourceCleanupExecutor().execute([request])
+
+    #expect(summary.succeededCount == 1)
+    #expect(FileManager.default.fileExists(atPath: cache.path))
+    #expect(!FileManager.default.fileExists(atPath: cache.appending(path: "download.bin").path))
+    #expect(FileManager.default.fileExists(atPath: root.appending(path: "state_5.sqlite").path))
+}
+
 @Test func snapshotCacheWriterRejectsAnObsoleteCleanupSnapshot() async throws {
     let cacheURL = FileManager.default.temporaryDirectory
         .appending(path: "FindDiskKiller-snapshot-\(UUID().uuidString).json")

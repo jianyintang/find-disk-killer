@@ -59,7 +59,7 @@ struct ProcessHoverCard: View {
                     GridRow {
                         metric("下载", networkValue(process.currentNetworkReceiveBytesPerSecond), .green)
                         metric("上传", networkValue(process.currentNetworkSendBytesPerSecond), .indigo)
-                        metric("进程", process.memberCount.formatted(), .secondary)
+                        metric("进程", L10n.number(process.memberCount), .secondary)
                     }
                 }
             }

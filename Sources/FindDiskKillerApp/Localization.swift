@@ -95,6 +95,10 @@ enum L10n {
         selectedLanguage == .system ? preferredLanguage : selectedLanguage
     }
 
+    static var locale: Locale {
+        Locale(identifier: effectiveLanguage.localeIdentifier)
+    }
+
     static func text(_ key: String) -> String {
         text(key, language: effectiveLanguage)
     }
@@ -140,11 +144,109 @@ enum L10n {
     static func date(
         _ value: Date,
         date: Date.FormatStyle.DateStyle,
-        time: Date.FormatStyle.TimeStyle
+        time: Date.FormatStyle.TimeStyle,
+        language: AppLanguage = effectiveLanguage
     ) -> String {
-        value.formatted(
+        let resolvedLanguage = language == .system ? preferredLanguage : language
+        return value.formatted(
             Date.FormatStyle(date: date, time: time)
-                .locale(Locale(identifier: effectiveLanguage.localeIdentifier))
+                .locale(Locale(identifier: resolvedLanguage.localeIdentifier))
+        )
+    }
+
+    static func relativeDate(_ value: Date, abbreviated: Bool = false) -> String {
+        let locale = Locale(identifier: effectiveLanguage.localeIdentifier)
+        if abbreviated {
+            return value.formatted(
+                Date.RelativeFormatStyle(presentation: .named, unitsStyle: .abbreviated)
+                    .locale(locale)
+            )
+        }
+        return value.formatted(
+            Date.RelativeFormatStyle(presentation: .named)
+                .locale(locale)
+        )
+    }
+
+    static func duration(
+        seconds: Double,
+        language: AppLanguage = effectiveLanguage
+    ) -> String {
+        let resolvedLanguage = language == .system ? preferredLanguage : language
+        let style = Duration.UnitsFormatStyle(
+            allowedUnits: [.hours, .minutes, .seconds],
+            width: .abbreviated
+        ).locale(Locale(identifier: resolvedLanguage.localeIdentifier))
+        return Duration.seconds(seconds).formatted(style)
+    }
+
+    static func number(
+        _ value: Int,
+        language: AppLanguage = effectiveLanguage
+    ) -> String {
+        let resolvedLanguage = language == .system ? preferredLanguage : language
+        return value.formatted(
+            IntegerFormatStyle<Int>.number.locale(
+                Locale(identifier: resolvedLanguage.localeIdentifier)
+            )
+        )
+    }
+
+    static func number(
+        _ value: UInt64,
+        language: AppLanguage = effectiveLanguage
+    ) -> String {
+        let resolvedLanguage = language == .system ? preferredLanguage : language
+        return value.formatted(
+            IntegerFormatStyle<UInt64>.number.locale(
+                Locale(identifier: resolvedLanguage.localeIdentifier)
+            )
+        )
+    }
+
+    static func percent(
+        _ value: Double,
+        fractionDigits: Int = 0,
+        language: AppLanguage = effectiveLanguage
+    ) -> String {
+        let resolvedLanguage = language == .system ? preferredLanguage : language
+        return value.formatted(
+            FloatingPointFormatStyle<Double>.Percent.percent
+                .precision(.fractionLength(fractionDigits))
+                .locale(Locale(identifier: resolvedLanguage.localeIdentifier))
+        )
+    }
+
+    static func decimal(
+        _ value: Double,
+        fractionDigits: Int,
+        language: AppLanguage = effectiveLanguage
+    ) -> String {
+        let resolvedLanguage = language == .system ? preferredLanguage : language
+        return value.formatted(
+            FloatingPointFormatStyle<Double>.number
+                .precision(.fractionLength(fractionDigits))
+                .locale(Locale(identifier: resolvedLanguage.localeIdentifier))
+        )
+    }
+
+    static func errorDescription(
+        _ error: Error,
+        language: AppLanguage = effectiveLanguage
+    ) -> String {
+        let resolvedLanguage = language == .system ? preferredLanguage : language
+        if error is HistoryDatabaseError {
+            return text("历史数据库不可用", language: resolvedLanguage)
+        }
+        if let description = (error as? LocalizedError)?.errorDescription,
+           !description.isEmpty {
+            return text(description, language: resolvedLanguage)
+        }
+        let cocoaError = error as NSError
+        return format(
+            "操作失败（%@，错误代码 %@）",
+            arguments: [cocoaError.domain, String(cocoaError.code)],
+            language: resolvedLanguage
         )
     }
 
@@ -320,6 +422,7 @@ enum L10n {
         "写入占比": "Write Share",
         "峰值 CPU": "Peak CPU",
         "数据覆盖": "Data Coverage",
+        "数据质量": "Data Quality",
         "数据覆盖 %.0f%%，共 %d 个数据点": "Data coverage %.0f%% across %d data points",
         "刷新分析": "Refresh Analysis",
         "历史保存正常": "History Saving Normally",

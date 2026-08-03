@@ -14,8 +14,8 @@ public enum StorageSourceCatalog {
         .init(id: .simulators, title: "Simulators", family: .developerTools, symbol: "iphone.gen3", cleanupCapability: .openOfficialManager),
         .init(id: .docker, title: "Docker Desktop", family: .containers, symbol: "shippingbox.and.arrow.backward", cleanupCapability: .analysisOnly),
         .init(id: .podman, title: "Podman", family: .containers, symbol: "cube.transparent", cleanupCapability: .analysisOnly),
-        .init(id: .codex, title: "Codex", family: .aiTools, symbol: "terminal", cleanupCapability: .analysisOnly),
-        .init(id: .claude, title: "Claude", family: .aiTools, symbol: "sparkles", cleanupCapability: .analysisOnly),
+        .init(id: .codex, title: "Codex", family: .aiTools, symbol: "terminal", cleanupCapability: .verifiedFiles),
+        .init(id: .claude, title: "Claude", family: .aiTools, symbol: "sparkles", cleanupCapability: .verifiedFiles),
         .init(id: .openCode, title: "OpenCode", family: .aiTools, symbol: "curlybraces", cleanupCapability: .analysisOnly),
         .init(id: .workspace, title: "Git Workspaces", family: .workspaces, symbol: "folder.badge.gearshape", cleanupCapability: .analysisOnly)
     ]
@@ -60,9 +60,9 @@ public enum StorageSourceCatalog {
                 sourceID: sourceID,
                 displayName: location.displayName,
                 path: location.resolvedPath,
-                defaultCategory: "Agent data",
-                defaultRisk: .protectedUserData,
-                isProtected: true
+                defaultCategory: location.kind == .rebuildableCache ? "Agent 缓存" : "Agent 数据",
+                defaultRisk: location.kind == .rebuildableCache ? .rebuildableCache : .protectedUserData,
+                isProtected: location.kind != .rebuildableCache
             ))
         }
 

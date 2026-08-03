@@ -390,7 +390,7 @@ struct HistoryReportView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(L10n.text("数据覆盖"))
-        .accessibilityValue(clampedCoverage.formatted(.percent.precision(.fractionLength(0))))
+        .accessibilityValue(L10n.percent(clampedCoverage))
     }
 
     private func export(_ report: HistoryReport, as format: HistoryExportFormat) {
@@ -398,7 +398,7 @@ struct HistoryReportView: View {
             do {
                 try await HistoryReportExporter.presentSavePanel(for: report, format: format)
             } catch {
-                exportError = error.localizedDescription
+                exportError = L10n.errorDescription(error)
             }
         }
     }

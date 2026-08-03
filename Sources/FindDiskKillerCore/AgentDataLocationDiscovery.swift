@@ -166,6 +166,8 @@ public struct AgentDataLocationDiscovery {
         }
         candidates.append(contentsOf: customCandidates())
 
+        candidates.append(contentsOf: rebuildableCacheCandidates(from: candidates, home: home))
+
         let desktopRoots = candidates.filter {
             $0.kind == .claudeDesktop && fileManager.fileExists(atPath: $0.url.path)
         }
@@ -243,6 +245,118 @@ public struct AgentDataLocationDiscovery {
             candidate("claude.desktop-3p", .claude, .claudeDesktop, "Claude Desktop", support.appending(path: "Claude-3p"), .knownClient, "Claude-3p"),
             candidate("claude.desktop", .claude, .claudeDesktop, "Claude Desktop", support.appending(path: "Claude"), .knownClient, "Claude")
         ]
+    }
+
+    private func rebuildableCacheCandidates(from sourceCandidates: [Candidate], home: URL) -> [Candidate] {
+        var result: [Candidate] = []
+        for source in sourceCandidates {
+            switch source.kind {
+            case .codexHome:
+                for relativePath in ["cache", "tmp", ".tmp"] {
+                    result.append(cacheCandidate(
+                        parent: source,
+                        relativePath: relativePath
+                    ))
+                }
+            case .codexDesktop:
+                for relativePath in Self.desktopCacheRelativePaths {
+                    result.append(cacheCandidate(
+                        parent: source,
+                        relativePath: relativePath
+                    ))
+                }
+            case .claudeDesktop:
+                for relativePath in Self.electronCacheRelativePaths {
+                    result.append(cacheCandidate(
+                        parent: source,
+                        relativePath: relativePath
+                    ))
+                }
+            case .claudeCode, .claudeDesktopAgent, .openCode, .rebuildableCache:
+                break
+            }
+        }
+
+        guard configuration.includesDesktopData else { return result }
+        let caches = home.appending(path: "Library/Caches", directoryHint: .isDirectory)
+        result.append(contentsOf: [
+            standaloneCacheCandidate(
+                id: "codex.cache.desktop",
+                provider: .codex,
+                displayName: "Codex Desktop · Codex",
+                url: caches.appending(path: "Codex"),
+                identifier: "Codex"
+            ),
+            standaloneCacheCandidate(
+                id: "codex.cache.bundle",
+                provider: .codex,
+                displayName: "Codex Desktop · com.openai.codex",
+                url: caches.appending(path: "com.openai.codex"),
+                identifier: "com.openai.codex"
+            ),
+            standaloneCacheCandidate(
+                id: "claude.cache.desktop",
+                provider: .claude,
+                displayName: "Claude Desktop · com.anthropic.claudefordesktop",
+                url: caches.appending(path: "com.anthropic.claudefordesktop"),
+                identifier: "com.anthropic.claudefordesktop"
+            ),
+            standaloneCacheCandidate(
+                id: "claude.cache.updater",
+                provider: .claude,
+                displayName: "Claude Desktop · com.anthropic.claudefordesktop.ShipIt",
+                url: caches.appending(path: "com.anthropic.claudefordesktop.ShipIt"),
+                identifier: "com.anthropic.claudefordesktop.ShipIt"
+            ),
+            standaloneCacheCandidate(
+                id: "claude.cache.cli-nodejs",
+                provider: .claude,
+                displayName: "Claude Code · claude-cli-nodejs",
+                url: caches.appending(path: "claude-cli-nodejs"),
+                identifier: "claude-cli-nodejs"
+            )
+        ])
+        return result
+    }
+
+    private static let electronCacheRelativePaths = [
+        "Cache",
+        "Code Cache",
+        "GPUCache",
+        "DawnGraphiteCache",
+        "GraphiteDawnCache",
+        "DawnWebGPUCache",
+        "component_crx_cache",
+        "Crashpad"
+    ]
+
+    private static let desktopCacheRelativePaths = electronCacheRelativePaths + [
+        "Default/Cache",
+        "Default/Code Cache",
+        "codex-browser-app/Cache",
+        "codex-browser-app/Code Cache"
+    ]
+
+    private func cacheCandidate(parent: Candidate, relativePath: String) -> Candidate {
+        candidate(
+            "\(parent.id).cache.\(stablePathHash(relativePath))",
+            parent.provider,
+            .rebuildableCache,
+            "\(parent.displayName) · \(relativePath)",
+            parent.url.appending(path: relativePath, directoryHint: .isDirectory),
+            parent.discoveryKind,
+            parent.discoveryIdentifier
+        )
+    }
+
+    private func standaloneCacheCandidate(
+        id: String,
+        provider: AgentStorageProvider,
+        displayName: String,
+        url: URL,
+        identifier: String
+    ) -> Candidate {
+        candidate(id, provider, .rebuildableCache, displayName, url, .knownClient, identifier)
     }
 
     private func customCandidates() -> [Candidate] {

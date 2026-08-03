@@ -246,7 +246,7 @@ enum ClaudeNodeRuntime {
                 try dependencies.acquireLock(cleanupRoot.appending(path: ".node-install.lock"))
             }.value
         } catch {
-            throw ClaudeNodeRuntimeError.installationFailed(error.localizedDescription)
+            throw ClaudeNodeRuntimeError.installationFailed(L10n.errorDescription(error))
         }
         defer { lock.unlock() }
 
@@ -277,7 +277,7 @@ enum ClaudeNodeRuntime {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            throw ClaudeNodeRuntimeError.downloadFailed(error.localizedDescription)
+            throw ClaudeNodeRuntimeError.downloadFailed(L10n.errorDescription(error))
         }
         guard payload.statusCode == 200 else {
             throw ClaudeNodeRuntimeError.downloadFailed("HTTP \(payload.statusCode)")
@@ -303,7 +303,7 @@ enum ClaudeNodeRuntime {
         } catch let error as ClaudeNodeRuntimeError {
             throw error
         } catch {
-            throw ClaudeNodeRuntimeError.extractionFailed(error.localizedDescription)
+            throw ClaudeNodeRuntimeError.extractionFailed(L10n.errorDescription(error))
         }
         let staged = extracted.appending(path: "node")
         guard fileManager.fileExists(atPath: staged.path) else {
@@ -332,7 +332,7 @@ enum ClaudeNodeRuntime {
         do {
             transaction = try dependencies.beginAtomicInstall(staged, destination)
         } catch {
-            throw ClaudeNodeRuntimeError.installationFailed(error.localizedDescription)
+            throw ClaudeNodeRuntimeError.installationFailed(L10n.errorDescription(error))
         }
         do {
             let installed = try NodeRuntimeResolver.validate(
@@ -349,7 +349,7 @@ enum ClaudeNodeRuntime {
             if let failure = error as? NodeRuntimeValidationFailure {
                 throw ClaudeNodeRuntimeError.validationFailed(failure.description)
             }
-            throw ClaudeNodeRuntimeError.installationFailed(error.localizedDescription)
+            throw ClaudeNodeRuntimeError.installationFailed(L10n.errorDescription(error))
         }
     }
 
@@ -379,7 +379,7 @@ enum ClaudeNodeRuntime {
         do {
             try process.run()
         } catch {
-            throw ClaudeNodeRuntimeError.extractionFailed(error.localizedDescription)
+            throw ClaudeNodeRuntimeError.extractionFailed(L10n.errorDescription(error))
         }
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {

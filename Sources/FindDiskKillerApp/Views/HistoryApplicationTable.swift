@@ -264,7 +264,7 @@ struct HistoryApplicationTable: View {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(.quaternary)
                     .frame(width: 26, height: 26)
-                Text("Application name")
+                Text(L10n.text("应用"))
                     .fontWeight(.medium)
                     .lineLimit(1)
             }
@@ -343,7 +343,7 @@ struct HistoryApplicationTable: View {
             .frame(width: 105, alignment: .leading)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(L10n.text("写入占比"))
-            .accessibilityValue(share.formatted(.percent.precision(.fractionLength(0))))
+            .accessibilityValue(L10n.percent(share))
         }
     }
 
@@ -405,7 +405,7 @@ struct HistoryApplicationTable: View {
                     .fill(.quaternary)
                     .frame(width: 32, height: 32)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Application name")
+                    Text(L10n.text("应用"))
                         .font(.headline)
                         .lineLimit(1)
                     Text("#1")
@@ -465,7 +465,7 @@ struct HistoryApplicationTable: View {
             L10n.text("写入占比"),
             application.unavailableMetrics.contains(.write)
                 ? L10n.text("不可用")
-                : writeShare(for: application).formatted(.percent.precision(.fractionLength(0))),
+                : L10n.percent(writeShare(for: application)),
             "chart.bar.fill"
         )
     }
@@ -530,8 +530,7 @@ struct HistoryApplicationTable: View {
     }
 
     private func cpuDuration(for application: HistoryApplicationReport) -> String {
-        Duration.seconds(Double(application.cpuTimeNanoseconds) / 1_000_000_000)
-            .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated))
+        L10n.duration(seconds: Double(application.cpuTimeNanoseconds) / 1_000_000_000)
     }
 
     private func displayName(for application: HistoryApplicationReport) -> String {
@@ -595,9 +594,7 @@ struct HistoryApplicationTable: View {
     ) -> String {
         let writeShare = application.unavailableMetrics.contains(.write)
             ? L10n.text("不可用")
-            : writeShare(for: application).formatted(
-                .percent.precision(.fractionLength(0))
-            )
+            : L10n.percent(writeShare(for: application))
         return [
             "#\(rank)",
             application.id == "other" ? L10n.text("这是超过历史身份容量的应用汇总，资源总量仍完整保留") : nil,
@@ -709,8 +706,9 @@ private enum ApplicationHistorySortMetric: String, CaseIterable, Identifiable {
         case .read:
             return ByteRateFormatter.bytes(application.readBytes)
         case .cpu:
-            return Duration.seconds(Double(application.cpuTimeNanoseconds) / 1_000_000_000)
-                .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated))
+            return L10n.duration(
+                seconds: Double(application.cpuTimeNanoseconds) / 1_000_000_000
+            )
         case .network:
             return ByteRateFormatter.bytes(
                 application.networkReceiveBytes.addingClamped(application.networkSendBytes)
