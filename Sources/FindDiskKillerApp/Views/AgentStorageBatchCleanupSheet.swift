@@ -78,6 +78,7 @@ struct AgentStorageBatchCleanupSheet: View {
     @State private var isReviewUpdating = false
     @State private var selectedReview: AgentStorageCleanupReview?
     @State private var cleanupSession: AgentStorageCleanupSession?
+    @State private var pendingSynchronizationIDs = Set<String>()
 
     init(
         context: AgentStorageBatchCleanupContext,
@@ -123,7 +124,15 @@ struct AgentStorageBatchCleanupSheet: View {
             AgentStorageCleanupReviewView(
                 session: session,
                 close: { cleanupSession = nil },
-                didFinish: didFinish
+                didFinish: { result in
+                    let succeededIDs = Set(result.targets.compactMap { target in
+                        target.outcome == .succeeded ? target.id : nil
+                    })
+                    selectedIDs.subtract(succeededIDs)
+                    pendingSynchronizationIDs.formUnion(succeededIDs)
+                    didFinish(result)
+                },
+                hasRemainingItems: hasRemainingItems(after: session)
             )
             .interactiveDismissDisabled(session.phase == .deleting)
         }
@@ -369,7 +378,7 @@ struct AgentStorageBatchCleanupSheet: View {
     }
 
     private var resultCount: some View {
-        Text(L10n.format("%d 个聊天可选择", projection.families.count))
+        Text(L10n.format("%d 个聊天可选择", actionableMatchingIDs.count))
             .font(.caption.weight(.medium).monospacedDigit())
             .foregroundStyle(.secondary)
             .lineLimit(1)
@@ -386,7 +395,7 @@ struct AgentStorageBatchCleanupSheet: View {
                     systemImage: currentPageSelectionSymbol
                 )
             }
-            .disabled(currentPageFamilies.isEmpty)
+            .disabled(currentPageIDs.isEmpty)
 
             Button {
                 toggleAllMatching()
@@ -394,11 +403,11 @@ struct AgentStorageBatchCleanupSheet: View {
                 Label(
                     allMatchingAreSelected
                         ? L10n.text("取消选择全部结果")
-                        : L10n.format("选择全部 %d 个结果", projection.families.count),
+                        : L10n.format("选择全部 %d 个结果", actionableMatchingIDs.count),
                     systemImage: allMatchingAreSelected ? "checkmark.square.fill" : "square.stack.3d.up"
                 )
             }
-            .disabled(projection.families.isEmpty)
+            .disabled(actionableMatchingIDs.isEmpty)
 
             Divider()
 
@@ -512,13 +521,18 @@ struct AgentStorageBatchCleanupSheet: View {
             return sum.overflow ? .max : sum.partialValue
         }
         let isSelected = selectedIDs.contains(family.id)
+        let isPendingSynchronization = pendingSynchronizationIDs.contains(family.id)
         return Button {
             toggleSelection(family.id)
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                Image(systemName: isPendingSynchronization
+                    ? "checkmark.circle.fill"
+                    : isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(isPendingSynchronization
+                        ? Color.green
+                        : isSelected ? Color.accentColor : Color.secondary)
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(row.title)
@@ -526,7 +540,9 @@ struct AgentStorageBatchCleanupSheet: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     HStack(spacing: 5) {
-                        Text(row.project)
+                        Text(isPendingSynchronization
+                            ? L10n.text("已清理，等待同步确认")
+                            : row.project)
                         if family.subagentCount > 0 {
                             Text("·")
                             Text(L10n.format("%d 个子代理", family.subagentCount))
@@ -556,9 +572,14 @@ struct AgentStorageBatchCleanupSheet: View {
             .background(isSelected ? Color.accentColor.opacity(0.08) : Color.clear)
         }
         .buttonStyle(.plain)
+        .allowsHitTesting(!isPendingSynchronization)
         .accessibilityLabel(row.title)
-        .accessibilityValue(isSelected ? L10n.text("已选择") : L10n.text("未选择"))
-        .accessibilityHint(L10n.text("切换此聊天的清理选择"))
+        .accessibilityValue(isPendingSynchronization
+            ? L10n.text("已清理，等待同步确认")
+            : isSelected ? L10n.text("已选择") : L10n.text("未选择"))
+        .accessibilityHint(isPendingSynchronization
+            ? L10n.text("已清理，等待同步确认")
+            : L10n.text("切换此聊天的清理选择"))
     }
 
     private var pagination: some View {
@@ -741,7 +762,7 @@ struct AgentStorageBatchCleanupSheet: View {
     }
 
     private var currentPageIDs: Set<String> {
-        Set(currentPageFamilies.map(\.id))
+        Set(currentPageFamilies.map(\.id)).subtracting(pendingSynchronizationIDs)
     }
 
     private var currentPageIsSelected: Bool {
@@ -755,11 +776,15 @@ struct AgentStorageBatchCleanupSheet: View {
     }
 
     private var allMatchingAreSelected: Bool {
-        let matchingIDs = Set(projection.families.map(\.id))
-        return !matchingIDs.isEmpty && matchingIDs.isSubset(of: selectedIDs)
+        !actionableMatchingIDs.isEmpty && actionableMatchingIDs.isSubset(of: selectedIDs)
+    }
+
+    private var actionableMatchingIDs: Set<String> {
+        Set(projection.families.map(\.id)).subtracting(pendingSynchronizationIDs)
     }
 
     private func toggleSelection(_ id: String) {
+        guard !pendingSynchronizationIDs.contains(id) else { return }
         if selectedIDs.contains(id) {
             selectedIDs.remove(id)
         } else {
@@ -775,8 +800,7 @@ struct AgentStorageBatchCleanupSheet: View {
     }
 
     private func toggleAllMatching() {
-        let matchingIDs = Set(projection.families.map(\.id))
-        selectedIDs = allMatchingAreSelected ? [] : matchingIDs
+        selectedIDs = allMatchingAreSelected ? [] : actionableMatchingIDs
     }
 
     private func scheduleProjection(debounce: Duration? = nil) {
@@ -845,5 +869,10 @@ struct AgentStorageBatchCleanupSheet: View {
             isReviewUpdating = false
             reviewTask = nil
         }
+    }
+
+    private func hasRemainingItems(after session: AgentStorageCleanupSession) -> Bool {
+        let reviewedIDs = Set(session.review.families.map(\.id))
+        return !actionableMatchingIDs.subtracting(reviewedIDs).isEmpty
     }
 }

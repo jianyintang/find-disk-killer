@@ -670,6 +670,7 @@ struct AgentStorageCleanupReviewView: View {
     @ObservedObject var session: AgentStorageCleanupSession
     let close: () -> Void
     let didFinish: (AgentStorageCleanupResult) -> Void
+    let hasRemainingItems: Bool
     @State private var didReportResult = false
 
     var body: some View {
@@ -895,7 +896,10 @@ struct AgentStorageCleanupReviewView: View {
                 Button(L10n.text("取消剩余任务")) { session.cancelRemaining() }
                     .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .large))
             } else if session.phase == .finished {
-                Button(L10n.text("完成"), action: dismissReview)
+                Button(
+                    L10n.text(shouldContinueCleaning ? "继续清理" : "完成"),
+                    action: dismissReview
+                )
                     .buttonStyle(AppActionButtonStyle(kind: .primary, size: .large))
                     .keyboardShortcut(.defaultAction)
             } else {
@@ -919,5 +923,11 @@ struct AgentStorageCleanupReviewView: View {
 
     private func dismissReview() {
         close()
+    }
+
+    private var shouldContinueCleaning: Bool {
+        hasRemainingItems
+            || (session.result?.failedCount ?? 0) > 0
+            || (session.result?.skippedCount ?? 0) > 0
     }
 }

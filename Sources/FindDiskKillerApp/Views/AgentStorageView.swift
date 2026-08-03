@@ -709,6 +709,7 @@ struct AgentStorageView: View {
     @State private var indexGeneration = 0
     @State private var indexTask: Task<Void, Never>?
     @State private var cleanupSelectedIDs: Set<String> = []
+    @State private var pendingCleanupSynchronizationIDsByProvider: [AgentStorageProvider: Set<String>] = [:]
     @State private var cleanupReview: AgentStorageCleanupReview?
     @State private var isCleanupReviewUpdating = false
     @State private var cleanupReviewGeneration = 0
@@ -770,6 +771,14 @@ struct AgentStorageView: View {
         }
         .onChange(of: model.snapshotRevision, initial: true) { _, _ in
             scheduleSnapshotIndex(model.snapshot)
+        }
+        .onChange(of: model.resultRevisionsByProvider) { oldValue, newValue in
+            let updatedProviders = Set(newValue.keys).filter {
+                newValue[$0] != oldValue[$0]
+            }
+            for provider in updatedProviders {
+                pendingCleanupSynchronizationIDsByProvider.removeValue(forKey: provider)
+            }
         }
         .onChange(of: archiveFilter) { _, _ in
             if !isRestoringWorkspace {
@@ -843,7 +852,8 @@ struct AgentStorageView: View {
             AgentStorageCleanupReviewView(
                 session: session,
                 close: { cleanupSession = nil },
-                didFinish: { result in handleCleanupCompletion(result) }
+                didFinish: { result in handleCleanupCompletion(result) },
+                hasRemainingItems: hasRemainingCleanupItems(after: session)
             )
             .interactiveDismissDisabled(session.phase == .deleting)
         }
@@ -1266,9 +1276,9 @@ struct AgentStorageView: View {
                 }
                 Button(action: toggleCleanupAllMatching) {
                     Label(
-                        cleanupAllMatchingAreSelected
-                            ? L10n.text("取消选择全部结果")
-                            : L10n.format("选择全部 %d 个结果", visibleChatSummary.families.count),
+                            cleanupAllMatchingAreSelected
+                                ? L10n.text("取消选择全部结果")
+                                : L10n.format("选择全部 %d 个结果", cleanupAllMatchingIDs.count),
                         systemImage: cleanupAllMatchingAreSelected ? "checkmark.square.fill" : "square.stack.3d.up"
                     )
                 }
@@ -1297,7 +1307,6 @@ struct AgentStorageView: View {
             .disabled(
                 cleanupReview == nil
                     || isCleanupReviewUpdating
-                    || selectedProvider.map(model.isAnalyzing) == true
             )
             .help(L10n.text("最终提交前会再次核验活动状态和官方清理能力。"))
             .accessibilityIdentifier("agent-storage-review-cleanup")
@@ -1500,10 +1509,20 @@ struct AgentStorageView: View {
                 }
             } else if let provider = selectedProvider,
                       let refreshError = model.refreshErrorsByProvider[provider] {
-                Label(refreshError, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .lineLimit(1)
-                    .help(refreshError)
+                HStack(spacing: 7) {
+                    Label(refreshError, systemImage: "exclamationmark.triangle.fill")
+                        .lineLimit(1)
+                        .help(refreshError)
+                    Button {
+                        model.startAnalysis(provider: provider)
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .help(L10n.text("重试同步"))
+                    .accessibilityLabel(L10n.text("重试同步"))
+                }
+                .foregroundStyle(.orange)
             } else if model.isScanning {
                 AgentStorageRefreshingProgressView(model: model)
             } else if let summary = selectedProviderSummary {
@@ -1610,6 +1629,7 @@ struct AgentStorageView: View {
                 AgentStorageChatSelectionCell(
                     row: row,
                     isSelected: cleanupSelectedIDs.contains(row.familyID),
+                    isPendingSynchronization: pendingCleanupSynchronizationIDs.contains(row.familyID),
                     toggleSelection: { toggleCleanupSelection(row.familyID) }
                 )
             }
@@ -2454,6 +2474,13 @@ struct AgentStorageView: View {
     }
 
     private func handleCleanupCompletion(_ result: AgentStorageCleanupResult) {
+        let succeededTargets = result.targets.filter { $0.outcome == .succeeded }
+        let succeededIDs = Set(succeededTargets.map(\.id))
+        cleanupSelectedIDs.subtract(succeededIDs)
+        for target in succeededTargets {
+            pendingCleanupSynchronizationIDsByProvider[target.family.provider, default: []]
+                .insert(target.id)
+        }
         let providers = result.providersRequiringRefresh
         guard !providers.isEmpty else { return }
         cleanupDidAffectProviders?(providers)
@@ -2543,8 +2570,14 @@ struct AgentStorageView: View {
         cleanupSelectedIDs.sorted().compactMap { familyIndex[$0] }
     }
 
+    private var pendingCleanupSynchronizationIDs: Set<String> {
+        guard let selectedProvider else { return [] }
+        return pendingCleanupSynchronizationIDsByProvider[selectedProvider, default: []]
+    }
+
     private var cleanupCurrentPageIDs: Set<String> {
         Set(visibleChatRows.lazy.filter(\.isFamily).map(\.familyID))
+            .subtracting(pendingCleanupSynchronizationIDs)
     }
 
     private var cleanupCurrentPageIsSelected: Bool {
@@ -2565,6 +2598,7 @@ struct AgentStorageView: View {
 
     private var cleanupAllMatchingIDs: Set<String> {
         Set(visibleChatSummary.families.map(\.id))
+            .subtracting(pendingCleanupSynchronizationIDs)
     }
 
     private var cleanupAllMatchingAreSelected: Bool {
@@ -2582,6 +2616,7 @@ struct AgentStorageView: View {
     }
 
     private func toggleCleanupSelection(_ id: String) {
+        guard !pendingCleanupSynchronizationIDs.contains(id) else { return }
         if cleanupSelectedIDs.contains(id) {
             cleanupSelectedIDs.remove(id)
         } else {
@@ -2632,6 +2667,13 @@ struct AgentStorageView: View {
     private func presentCleanupReview() {
         guard let cleanupReview, !isCleanupReviewUpdating else { return }
         cleanupSession = AgentStorageCleanupSession(review: cleanupReview)
+    }
+
+    private func hasRemainingCleanupItems(
+        after session: AgentStorageCleanupSession
+    ) -> Bool {
+        let reviewedIDs = Set(session.review.families.map(\.id))
+        return !cleanupAllMatchingIDs.subtracting(reviewedIDs).isEmpty
     }
 
     private func cleanupReclaimableBytes(for row: AgentStorageChatRow) -> UInt64 {
@@ -3969,22 +4011,32 @@ private struct AgentStorageChatIdentityCell: View {
 private struct AgentStorageChatSelectionCell: View {
     let row: AgentStorageChatRow
     let isSelected: Bool
+    let isPendingSynchronization: Bool
     let toggleSelection: () -> Void
 
     var body: some View {
         Group {
             if row.isFamily {
-                Button(action: toggleSelection) {
-                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                if isPendingSynchronization {
+                    Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                        .foregroundStyle(Color.green)
                         .frame(width: 24, height: 28)
-                        .contentShape(Rectangle())
+                        .help(L10n.text("已清理，等待同步确认"))
+                        .accessibilityLabel(L10n.text("已清理，等待同步确认"))
+                } else {
+                    Button(action: toggleSelection) {
+                        Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                            .frame(width: 24, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(L10n.text(isSelected ? "取消选择" : "选择聊天"))
+                    .accessibilityLabel(L10n.text(isSelected ? "取消选择" : "选择聊天"))
+                    .accessibilityValue(isSelected ? L10n.text("已选择") : L10n.text("未选择"))
                 }
-                .buttonStyle(.plain)
-                .help(L10n.text(isSelected ? "取消选择" : "选择聊天"))
-                .accessibilityLabel(L10n.text(isSelected ? "取消选择" : "选择聊天"))
-                .accessibilityValue(isSelected ? L10n.text("已选择") : L10n.text("未选择"))
             } else {
                 Color.clear
                     .frame(width: 24, height: 28)

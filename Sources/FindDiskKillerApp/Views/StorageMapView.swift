@@ -76,7 +76,7 @@ enum StorageMapOverviewPresentation: Equatable {
 private struct StorageMapSourcePresentation: Identifiable {
     let candidate: StorageSourceCandidate
     let result: StorageSourceResult?
-    let snapshotID: UUID?
+    let resultRevision: UInt64
     let activity: StorageSourceActivityPresentation
     let compositionSummary: String?
     let displayBytes: UInt64
@@ -364,6 +364,8 @@ struct StorageMapView: View {
             snapshot: model.snapshot,
             initialProjection: overviewCleanupIndex,
             isRefreshing: isAnyAnalysisRunning,
+            resultRevisionsBySource: model.resultRevisionsBySource,
+            refreshErrorsBySource: model.refreshErrorsBySource,
             goBack: { route = .overview },
             reanalyze: { sourceIDs in
                 for sourceID in sourceIDs { model.refreshAfterCleanup(sourceID: sourceID) }
@@ -612,7 +614,7 @@ struct StorageMapView: View {
         return StorageMapSourcePresentation(
             candidate: candidate,
             result: result,
-            snapshotID: model.snapshot?.id,
+            resultRevision: model.resultRevision(for: candidate.id),
             activity: activity,
             compositionSummary: agentSummary(for: candidate.id)
                 .flatMap(StorageSourceActivityPresentation.completedAgentComposition)
@@ -1349,6 +1351,8 @@ private struct StorageSourceBrandIcon: View {
 private struct StorageSafeCleanupView: View {
     let snapshot: StorageAnalysisSnapshot?
     let isRefreshing: Bool
+    let resultRevisionsBySource: [StorageSourceID: UInt64]
+    let refreshErrorsBySource: [StorageSourceID: String]
     let goBack: () -> Void
     let reanalyze: (Set<StorageSourceID>) -> Void
 
@@ -1371,11 +1375,15 @@ private struct StorageSafeCleanupView: View {
         snapshot: StorageAnalysisSnapshot?,
         initialProjection: StorageSafeCleanupIndex,
         isRefreshing: Bool,
+        resultRevisionsBySource: [StorageSourceID: UInt64],
+        refreshErrorsBySource: [StorageSourceID: String],
         goBack: @escaping () -> Void,
         reanalyze: @escaping (Set<StorageSourceID>) -> Void
     ) {
         self.snapshot = snapshot
         self.isRefreshing = isRefreshing
+        self.resultRevisionsBySource = resultRevisionsBySource
+        self.refreshErrorsBySource = refreshErrorsBySource
         self.goBack = goBack
         self.reanalyze = reanalyze
         _projection = State(initialValue: initialProjection)
@@ -1420,9 +1428,14 @@ private struct StorageSafeCleanupView: View {
                 return
             }
         }
-        .onChange(of: snapshot?.id) { _, _ in
-            guard !isExecuting else { return }
-            outcomesByID.removeAll()
+        .onChange(of: resultRevisionsBySource) { oldValue, newValue in
+            let updatedSourceIDs = Set(newValue.keys).filter {
+                newValue[$0] != oldValue[$0]
+            }
+            outcomesByID = outcomesByID.filter { requestID, _ in
+                guard let sourceID = projection.sourceIDByRequestID[requestID] else { return false }
+                return !updatedSourceIDs.contains(sourceID)
+            }
         }
         .onDisappear {
             executionTask?.cancel()
@@ -1491,7 +1504,7 @@ private struct StorageSafeCleanupView: View {
             }
         }
         .buttonStyle(AppActionButtonStyle(kind: .primary, size: .large))
-        .disabled(selectedIDs.isEmpty || isExecuting || isRefreshing)
+        .disabled(selectedEntries.isEmpty || isExecuting)
         .accessibilityIdentifier("storage-safe-cleanup-execute")
     }
 
@@ -1515,6 +1528,22 @@ private struct StorageSafeCleanupView: View {
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                } else if let refreshErrorSummary {
+                    HStack(spacing: 7) {
+                        Label(refreshErrorSummary, systemImage: "exclamationmark.triangle.fill")
+                            .lineLimit(1)
+                            .help(refreshErrorSummary)
+                        Button {
+                            reanalyze(Set(refreshErrorsBySource.keys))
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.plain)
+                        .help(L10n.text("重试同步"))
+                        .accessibilityLabel(L10n.text("重试同步"))
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.orange)
                 } else {
                     Text(L10n.format("%d 个项目", visibleRequestIDs.count))
                         .font(.caption.monospacedDigit())
@@ -1582,16 +1611,21 @@ private struct StorageSafeCleanupView: View {
     }
 
     private func groupView(_ group: StorageSafeCleanupGroup) -> some View {
-        let groupIDs = projection.requestIDsByGroup[group.id] ?? []
+        let allGroupIDs = projection.requestIDsByGroup[group.id] ?? []
+        let groupIDs = allGroupIDs.subtracting(succeededRequestIDs)
         let selectedCount = selectedIDs.intersection(groupIDs).count
         return VStack(spacing: 0) {
             HStack(spacing: 12) {
-                selectionButton(
-                    selectedCount: selectedCount,
-                    totalCount: group.requests.count,
-                    accessibilityLabel: L10n.format("选择 %@", group.title)
-                ) {
-                    toggleSelection(groupIDs)
+                if groupIDs.isEmpty, !allGroupIDs.isEmpty {
+                    pendingSynchronizationIndicator
+                } else {
+                    selectionButton(
+                        selectedCount: selectedCount,
+                        totalCount: groupIDs.count,
+                        accessibilityLabel: L10n.format("选择 %@", group.title)
+                    ) {
+                        toggleSelection(groupIDs)
+                    }
                 }
                 StorageSourceBrandIcon(sourceID: group.id, fallbackSymbol: group.symbol)
                 VStack(alignment: .leading, spacing: 2) {
@@ -1641,21 +1675,27 @@ private struct StorageSafeCleanupView: View {
                 .fill(Color(nsColor: .separatorColor).opacity(0.5))
                 .frame(width: 1, height: 44)
                 .padding(.leading, 42)
-            selectionButton(
-                selectedCount: selectedIDs.contains(request.id) ? 1 : 0,
-                totalCount: 1,
-                accessibilityLabel: L10n.format("选择 %@", L10n.text(request.title))
-            ) {
-                toggleSelection([request.id])
+            if outcomesByID[request.id]?.succeeded == true {
+                pendingSynchronizationIndicator
+            } else {
+                selectionButton(
+                    selectedCount: selectedIDs.contains(request.id) ? 1 : 0,
+                    totalCount: 1,
+                    accessibilityLabel: L10n.format("选择 %@", L10n.text(request.title))
+                ) {
+                    toggleSelection([request.id])
+                }
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(L10n.text(request.title))
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
-                if let outcome = outcomesByID[request.id], let error = outcome.errorDescription {
-                    Text(error)
+                if let outcome = outcomesByID[request.id] {
+                    Text(outcome.succeeded
+                        ? L10n.text("已清理，等待同步确认")
+                        : outcome.errorDescription ?? L10n.text("操作失败"))
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(outcome.succeeded ? Color.green : Color.orange)
                         .lineLimit(1)
                 }
             }
@@ -1706,7 +1746,30 @@ private struct StorageSafeCleanupView: View {
     }
 
     private var visibleRequestIDs: Set<String> {
-        projection.requestIDs(for: renderedScope.family)
+        projection.requestIDs(for: renderedScope.family).subtracting(succeededRequestIDs)
+    }
+
+    private var succeededRequestIDs: Set<String> {
+        Set(outcomesByID.values.filter(\.succeeded).map(\.id))
+    }
+
+    private var refreshErrorSummary: String? {
+        let visibleSourceIDs = Set(projection.groups.map(\.id))
+        let messages = refreshErrorsBySource
+            .filter { visibleSourceIDs.contains($0.key) }
+            .values
+            .sorted()
+        guard !messages.isEmpty else { return nil }
+        return messages.joined(separator: " · ")
+    }
+
+    private var pendingSynchronizationIndicator: some View {
+        Image(systemName: "checkmark.circle.fill")
+            .font(.system(size: 16, weight: .medium))
+            .foregroundStyle(Color.green)
+            .frame(width: 22, height: 22)
+            .help(L10n.text("已清理，等待同步确认"))
+            .accessibilityLabel(L10n.text("已清理，等待同步确认"))
     }
 
     private var visibleSelectionIsComplete: Bool {
@@ -1714,11 +1777,11 @@ private struct StorageSafeCleanupView: View {
     }
 
     private var selectedBytes: UInt64 {
-        projection.selectedBytes(for: selectedIDs)
+        projection.selectedBytes(for: selectedIDs.subtracting(succeededRequestIDs))
     }
 
     private var selectedEntries: [(StorageSourceID, StorageCleanupRequest)] {
-        projection.selectedEntries(for: selectedIDs)
+        projection.selectedEntries(for: selectedIDs.subtracting(succeededRequestIDs))
     }
 
     @MainActor
@@ -1781,10 +1844,11 @@ private struct StorageSafeCleanupView: View {
     }
 
     private func toggleSelection(_ ids: Set<String>) {
-        if ids.isSubset(of: selectedIDs) {
-            selectedIDs.subtract(ids)
+        let actionableIDs = ids.subtracting(succeededRequestIDs)
+        if actionableIDs.isSubset(of: selectedIDs) {
+            selectedIDs.subtract(actionableIDs)
         } else {
-            selectedIDs.formUnion(ids)
+            selectedIDs.formUnion(actionableIDs)
         }
     }
 
@@ -1801,13 +1865,15 @@ private struct StorageSafeCleanupView: View {
     }
 
     private func executeSelected() {
-        guard !selectedIDs.isEmpty, !isExecuting, !isRefreshing else { return }
+        let entries = selectedEntries
+        guard !entries.isEmpty, !isExecuting else { return }
         isExecuting = true
-        outcomesByID.removeAll()
+        for (_, request) in entries {
+            outcomesByID.removeValue(forKey: request.id)
+        }
         executionTask?.cancel()
         executionTask = Task {
             await Task.yield()
-            let entries = selectedEntries
             guard !entries.isEmpty, !Task.isCancelled else {
                 isExecuting = false
                 return
@@ -2621,6 +2687,7 @@ private struct StorageSourceDetailView: View {
     @State private var resourceProjection: StorageResourceTreeIndex?
     @State private var didInitializeCleanupSelection = false
     @State private var didCustomizeCleanupSelection = false
+    @State private var pendingSynchronizationIDs = Set<String>()
     @State private var cleanupReview: StorageCleanupReviewContext?
     @State private var isAwaitingRepositoryAuthorization = false
     @State private var isCheckingRepositoryAuthorization = false
@@ -2656,11 +2723,19 @@ private struct StorageSourceDetailView: View {
                             .foregroundStyle(.secondary)
                     }
                 } else if let refreshError {
-                    Label(refreshError, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .lineLimit(1)
-                        .help(refreshError)
+                    HStack(spacing: 7) {
+                        Label(refreshError, systemImage: "exclamationmark.triangle.fill")
+                            .lineLimit(1)
+                            .help(refreshError)
+                        Button(action: startAnalysis) {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.plain)
+                        .help(L10n.text("重试同步"))
+                        .accessibilityLabel(L10n.text("重试同步"))
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.orange)
                 }
             }
             .padding(.horizontal, 18)
@@ -2722,7 +2797,7 @@ private struct StorageSourceDetailView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle(item.candidate.descriptor.title)
-        .task(id: item.snapshotID) { await prepareResourceProjection() }
+        .task(id: item.resultRevision) { await prepareResourceProjection() }
         .task(id: shouldStartWorkspaceAnalysis) {
             guard shouldStartWorkspaceAnalysis else { return }
             await Task.yield()
@@ -2748,6 +2823,7 @@ private struct StorageSourceDetailView: View {
                 didFinish: { summary in
                     let succeeded = Set(summary.outcomes.filter(\.succeeded).map(\.id))
                     selectedResourceIDs.subtract(succeeded)
+                    pendingSynchronizationIDs.formUnion(succeeded)
                     didCleanup()
                 }
             )
@@ -2952,6 +3028,7 @@ private struct StorageSourceDetailView: View {
                         projection: resourceProjection,
                         categoryDescription: profile.categoryDescription,
                         selectedIDs: $selectedResourceIDs,
+                        pendingSynchronizationIDs: pendingSynchronizationIDs,
                         onSelectionInteraction: { didCustomizeCleanupSelection = true }
                     )
                 } else {
@@ -3024,6 +3101,7 @@ private struct StorageSourceDetailView: View {
         }.value
         guard !Task.isCancelled else { return }
         resourceProjection = projection
+        pendingSynchronizationIDs.removeAll()
 
         if didInitializeCleanupSelection {
             selectedResourceIDs.formIntersection(Set(projection.requestsByID.keys))
@@ -3035,7 +3113,11 @@ private struct StorageSourceDetailView: View {
     }
 
     private func cleanupSelectionBar(_ projection: StorageResourceTreeIndex) -> some View {
-        let requests = projection.selectedRequests(for: selectedResourceIDs)
+        let actionableRequestIDs = Set(projection.requestsByID.keys)
+            .subtracting(pendingSynchronizationIDs)
+        let requests = projection.selectedRequests(
+            for: selectedResourceIDs.subtracting(pendingSynchronizationIDs)
+        )
         let bytes = requests.reduce(UInt64.zero) { $0.addingClamped($1.displayBytes) }
         return HStack(spacing: 12) {
             Image(systemName: "checkmark.square.fill")
@@ -3057,13 +3139,14 @@ private struct StorageSourceDetailView: View {
                 cleanupReview = StorageCleanupReviewContext(
                     sourceTitle: item.candidate.descriptor.title,
                     sourceID: item.id,
-                    requests: requests
+                    requests: requests,
+                    remainingRequestCount: actionableRequestIDs.subtracting(requests.map(\.id)).count
                 )
             } label: {
                 Label(L10n.text("检查并清理"), systemImage: "trash")
             }
             .buttonStyle(AppActionButtonStyle(kind: .primary))
-            .disabled(isScanning)
+            .disabled(requests.isEmpty)
         }
         .padding(.horizontal, 18)
         .frame(height: 70)

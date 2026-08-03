@@ -7,6 +7,7 @@ struct StorageResourceTreeView: View {
     let projection: StorageResourceTreeIndex
     let categoryDescription: (String) -> String
     let onSelectionInteraction: () -> Void
+    let pendingSynchronizationIDs: Set<String>
     @Binding var selectedIDs: Set<String>
     @State private var expandedIDs: Set<String>
     @State private var visibleRows: [StorageResourceTreeRow]
@@ -17,11 +18,13 @@ struct StorageResourceTreeView: View {
         projection: StorageResourceTreeIndex,
         categoryDescription: @escaping (String) -> String,
         selectedIDs: Binding<Set<String>>,
+        pendingSynchronizationIDs: Set<String> = [],
         onSelectionInteraction: @escaping () -> Void = {}
     ) {
         self.projection = projection
         self.categoryDescription = categoryDescription
         self.onSelectionInteraction = onSelectionInteraction
+        self.pendingSynchronizationIDs = pendingSynchronizationIDs
         _selectedIDs = selectedIDs
         _expandedIDs = State(initialValue: projection.defaultExpandedIDs)
         _visibleRows = State(initialValue: projection.defaultRows)
@@ -53,7 +56,9 @@ struct StorageResourceTreeView: View {
         _ row: StorageResourceTreeRow,
         selectedCount: Int
     ) -> some View {
-        let requestIDs = projection.cleanupRequestIDsByNodeID[row.node.id] ?? []
+        let allRequestIDs = projection.cleanupRequestIDsByNodeID[row.node.id] ?? []
+        let requestIDs = allRequestIDs.subtracting(pendingSynchronizationIDs)
+        let isPendingSynchronization = !allRequestIDs.isEmpty && requestIDs.isEmpty
         return HStack(alignment: .center, spacing: 10) {
             treeIndent(depth: row.depth)
             Button {
@@ -71,7 +76,8 @@ struct StorageResourceTreeView: View {
             selectionControl(
                 node: row.node,
                 requestIDs: requestIDs,
-                selectedCount: selectedCount
+                selectedCount: selectedCount,
+                isPendingSynchronization: isPendingSynchronization
             )
             Image(systemName: row.node.symbol)
                 .font(.system(size: 14, weight: .semibold))
@@ -82,9 +88,11 @@ struct StorageResourceTreeView: View {
                 Text(localizedTitle(for: row.node))
                     .font(.callout.weight(row.depth == 0 ? .semibold : .medium))
                     .lineLimit(1)
-                Text(detail(for: row.node))
+                Text(pendingSynchronizationIDs.contains(row.node.id)
+                    ? L10n.text("已清理，等待同步确认")
+                    : detail(for: row.node))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(pendingSynchronizationIDs.contains(row.node.id) ? Color.green : Color.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -119,9 +127,17 @@ struct StorageResourceTreeView: View {
     private func selectionControl(
         node: StorageResourceNode,
         requestIDs: Set<String>,
-        selectedCount: Int
+        selectedCount: Int,
+        isPendingSynchronization: Bool
     ) -> some View {
-        if requestIDs.isEmpty {
+        if isPendingSynchronization {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.green)
+                .frame(width: 18, height: 18)
+                .help(L10n.text("已清理，等待同步确认"))
+                .accessibilityLabel(L10n.text("已清理，等待同步确认"))
+        } else if requestIDs.isEmpty {
             Image(systemName: node.isProtected ? "lock.fill" : "minus")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.tertiary)
@@ -634,6 +650,7 @@ struct StorageCleanupReviewContext: Identifiable {
     let sourceTitle: String
     let sourceID: StorageSourceID
     let requests: [StorageCleanupRequest]
+    let remainingRequestCount: Int
 }
 
 struct StorageCleanupReviewSheet: View {
@@ -698,10 +715,18 @@ struct StorageCleanupReviewSheet: View {
                     Text(L10n.format("共 %@", AgentStorageSizeFormatter.string(totalBytes)))
                         .font(.system(.callout, design: .monospaced, weight: .semibold))
                     Spacer()
-                    Button(summary == nil ? L10n.text("取消") : L10n.text("关闭"), action: close)
-                        .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .large))
-                        .disabled(isExecuting)
-                    if summary == nil {
+                    if let summary {
+                        Button(
+                            summary.failedCount > 0 || context.remainingRequestCount > 0
+                                ? L10n.text("继续清理")
+                                : L10n.text("完成"),
+                            action: close
+                        )
+                        .buttonStyle(AppActionButtonStyle(kind: .primary, size: .large))
+                    } else {
+                        Button(L10n.text("取消"), action: close)
+                            .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .large))
+                            .disabled(isExecuting)
                         Button(role: .destructive) {
                             execute()
                         } label: {

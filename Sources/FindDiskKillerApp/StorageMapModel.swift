@@ -34,6 +34,7 @@ final class StorageMapModel {
     private(set) var progressBySource: [StorageSourceID: StorageScanProgress] = [:]
     private(set) var reanalyzingSourceIDs: Set<StorageSourceID> = []
     private(set) var refreshErrorsBySource: [StorageSourceID: String] = [:]
+    private(set) var resultRevisionsBySource: [StorageSourceID: UInt64] = [:]
     private(set) var errorMessage: String?
     private(set) var hasFullDiskRepositoryAccess: Bool
 
@@ -236,6 +237,10 @@ final class StorageMapModel {
         return candidates.contains { $0.id == sourceID && !$0.roots.isEmpty }
     }
 
+    func resultRevision(for sourceID: StorageSourceID) -> UInt64 {
+        resultRevisionsBySource[sourceID, default: 0]
+    }
+
     func prepare() async {
         if let preparationTask {
             await preparationTask.value
@@ -277,7 +282,10 @@ final class StorageMapModel {
 
         candidates = newCandidates
         if snapshot == nil {
-            snapshot = cachedSnapshot
+            publishSnapshot(
+                cachedSnapshot,
+                updatedSourceIDs: Set(cachedSnapshot?.results.map(\.id) ?? [])
+            )
         }
         phase = .ready
         finishPreparation(generation: requestedGeneration)
@@ -372,7 +380,10 @@ final class StorageMapModel {
                     replacement: newSnapshot,
                     candidates: self.candidates
                 )
-                self.snapshot = committedSnapshot
+                self.publishSnapshot(
+                    committedSnapshot,
+                    updatedSourceIDs: Set(newSnapshot.results.map(\.id))
+                )
                 self.phase = .ready
                 self.progress = nil
                 self.progressBySource = [:]
@@ -428,11 +439,12 @@ final class StorageMapModel {
                 }
                 guard !Task.isCancelled,
                       self.sourceGenerations[sourceID] == requestedGeneration else { return }
-                self.snapshot = Self.merging(
+                let committedSnapshot = Self.merging(
                     previous: self.snapshot,
                     partial: partial,
                     sourceID: sourceID
                 )
+                self.publishSnapshot(committedSnapshot, updatedSourceIDs: [sourceID])
                 self.reanalyzingSourceIDs.remove(sourceID)
                 self.refreshErrorsBySource.removeValue(forKey: sourceID)
                 self.progressBySource.removeValue(forKey: sourceID)
@@ -547,7 +559,7 @@ final class StorageMapModel {
         preparationTask = nil
         scanTask?.cancel()
         scanTask = nil
-        snapshot = nil
+        publishSnapshot(nil, updatedSourceIDs: Set(snapshot?.results.map(\.id) ?? []))
         progress = nil
         progressBySource = [:]
         pendingSourceRefreshIDs = []
@@ -624,6 +636,16 @@ final class StorageMapModel {
         pendingSourceRefreshIDs = []
         for sourceID in sourceIDs.sorted(by: { $0.rawValue < $1.rawValue }) {
             startAnalysis(sourceID: sourceID)
+        }
+    }
+
+    private func publishSnapshot(
+        _ newSnapshot: StorageAnalysisSnapshot?,
+        updatedSourceIDs: Set<StorageSourceID>
+    ) {
+        snapshot = newSnapshot
+        for sourceID in updatedSourceIDs {
+            resultRevisionsBySource[sourceID, default: 0] &+= 1
         }
     }
 
