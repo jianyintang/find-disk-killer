@@ -985,6 +985,8 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
     ) { configuration, progress in
         try await probe.scan(configuration: configuration, progress: progress)
     }
+    let codexRevision = model.resultRevision(for: .codex)
+    let claudeRevision = model.resultRevision(for: .claude)
 
     model.startAnalysis(provider: .codex)
     try await waitUntil {
@@ -1002,6 +1004,8 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
     #expect(model.snapshot?.providers.first { $0.provider == .codex }?.exclusiveBytes == 150)
     #expect(model.snapshot?.providers.first { $0.provider == .claude }?.exclusiveBytes == 200)
     #expect(model.snapshot?.coverage.measuredBytes == 350)
+    #expect(model.resultRevision(for: .codex) == codexRevision + 1)
+    #expect(model.resultRevision(for: .claude) == claudeRevision)
 }
 
 @MainActor
@@ -1083,6 +1087,7 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
         }
         return initial
     }
+    let codexRevision = model.resultRevision(for: .codex)
 
     model.refreshAfterCleanup(providers: [.codex])
     try await waitUntil { model.refreshErrorsByProvider[.codex] != nil }
@@ -1090,6 +1095,7 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
     #expect(model.snapshot == initial)
     #expect(model.refreshErrorsByProvider[.codex] == "同步失败")
     #expect(model.refreshErrorsByProvider[.claude] == nil)
+    #expect(model.resultRevision(for: .codex) == codexRevision)
 }
 
 @MainActor

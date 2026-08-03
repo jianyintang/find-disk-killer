@@ -936,3 +936,6 @@
 "累计读写量不会受事件列表淘汰影响" = "Cumulative read and write totals are unaffected when older events are discarded.";
 "事件" = "Event";
 "字节" = "Bytes";
+"继续清理" = "Continue Cleaning";
+"已清理，等待同步确认" = "Cleaned, Waiting for Sync Confirmation";
+"重试同步" = "Retry Sync";

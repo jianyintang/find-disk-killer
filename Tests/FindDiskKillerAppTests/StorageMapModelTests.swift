@@ -475,6 +475,8 @@ import Testing
     await model.prepare()
     model.startAnalysis()
     try await waitForStorageMapTest { model.phase == .ready && model.snapshot != nil }
+    let npmRevision = model.resultRevision(for: .npm)
+    let chromeRevision = model.resultRevision(for: .chrome)
 
     model.startAnalysis(sourceID: .npm)
     try await waitForStorageMapTest {
@@ -490,6 +492,8 @@ import Testing
     #expect(await probe.sourceIDs == [.npm])
     #expect(model.snapshot?.result(for: .npm)?.allocatedBytes == 12_288)
     #expect(model.snapshot?.result(for: .chrome)?.allocatedBytes == 8_192)
+    #expect(model.resultRevision(for: .npm) == npmRevision + 1)
+    #expect(model.resultRevision(for: .chrome) == chromeRevision)
     let systemVolume = try #require(model.snapshot?.volumes.first { $0.id == "system" })
     #expect(systemVolume.sourceUsages.first { $0.sourceID == .npm }?.allocatedBytes == 12_288)
     #expect(systemVolume.sourceUsages.first { $0.sourceID == .chrome }?.allocatedBytes == 8_192)
@@ -617,6 +621,7 @@ import Testing
     await model.prepare()
     model.startAnalysis()
     try await waitForStorageMapTest { model.phase == .ready && model.snapshot != nil }
+    let revision = model.resultRevision(for: .npm)
 
     model.refreshAfterCleanup(sourceID: .npm)
     try await waitForStorageMapTest {
@@ -626,6 +631,7 @@ import Testing
 
     #expect(model.snapshot == initial)
     #expect(model.refreshErrorsBySource[.npm] == "同步失败")
+    #expect(model.resultRevision(for: .npm) == revision)
 }
 
 @Test func storageMapRoutesAgentSourcesToTheirOriginalDeepAnalysis() {
@@ -1129,6 +1135,11 @@ import Testing
     #expect(source.contains("AgentStorageIndexBuilder.build("))
     #expect(source.contains("let worker = Task.detached(priority: .userInitiated)"))
     #expect(source.contains("cleanupBytesByFamilyID[row.familyID]"))
+    #expect(source.contains("pendingCleanupSynchronizationIDsByProvider"))
+    #expect(source.contains(".subtracting(pendingCleanupSynchronizationIDs)"))
+    #expect(source.contains("model.resultRevisionsByProvider"))
+    #expect(source.contains("hasRemainingCleanupItems(after: session)"))
+    #expect(!source.contains("selectedProvider.map(model.isAnalyzing) == true"))
     #expect(!source.contains("rebuildProviderIndexes("))
 }
 
@@ -1986,9 +1997,45 @@ import Testing
     #expect(safeCleanupView.contains("Button(action: executeSelected)"))
     #expect(safeCleanupView.contains("StorageResourceCleanupExecutor()"))
     #expect(safeCleanupView.contains("accessibilityIdentifier(\"storage-safe-cleanup-execute\")"))
+    #expect(safeCleanupView.contains(".disabled(selectedEntries.isEmpty || isExecuting)"))
+    #expect(safeCleanupView.contains("ids.subtracting(succeededRequestIDs)"))
+    #expect(safeCleanupView.contains("selectedIDs.subtracting(succeededRequestIDs)"))
+    #expect(safeCleanupView.contains("refreshErrorsBySource"))
+    #expect(safeCleanupView.contains("L10n.text(\"重试同步\")"))
+    #expect(!safeCleanupView.contains("outcomesByID.removeAll()"))
+    #expect(!safeCleanupView.contains("!isExecuting, !isRefreshing"))
     #expect(!safeCleanupView.contains(".sheet"))
     #expect(!safeCleanupView.contains(".alert"))
     #expect(!safeCleanupView.contains("confirmationDialog"))
+}
+
+@Test func sourceCleanupRemainsAvailableDuringBackgroundSynchronization() throws {
+    let source = try storageMapViewSource()
+    let detailView = try #require(
+        source.split(separator: "private struct StorageSourceDetailView", maxSplits: 1).last?
+            .split(separator: "private struct StorageSourceDetailSkeleton", maxSplits: 1).first
+    )
+
+    #expect(detailView.contains("pendingSynchronizationIDs.formUnion(succeeded)"))
+    #expect(detailView.contains("pendingSynchronizationIDs: pendingSynchronizationIDs"))
+    #expect(detailView.contains("selectedResourceIDs.subtracting(pendingSynchronizationIDs)"))
+    #expect(detailView.contains(".disabled(requests.isEmpty)"))
+    #expect(!detailView.contains(".disabled(isScanning)"))
+}
+
+@Test func resourceTreeBranchSelectionExcludesItemsWaitingForSynchronization() throws {
+    let source = try String(
+        contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/FindDiskKillerApp/Views/StorageResourceTreeView.swift"),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("allRequestIDs.subtracting(pendingSynchronizationIDs)"))
+    #expect(source.contains("selectedIDs.subtract(requestIDs)"))
+    #expect(source.contains("selectedIDs.formUnion(requestIDs)"))
 }
 
 @Test func storageMapKeepsSafeCleanupAndAgentDetailsAsInPageRoutes() throws {

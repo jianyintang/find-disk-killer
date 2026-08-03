@@ -16,6 +16,7 @@ enum AgentStorageLoadState: Equatable {
 final class AgentStorageModel {
     private(set) var snapshot: AgentStorageSnapshot?
     private(set) var snapshotRevision = 0
+    private(set) var resultRevisionsByProvider: [AgentStorageProvider: UInt64] = [:]
     private(set) var state: AgentStorageLoadState
     private(set) var progress = AgentStorageScanProgress(phase: .discoveringSources)
     private(set) var progressByProvider: [AgentStorageProvider: AgentStorageScanProgress] = [:]
@@ -54,6 +55,9 @@ final class AgentStorageModel {
         self.locationRepository = locationRepository ?? AgentDataLocationRepository(defaults: defaults)
         self.cacheURL = cacheURL
         snapshot = initialSnapshot
+        resultRevisionsByProvider = Dictionary(uniqueKeysWithValues:
+            (initialSnapshot?.providers ?? []).map { ($0.provider, 1) }
+        )
         state = initialSnapshot == nil ? .idle : .ready
         self.scanAction = scanAction
         if initialSnapshot == nil, cacheURL != nil {
@@ -62,6 +66,7 @@ final class AgentStorageModel {
                       let self, self.snapshot == nil, !self.isScanning else { return }
                 self.snapshot = cached
                 self.snapshotRevision &+= 1
+                self.incrementResultRevisions(for: Set(cached.providers.map(\.provider)))
                 self.state = .ready
                 self.cacheLoadTask = nil
             }
@@ -104,6 +109,10 @@ final class AgentStorageModel {
         snapshot == nil && !isScanning
     }
 
+    func resultRevision(for provider: AgentStorageProvider) -> UInt64 {
+        resultRevisionsByProvider[provider, default: 0]
+    }
+
     func enterFeature() {
         // Entering or restoring this feature may only reveal the current cache.
     }
@@ -143,6 +152,7 @@ final class AgentStorageModel {
                 }
                 self.snapshot = snapshot
                 self.snapshotRevision &+= 1
+                self.incrementResultRevisions(for: Set(snapshot.providers.map(\.provider)))
                 self.state = .ready
                 self.scanTask = nil
                 await self.persistSnapshot(snapshot)
@@ -199,6 +209,7 @@ final class AgentStorageModel {
                     provider: provider
                 )
                 self.snapshotRevision &+= 1
+                self.incrementResultRevisions(for: [provider])
                 self.refreshErrorsByProvider.removeValue(forKey: provider)
                 self.state = .ready
                 self.finishProviderAnalysis(provider, generation: requestedGeneration)
@@ -319,6 +330,7 @@ final class AgentStorageModel {
         scanTask?.cancel()
         snapshot = nil
         snapshotRevision &+= 1
+        incrementResultRevisions(for: Set(resultRevisionsByProvider.keys))
         progress = AgentStorageScanProgress(phase: .discoveringSources)
         progressByProvider = [:]
         refreshErrorsByProvider = [:]
@@ -361,6 +373,12 @@ final class AgentStorageModel {
         pendingProviderRefreshes = []
         for provider in providers.sorted(by: { $0.rawValue < $1.rawValue }) {
             startAnalysis(provider: provider)
+        }
+    }
+
+    private func incrementResultRevisions(for providers: Set<AgentStorageProvider>) {
+        for provider in providers {
+            resultRevisionsByProvider[provider, default: 0] &+= 1
         }
     }
 
