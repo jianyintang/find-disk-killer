@@ -155,108 +155,332 @@ enum OpenCodeDataDirectory {
 }
 
 struct CodexAppServerCleanupAdapter: AgentStorageCleanupCapabilityProviding {
-    private let executableOverride: String?
+    private let resolver: CodexCleanupRuntimeResolver
 
-    init(executableOverride: String? = nil) {
-        self.executableOverride = executableOverride
+    init(executableOverride: String? = nil, requestTimeout: TimeInterval = 12) {
+        if let executableOverride {
+            resolver = CodexCleanupRuntimeResolver(
+                candidateProvider: { CodexExecutableLocator.candidates(for: [executableOverride], origin: .override) },
+                requestTimeout: requestTimeout
+            )
+        } else {
+            resolver = CodexCleanupRuntimeResolver(requestTimeout: requestTimeout)
+        }
+    }
+
+    init(candidatePaths: [String], requestTimeout: TimeInterval = 12) {
+        resolver = CodexCleanupRuntimeResolver(
+            candidateProvider: { CodexExecutableLocator.candidates(for: candidatePaths, origin: .override) },
+            requestTimeout: requestTimeout
+        )
     }
 
     func availability(for family: AgentStorageThreadFamily) async -> AgentStorageCleanupAvailability {
         guard family.sourceKind == .codexHome else {
             return .unsupported("此 Codex 来源不支持安全清理")
         }
-        guard let executable = executableOverride ?? CodexExecutableLocator.locate() else {
-            return .unsupported("未找到支持 thread/delete 的 Codex")
-        }
-        do {
-            let version = try await AgentCleanupProcess.run(
-                executable: executable,
-                arguments: ["--version"],
-                timeoutSeconds: 4
-            )
-            guard version.status == 0,
-                  CodexExecutableLocator.supportsThreadDelete(version.stdout)
-            else { return .unsupported("Codex 版本不支持安全清理") }
-            try await CodexJSONRPCSession.probe(executable: executable, expectedHome: family.sourcePath)
-            return .ready
-        } catch {
-            return .unsupported(error.localizedDescription)
-        }
+        return await resolver.hasAvailableRuntime
+            ? .ready
+            : .unsupported("未找到 Codex 官方执行器")
     }
 
     func delete(_ family: AgentStorageThreadFamily) async -> AgentStorageCleanupOutcome {
-        guard let executable = executableOverride ?? CodexExecutableLocator.locate() else {
-            return .failed("官方 Codex 清理入口已不可用")
+        await resolver.delete(family)
+    }
+
+    func resetDetection() async {
+        await resolver.resetDetection()
+    }
+}
+
+struct CodexRuntimeCandidate: Hashable, Sendable {
+    enum Origin: Int, Sendable {
+        case override
+        case path
+        case homebrew
+        case npm
+        case nvm
+        case fnm
+        case volta
+        case bun
+        case application
+    }
+
+    let executablePath: String
+    let canonicalPath: String
+    let origin: Origin
+    let device: UInt64
+    let inode: UInt64
+}
+
+enum CodexExecutableLocator {
+    static func locate(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        applicationDirectories: [URL]? = nil,
+        includeSystemLocations: Bool = true
+    ) -> [CodexRuntimeCandidate] {
+        let home = homeDirectory.standardizedFileURL
+        var discovered: [(String, CodexRuntimeCandidate.Origin)] = []
+        if let override = environment["FDK_CODEX_APP_SERVER"] {
+            discovered.append((override, .override))
         }
-        do {
-            return try await CodexJSONRPCSession.delete(
-                executable: executable,
-                expectedHome: family.sourcePath,
-                threadID: family.nativeThreadID
+        discovered += (environment["PATH"] ?? "")
+            .split(separator: ":", omittingEmptySubsequences: true)
+            .map { (URL(fileURLWithPath: String($0)).appending(path: "codex").path, .path) }
+
+        if includeSystemLocations {
+            discovered += [
+                "/opt/homebrew/bin/codex",
+                "/usr/local/bin/codex"
+            ].map { ($0, .homebrew) }
+        }
+        discovered += [
+            home.appending(path: ".npm-global/bin/codex").path,
+            home.appending(path: ".npm/bin/codex").path,
+            home.appending(path: ".local/bin/codex").path,
+            home.appending(path: "bin/codex").path
+        ].map { ($0, .npm) }
+        discovered += versionedCandidates(
+            below: home.appending(path: ".nvm/versions/node"),
+            suffix: "bin/codex"
+        ).map { ($0, .nvm) }
+        discovered += [
+            home.appending(path: ".local/share/fnm/node-versions"),
+            home.appending(path: ".fnm/node-versions")
+        ].flatMap { versionedCandidates(below: $0, suffix: "installation/bin/codex") }
+            .map { ($0, .fnm) }
+        discovered.append((home.appending(path: ".volta/bin/codex").path, .volta))
+        discovered.append((home.appending(path: ".bun/bin/codex").path, .bun))
+
+        let appRoots = applicationDirectories ?? [
+            URL(filePath: "/Applications", directoryHint: .isDirectory),
+            home.appending(path: "Applications", directoryHint: .isDirectory)
+        ]
+        for root in appRoots {
+            for appName in ["ChatGPT.app", "Codex.app"] {
+                discovered.append((
+                    root.appending(path: appName).appending(path: "Contents/Resources/codex").path,
+                    .application
+                ))
+            }
+        }
+
+        return deduplicated(discovered)
+    }
+
+    static func candidates(
+        for paths: [String],
+        origin: CodexRuntimeCandidate.Origin
+    ) -> [CodexRuntimeCandidate] {
+        deduplicated(paths.map { ($0, origin) })
+    }
+
+    private static func versionedCandidates(below root: URL, suffix: String) -> [String] {
+        let children = (try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        return children.map { $0.appending(path: suffix).path }
+    }
+
+    private static func deduplicated(
+        _ paths: [(String, CodexRuntimeCandidate.Origin)]
+    ) -> [CodexRuntimeCandidate] {
+        let sorted = paths.sorted { lhs, rhs in
+            lhs.1.rawValue == rhs.1.rawValue
+                ? URL(fileURLWithPath: lhs.0).standardizedFileURL.path
+                    < URL(fileURLWithPath: rhs.0).standardizedFileURL.path
+                : lhs.1.rawValue < rhs.1.rawValue
+        }
+        var canonicalPaths = Set<String>()
+        var fileIdentities = Set<CodexExecutableIdentity>()
+        return sorted.compactMap { path, origin in
+            guard FileManager.default.isExecutableFile(atPath: path) else { return nil }
+            let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+            let canonical = URL(fileURLWithPath: path)
+                .resolvingSymlinksInPath().standardizedFileURL.path
+            var value = stat()
+            guard stat(path, &value) == 0, (value.st_mode & S_IFMT) == S_IFREG else { return nil }
+            let identity = CodexExecutableIdentity(
+                device: UInt64(value.st_dev),
+                inode: UInt64(value.st_ino)
             )
-        } catch {
-            return .failed(error.localizedDescription)
+            guard canonicalPaths.insert(canonical).inserted,
+                  fileIdentities.insert(identity).inserted else { return nil }
+            return CodexRuntimeCandidate(
+                executablePath: standardized,
+                canonicalPath: canonical,
+                origin: origin,
+                device: identity.device,
+                inode: identity.inode
+            )
         }
     }
 }
 
-enum CodexExecutableLocator {
-    static func locate(environment: [String: String] = ProcessInfo.processInfo.environment) -> String? {
-        if let override = environment["FDK_CODEX_APP_SERVER"], isExecutable(override) {
-            return override
-        }
-        let fileManager = FileManager.default
-        let pathCandidates = (environment["PATH"] ?? "")
-            .split(separator: ":")
-            .map { URL(fileURLWithPath: String($0)).appending(path: "codex").path }
-        let home = fileManager.homeDirectoryForCurrentUser.path
-        let appCandidates = [
-            "/Applications/ChatGPT.app/Contents/Resources/codex",
-            "/Applications/Codex.app/Contents/Resources/codex",
-            "\(home)/Applications/ChatGPT.app/Contents/Resources/codex",
-            "\(home)/Applications/Codex.app/Contents/Resources/codex"
-        ]
-        return (pathCandidates + appCandidates).first(where: isExecutable)
+private struct CodexExecutableIdentity: Hashable {
+    let device: UInt64
+    let inode: UInt64
+}
+
+actor CodexCleanupRuntimeResolver {
+    typealias CandidateProvider = @Sendable () -> [CodexRuntimeCandidate]
+
+    private let candidateProvider: CandidateProvider
+    private let requestTimeout: TimeInterval
+    private var resolvedCandidates: [CodexRuntimeCandidate]?
+    private var preferredIdentity: CodexExecutableIdentity?
+    private var failedIdentities = Set<CodexExecutableIdentity>()
+    private var failuresByIdentity: [CodexExecutableIdentity: CodexCleanupAttemptError] = [:]
+
+    init(
+        candidateProvider: @escaping CandidateProvider = { CodexExecutableLocator.locate() },
+        requestTimeout: TimeInterval = 12
+    ) {
+        self.candidateProvider = candidateProvider
+        self.requestTimeout = requestTimeout
     }
 
-    static func supportsThreadDelete(_ output: String) -> Bool {
-        guard let match = output.range(of: #"\d+\.\d+\.\d+"#, options: .regularExpression) else {
-            return false
-        }
-        let parts = output[match].split(separator: ".").compactMap { Int($0) }
-        guard parts.count == 3 else { return false }
-        return parts[0] > 0 || parts[1] > 146 || (parts[1] == 146 && parts[2] >= 0)
+    var hasAvailableRuntime: Bool { !candidates().isEmpty }
+
+    func resetDetection() {
+        resolvedCandidates = nil
+        preferredIdentity = nil
+        failedIdentities.removeAll()
+        failuresByIdentity.removeAll()
     }
 
-    private static func isExecutable(_ path: String) -> Bool {
-        FileManager.default.isExecutableFile(atPath: path)
+    func delete(_ family: AgentStorageThreadFamily) async -> AgentStorageCleanupOutcome {
+        guard family.sourceKind == .codexHome else {
+            return .failed("此 Codex 来源不支持安全清理")
+        }
+        let available = candidates()
+        guard !available.isEmpty else { return .failed("未找到 Codex 官方执行器") }
+        var ordered = available
+        if let preferredIdentity,
+           let preferredIndex = ordered.firstIndex(where: { identity(of: $0) == preferredIdentity }) {
+            let preferred = ordered.remove(at: preferredIndex)
+            ordered.insert(preferred, at: 0)
+        }
+        let usable = ordered.filter { !failedIdentities.contains(identity(of: $0)) }
+        guard !usable.isEmpty else {
+            return .failed(CodexCleanupAttemptError.summary(Array(failuresByIdentity.values)))
+        }
+
+        var attemptFailures: [CodexCleanupAttemptError] = []
+        for candidate in usable {
+            let identity = identity(of: candidate)
+            guard candidateIsUnchanged(candidate) else {
+                let failure = CodexCleanupAttemptError.startup
+                failedIdentities.insert(identity)
+                failuresByIdentity[identity] = failure
+                attemptFailures.append(failure)
+                continue
+            }
+            do {
+                try await CodexJSONRPCSession.delete(
+                    executable: candidate.executablePath,
+                    expectedHome: family.sourcePath,
+                    threadID: family.nativeThreadID,
+                    requestTimeout: requestTimeout
+                )
+                preferredIdentity = identity
+                return .succeeded
+            } catch let error as CodexCleanupAttemptError {
+                if error.isSafetyRefusal { return .failed(error.localizedDescription) }
+                failedIdentities.insert(identity)
+                failuresByIdentity[identity] = error
+                attemptFailures.append(error)
+            } catch {
+                let failure = CodexCleanupAttemptError.invalidResponse
+                failedIdentities.insert(identity)
+                failuresByIdentity[identity] = failure
+                attemptFailures.append(failure)
+            }
+        }
+        return .failed(CodexCleanupAttemptError.summary(attemptFailures))
+    }
+
+    private func candidates() -> [CodexRuntimeCandidate] {
+        if let resolvedCandidates { return resolvedCandidates }
+        let candidates = candidateProvider()
+        resolvedCandidates = candidates
+        return candidates
+    }
+
+    private func identity(of candidate: CodexRuntimeCandidate) -> CodexExecutableIdentity {
+        CodexExecutableIdentity(device: candidate.device, inode: candidate.inode)
+    }
+
+    private func candidateIsUnchanged(_ candidate: CodexRuntimeCandidate) -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: candidate.executablePath) else { return false }
+        var value = stat()
+        return stat(candidate.executablePath, &value) == 0
+            && (value.st_mode & S_IFMT) == S_IFREG
+            && UInt64(value.st_dev) == candidate.device
+            && UInt64(value.st_ino) == candidate.inode
+    }
+}
+
+private enum CodexCleanupAttemptError: LocalizedError, Sendable {
+    case startup
+    case homeMismatch
+    case timedOut
+    case invalidResponse
+    case officialDeleteFailed
+    case threadIdentityChanged
+
+    var isSafetyRefusal: Bool {
+        if case .threadIdentityChanged = self { return true }
+        return false
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .startup: L10n.text("Codex 官方执行器启动失败")
+        case .homeMismatch: L10n.text("Codex 官方服务的数据目录与扫描来源不一致")
+        case .timedOut: L10n.text("Codex 官方清理服务响应超时")
+        case .invalidResponse: L10n.text("Codex 官方服务返回了无效响应")
+        case .officialDeleteFailed: L10n.text("Codex 官方删除调用失败")
+        case .threadIdentityChanged: L10n.text("Codex 聊天身份或父子关系已变化")
+        }
+    }
+
+    static func summary(_ failures: [Self]) -> String {
+        let messages = failures.compactMap(\.errorDescription)
+        let unique = messages.reduce(into: [String]()) { result, message in
+            if !result.contains(message) { result.append(message) }
+        }
+        guard unique.count > 1 else {
+            return unique.first ?? L10n.text("Codex 官方删除调用失败")
+        }
+        return L10n.format(
+            "所有 Codex 官方执行器均失败：%@",
+            unique.joined(separator: " · ")
+        )
     }
 }
 
 private enum CodexJSONRPCSession {
-    static func probe(executable: String, expectedHome: String?) async throws {
-        try await Task.detached(priority: .userInitiated) {
-            let client = try CodexJSONRPCClient(executable: executable, codexHome: expectedHome)
-            defer { client.stop() }
-            try client.initialize(expectedHome: expectedHome)
-            let response = try client.request(
-                id: 2,
-                method: "thread/delete",
-                params: ["threadId": "find-disk-killer-capability-probe"]
-            )
-            guard response.error?.isInvalidThreadID == true else {
-                throw AgentStorageCleanupError.invalidProtocol
-            }
-        }.value
-    }
-
     static func delete(
         executable: String,
         expectedHome: String?,
-        threadID: String
-    ) async throws -> AgentStorageCleanupOutcome {
+        threadID: String,
+        requestTimeout: TimeInterval
+    ) async throws {
         try await Task.detached(priority: .userInitiated) {
-            let client = try CodexJSONRPCClient(executable: executable, codexHome: expectedHome)
+            let client: CodexJSONRPCClient
+            do {
+                client = try CodexJSONRPCClient(
+                    executable: executable,
+                    codexHome: expectedHome,
+                    requestTimeout: requestTimeout
+                )
+            } catch {
+                throw CodexCleanupAttemptError.startup
+            }
             defer { client.stop() }
             try client.initialize(expectedHome: expectedHome)
 
@@ -266,13 +490,15 @@ private enum CodexJSONRPCSession {
                 params: ["threadId": threadID, "includeTurns": false]
             )
             if let error = before.error {
-                return error.isNotFound ? .succeeded : .failed(error.message)
+                if error.isNotFound { return }
+                throw CodexCleanupAttemptError.officialDeleteFailed
             }
-            guard let thread = before.result?.objectValue?["thread"]?.objectValue,
-                  thread["id"]?.stringValue == threadID,
-                  thread["parentThreadId"]?.stringValue == nil
-            else {
-                return .failed("Codex 返回了不匹配的 thread")
+            guard let thread = before.result?.objectValue?["thread"]?.objectValue else {
+                throw CodexCleanupAttemptError.invalidResponse
+            }
+            guard thread["id"]?.stringValue == threadID,
+                  thread["parentThreadId"]?.stringValue == nil else {
+                throw CodexCleanupAttemptError.threadIdentityChanged
             }
 
             let deletion = try client.request(
@@ -280,18 +506,15 @@ private enum CodexJSONRPCSession {
                 method: "thread/delete",
                 params: ["threadId": threadID]
             )
-            if let error = deletion.error {
-                return .failed(error.message)
-            }
+            if deletion.error != nil { throw CodexCleanupAttemptError.officialDeleteFailed }
             let after = try client.request(
                 id: 4,
                 method: "thread/read",
                 params: ["threadId": threadID, "includeTurns": false]
             )
             guard let error = after.error, error.isNotFound else {
-                return .failed("Codex 未确认 thread 已删除")
+                throw CodexCleanupAttemptError.officialDeleteFailed
             }
-            return .succeeded
         }.value
     }
 }
@@ -300,9 +523,11 @@ private final class CodexJSONRPCClient: @unchecked Sendable {
     private let process = Process()
     private let input = Pipe()
     private let output = Pipe()
+    private let requestTimeout: TimeInterval
     private var pending = Data()
 
-    init(executable: String, codexHome: String?) throws {
+    init(executable: String, codexHome: String?, requestTimeout: TimeInterval) throws {
+        self.requestTimeout = requestTimeout
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = ["app-server"]
         if let codexHome {
@@ -312,7 +537,7 @@ private final class CodexJSONRPCClient: @unchecked Sendable {
         }
         process.standardInput = input
         process.standardOutput = output
-        process.standardError = Pipe()
+        process.standardError = FileHandle.nullDevice
         try process.run()
     }
 
@@ -332,26 +557,29 @@ private final class CodexJSONRPCClient: @unchecked Sendable {
         guard response.error == nil, let result = response.result?.objectValue,
               result["userAgent"]?.stringValue?.lowercased().contains("codex") == true,
               let returnedHome = result["codexHome"]?.stringValue
-        else { throw AgentStorageCleanupError.invalidProtocol }
+        else { throw CodexCleanupAttemptError.invalidResponse }
         if let expectedHome {
             let expected = URL(fileURLWithPath: expectedHome).resolvingSymlinksInPath().standardizedFileURL.path
             let actual = URL(fileURLWithPath: returnedHome).resolvingSymlinksInPath().standardizedFileURL.path
-            guard expected == actual else { throw AgentStorageCleanupError.providerHomeMismatch }
+            guard expected == actual else { throw CodexCleanupAttemptError.homeMismatch }
         }
         try send(["method": "initialized"])
     }
 
     func request(id: Int, method: String, params: [String: Any]) throws -> AgentCleanupRPCEnvelope {
         try send(["id": id, "method": method, "params": params])
-        let deadline = Date().addingTimeInterval(12)
+        let deadline = Date().addingTimeInterval(requestTimeout)
         while Date() < deadline {
             let line = try readLine(deadline: deadline)
-            guard let data = line.data(using: .utf8),
-                  let envelope = try? JSONDecoder().decode(AgentCleanupRPCEnvelope.self, from: data),
-                  envelope.id == id else { continue }
+            guard let data = line.data(using: .utf8) else { continue }
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            guard (object?["id"] as? Int) == id else { continue }
+            guard let envelope = try? JSONDecoder().decode(AgentCleanupRPCEnvelope.self, from: data) else {
+                throw CodexCleanupAttemptError.invalidResponse
+            }
             return envelope
         }
-        throw AgentStorageCleanupError.timedOut
+        throw CodexCleanupAttemptError.timedOut
     }
 
     func stop() {
@@ -379,10 +607,10 @@ private final class CodexJSONRPCClient: @unchecked Sendable {
                 revents: 0
             )
             guard poll(&descriptor, 1, remaining) > 0 else {
-                throw AgentStorageCleanupError.timedOut
+                throw CodexCleanupAttemptError.timedOut
             }
             let chunk = output.fileHandleForReading.availableData
-            guard !chunk.isEmpty else { throw AgentStorageCleanupError.invalidProtocol }
+            guard !chunk.isEmpty else { throw CodexCleanupAttemptError.invalidResponse }
             pending.append(chunk)
         }
     }
@@ -405,7 +633,6 @@ private struct AgentCleanupRPCError: Decodable {
             || normalized.hasPrefix("thread not loaded:")
     }
 
-    var isInvalidThreadID: Bool { message.lowercased().hasPrefix("invalid thread id:") }
 }
 
 private indirect enum AgentCleanupJSONValue: Decodable {

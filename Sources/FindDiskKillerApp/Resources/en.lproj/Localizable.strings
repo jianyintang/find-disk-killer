@@ -939,3 +939,12 @@
 "继续清理" = "Continue Cleaning";
 "已清理，等待同步确认" = "Cleaned, Waiting for Sync Confirmation";
 "重试同步" = "Retry Sync";
+"操作不可撤销。活动聊天或身份变化会立即跳过；官方执行器失败时会自动切换，不会改写数据库，也不会降级为手工删除文件。" = "This cannot be undone. Active chats and identity changes are skipped. Failed official runtimes are switched automatically; databases are never rewritten, and file deletion is never used as a fallback.";
+"未找到 Codex 官方执行器" = "No Official Codex Runtime Found";
+"Codex 官方执行器启动失败" = "Official Codex Runtime Failed to Start";
+"Codex 官方服务的数据目录与扫描来源不一致" = "The official Codex service data directory does not match the scanned source";
+"Codex 官方清理服务响应超时" = "Official Codex Cleanup Timed Out";
+"Codex 官方服务返回了无效响应" = "The official Codex service returned an invalid response";
+"Codex 官方删除调用失败" = "Official Codex Delete Call Failed";
+"Codex 聊天身份或父子关系已变化" = "The Codex chat identity or parent relationship changed";
+"所有 Codex 官方执行器均失败：%@" = "All official Codex runtimes failed: %@";
