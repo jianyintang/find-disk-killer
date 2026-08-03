@@ -164,7 +164,7 @@ final class AgentStorageModel {
                 self.drainPendingProviderRefreshes()
             } catch {
                 guard self.generation == requestedGeneration else { return }
-                self.state = .failed(error.localizedDescription)
+                self.state = .failed(L10n.errorDescription(error))
                 self.scanTask = nil
                 self.drainPendingProviderRefreshes()
             }
@@ -220,8 +220,9 @@ final class AgentStorageModel {
                 self.finishProviderAnalysis(provider, generation: requestedGeneration)
             } catch {
                 self.finishProviderAnalysis(provider, generation: requestedGeneration)
-                self.refreshErrorsByProvider[provider] = error.localizedDescription
-                self.state = .failed(error.localizedDescription)
+                let message = L10n.errorDescription(error)
+                self.refreshErrorsByProvider[provider] = message
+                self.state = .failed(message)
             }
         }
     }

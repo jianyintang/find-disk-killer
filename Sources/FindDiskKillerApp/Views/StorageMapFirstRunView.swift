@@ -331,7 +331,7 @@ private struct TopologySourceNode: View {
                 .foregroundStyle(color)
                 .frame(width: 20, height: 20)
             VStack(alignment: .leading, spacing: 1) {
-                Text(candidate.descriptor.title)
+                Text(L10n.text(candidate.descriptor.title))
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
                     .minimumScaleFactor(0.82)

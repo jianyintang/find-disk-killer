@@ -787,7 +787,7 @@ private struct TraceEventTable: View {
                     .foregroundStyle(.secondary)
                 Text(L10n.text("最近事件"))
                     .font(.headline)
-                Text(filteredRows.count.formatted())
+                Text(L10n.number(filteredRows.count))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                 if discardedCount > 0 {
@@ -1137,7 +1137,7 @@ private func tableHeading(_ title: String, count: Int, symbol: String) -> some V
         Image(systemName: symbol).foregroundStyle(.secondary)
         Text(L10n.text(title)).font(.headline)
         Spacer()
-        Text(count.formatted())
+        Text(L10n.number(count))
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
     }

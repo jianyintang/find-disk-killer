@@ -421,7 +421,7 @@ struct AgentStorageBatchCleanupSheet: View {
             HStack(spacing: 7) {
                 Image(systemName: selectedIDs.isEmpty ? "checkmark.circle" : "checkmark.circle.fill")
                 Text(L10n.text("批量选择"))
-                Text(selectedIDs.count.formatted())
+                Text(L10n.number(selectedIDs.count))
                     .font(.caption2.weight(.bold).monospacedDigit())
                     .foregroundStyle(selectedIDs.isEmpty ? Color.secondary : Color.white)
                     .frame(minWidth: 18, minHeight: 18)
@@ -553,11 +553,11 @@ struct AgentStorageBatchCleanupSheet: View {
                     .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Text(family.updatedAt.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))
+                Text(L10n.relativeDate(family.updatedAt, abbreviated: true))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(width: 104, alignment: .leading)
-                Text(artifacts.count.formatted())
+                Text(L10n.number(artifacts.count))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(width: 92, alignment: .trailing)
@@ -637,13 +637,13 @@ struct AgentStorageBatchCleanupSheet: View {
         HStack(spacing: 22) {
             footerMetric(
                 L10n.text("已选聊天"),
-                selectedFamilies.count.formatted(),
+                L10n.number(selectedFamilies.count),
                 symbol: "checkmark.circle.fill",
                 color: .blue
             )
             footerMetric(
                 L10n.text("独占文件"),
-                isReviewUpdating ? "—" : (selectedReview?.artifacts.count ?? 0).formatted(),
+                isReviewUpdating ? "—" : L10n.number(selectedReview?.artifacts.count ?? 0),
                 symbol: "doc.fill",
                 color: .teal
             )

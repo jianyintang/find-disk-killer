@@ -224,7 +224,7 @@ actor StorageResourceCleanupExecutor {
             } catch {
                 outcomes.append(StorageCleanupOutcome(
                     request: request,
-                    errorDescription: error.localizedDescription
+                    errorDescription: L10n.errorDescription(error)
                 ))
             }
         }
@@ -239,8 +239,13 @@ actor StorageResourceCleanupExecutor {
                 repositorySearchRoots: [],
                 providerInventoryEnabled: false
             ))
-            guard candidates.first(where: { $0.id == sourceID })?
-                .roots.contains(where: { $0.id == rootID && samePhysicalPath($0.path, path) }) == true else {
+            let isCurrentCatalogRoot = candidates.first(where: { $0.id == sourceID })?
+                .roots.contains(where: { $0.id == rootID && samePhysicalPath($0.path, path) }) == true
+            guard isCurrentCatalogRoot || isVerifiedCustomCodexCacheRoot(
+                path: path,
+                sourceID: sourceID,
+                rootID: rootID
+            ) else {
                 throw StorageCleanupError.sourceChanged
             }
             let url = URL(fileURLWithPath: path, isDirectory: true)
@@ -393,6 +398,25 @@ actor StorageResourceCleanupExecutor {
         }
     }
 
+    private func isVerifiedCustomCodexCacheRoot(
+        path: String,
+        sourceID: StorageSourceID,
+        rootID: String
+    ) -> Bool {
+        guard sourceID == .codex,
+              rootID.hasPrefix("codex."),
+              rootID.contains(".cache.") else { return false }
+        let cacheURL = URL(fileURLWithPath: path, isDirectory: true)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        guard ["cache", "tmp", ".tmp"].contains(cacheURL.lastPathComponent) else {
+            return false
+        }
+        return AgentDataLocationDiscovery.recognizedProvider(
+            at: cacheURL.deletingLastPathComponent()
+        ) == .codex
+    }
+
     @discardableResult
     private func runDocker(arguments: [String]) async throws -> String {
         if let dockerCommand { return try await dockerCommand(arguments) }
@@ -432,7 +456,7 @@ actor StorageResourceCleanupExecutor {
     }
 
     private func simulatorResourceIsAbsent(_ error: Error) -> Bool {
-        let message = error.localizedDescription.lowercased()
+        let message = String(describing: error).lowercased()
         return message.contains("does not exist")
             || message.contains("not found")
             || message.contains("unknown device")
@@ -504,7 +528,7 @@ actor StorageResourceCleanupExecutor {
     }
 
     private func dockerResourceIsAbsent(_ error: Error) -> Bool {
-        let message = error.localizedDescription.lowercased()
+        let message = String(describing: error).lowercased()
         return message.contains("no such image")
             || message.contains("no such volume")
             || message.contains("no such container")

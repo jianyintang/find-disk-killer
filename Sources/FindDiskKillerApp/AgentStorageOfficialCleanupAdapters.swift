@@ -39,7 +39,7 @@ struct OpenCodeCLIAdapter: AgentStorageCleanupCapabilityProviding {
             }
             return .ready
         } catch {
-            return .unsupported(error.localizedDescription)
+            return .unsupported(L10n.errorDescription(error))
         }
     }
 
@@ -73,7 +73,7 @@ struct OpenCodeCLIAdapter: AgentStorageCleanupCapabilityProviding {
             }
             return .succeeded
         } catch {
-            return .failed(error.localizedDescription)
+            return .failed(L10n.errorDescription(error))
         }
     }
 
@@ -389,7 +389,7 @@ actor CodexCleanupRuntimeResolver {
                 preferredIdentity = identity
                 return .succeeded
             } catch let error as CodexCleanupAttemptError {
-                if error.isSafetyRefusal { return .failed(error.localizedDescription) }
+                if error.isSafetyRefusal { return .failed(L10n.errorDescription(error)) }
                 failedIdentities.insert(identity)
                 failuresByIdentity[identity] = error
                 attemptFailures.append(error)
@@ -678,7 +678,7 @@ struct ClaudeSDKCleanupAdapter: AgentStorageCleanupCapabilityProviding {
             }
             return .ready
         } catch {
-            return .unsupported(error.localizedDescription)
+            return .unsupported(L10n.errorDescription(error))
         }
     }
 
@@ -700,7 +700,7 @@ struct ClaudeSDKCleanupAdapter: AgentStorageCleanupCapabilityProviding {
             }
             return .failed(response["error"] as? String ?? "Claude SDK 未确认 session 已删除")
         } catch {
-            return .failed(error.localizedDescription)
+            return .failed(L10n.errorDescription(error))
         }
     }
 

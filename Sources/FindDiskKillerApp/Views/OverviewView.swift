@@ -257,7 +257,7 @@ struct OverviewView: View {
     private var applicationMetric: some View {
         OverviewMetricCard(
             title: "可见应用",
-            value: store.activeApplicationCount.formatted(),
+            value: L10n.number(store.activeApplicationCount),
             symbol: "square.stack.3d.up",
             color: .purple,
             sparkline: []
@@ -1240,8 +1240,8 @@ struct ProcessTable: View {
                     .fill(.quaternary)
                     .frame(width: 26, height: 26)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Application activity").lineLimit(1)
-                    Text("Full disk I/O")
+                    Text(L10n.text("应用")).lineLimit(1)
+                    Text(L10n.text("全盘 I/O 合计"))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -2249,7 +2249,7 @@ private struct ProcessFileActivityView: View {
                 Spacer()
                 status
                 if let snapshot {
-                    Text(snapshot.capturedAt.formatted(date: .omitted, time: .standard))
+                    Text(L10n.date(snapshot.capturedAt, date: .omitted, time: .standard))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -2266,28 +2266,28 @@ private struct ProcessFileActivityView: View {
             HStack(spacing: 18) {
                 FileActivityMetric(
                     title: "位置",
-                    value: rows.count.formatted(),
+                    value: L10n.number(rows.count),
                     symbol: "folder",
                     color: .blue
                 )
                 Divider().frame(height: 32)
                 FileActivityMetric(
                     title: "可写",
-                    value: writableRows.count.formatted(),
+                    value: L10n.number(writableRows.count),
                     symbol: "pencil.line",
                     color: .orange
                 )
                 Divider().frame(height: 32)
                 FileActivityMetric(
                     title: "打开文件",
-                    value: rows.reduce(0) { $0 + $1.fileCount }.formatted(),
+                    value: L10n.number(rows.reduce(0) { $0 + $1.fileCount }),
                     symbol: "doc.on.doc",
                     color: .teal
                 )
                 Divider().frame(height: 32)
                 FileActivityMetric(
                     title: "最近 5 分钟修改",
-                    value: rows.filter { $0.lastChangedAt != nil }.count.formatted(),
+                    value: L10n.number(rows.filter { $0.lastChangedAt != nil }.count),
                     symbol: "clock.arrow.circlepath",
                     color: .purple
                 )
@@ -2353,7 +2353,7 @@ private struct ProcessFileActivityView: View {
             Label(
                 L10n.format(
                     "自 %@ 开始观察",
-                    observedSince.formatted(date: .omitted, time: .standard)
+                    L10n.date(observedSince, date: .omitted, time: .standard)
                 ),
                 systemImage: "eye"
             )
@@ -2569,17 +2569,20 @@ private struct ProcessFileActivityView: View {
                                 ? accessDescription(selectedRow.modes)
                                 : L10n.text("当前未打开")
                         )
-                        locationMetadataRow("打开文件", selectedRow.fileCount.formatted())
+                        locationMetadataRow("打开文件", L10n.number(selectedRow.fileCount))
                         locationMetadataRow("所在卷", selectedRow.volumeName)
                         if let tracked = selectedTrackedLocation {
                             locationMetadataRow(
                                 "首次观察",
-                                tracked.firstObservedAt.formatted(date: .omitted, time: .standard)
+                                L10n.date(tracked.firstObservedAt, date: .omitted, time: .standard)
                             )
                             locationMetadataRow(
                                 "最后活动",
-                                (selectedRow.lastChangedAt ?? tracked.lastSeenOpenAt)
-                                    .formatted(date: .omitted, time: .standard)
+                                L10n.date(
+                                    selectedRow.lastChangedAt ?? tracked.lastSeenOpenAt,
+                                    date: .omitted,
+                                    time: .standard
+                                )
                             )
                         }
                     }
@@ -3135,7 +3138,7 @@ private struct FileLocationRow: View {
                 VStack(alignment: .trailing, spacing: 3) {
                     Text(L10n.format(
                         "修改于 %@",
-                        lastChangedAt.formatted(date: .omitted, time: .standard)
+                        L10n.date(lastChangedAt, date: .omitted, time: .standard)
                     ))
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -3198,7 +3201,7 @@ private struct FileChangeEvidenceBand: View {
         if let lastChangedAt {
             return L10n.format(
                 "最近一次 %@，但无法确认是否由此应用造成",
-                lastChangedAt.formatted(date: .omitted, time: .standard)
+                L10n.date(lastChangedAt, date: .omitted, time: .standard)
             )
         }
         if observationStatus == .unavailable {

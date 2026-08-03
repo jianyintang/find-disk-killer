@@ -47,14 +47,14 @@ final class HistoryModel {
             self.databaseURL = databaseURL
             database = nil
             recorder = nil
-            initializationError = error.localizedDescription
+            initializationError = L10n.errorDescription(error)
             storageInfo = HistoryStorageInfo(
                 databaseBytes: 0,
                 walBytes: 0,
                 shmBytes: 0,
                 budgetBytes: budget,
                 lastSavedAt: nil,
-                state: .unavailable(error.localizedDescription)
+                state: .unavailable(L10n.errorDescription(error))
             )
         }
     }
@@ -109,7 +109,7 @@ final class HistoryModel {
         } catch is CancellationError {
             return
         } catch {
-            reportState = .failed(error.localizedDescription)
+            reportState = .failed(L10n.errorDescription(error))
         }
     }
 
@@ -136,7 +136,7 @@ final class HistoryModel {
             reportState = .idle
             storageInfo = await database.storageInfo(configuration: configuration)
         } catch {
-            initializationError = error.localizedDescription
+            initializationError = L10n.errorDescription(error)
         }
     }
 

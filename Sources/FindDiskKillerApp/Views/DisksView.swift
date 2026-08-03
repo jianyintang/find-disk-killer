@@ -89,7 +89,7 @@ struct DisksView: View {
                     Divider().frame(height: 38)
                     MetricValue(
                         title: "已挂载卷",
-                        value: store.volumes.count.formatted(),
+                        value: L10n.number(store.volumes.count),
                         symbol: "externaldrive.connected.to.line.below",
                         color: .blue
                     )
@@ -164,7 +164,7 @@ struct DisksView: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                         Spacer()
-                        Text(physicalHealthDisks.count.formatted())
+                        Text(L10n.number(physicalHealthDisks.count))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
@@ -504,7 +504,7 @@ private struct DiskHealthDetail: View {
                 staleText: stale
                     ? L10n.format(
                         "上次读取于 %@",
-                        snapshot.sampledAt.formatted(date: .abbreviated, time: .standard)
+                        L10n.date(snapshot.sampledAt, date: .abbreviated, time: .standard)
                     )
                     : nil
             )
@@ -590,7 +590,7 @@ private struct DiskHealthDetail: View {
         if let temperature = snapshot.temperatureCelsius {
             items.append(.init(
                 title: L10n.text(stale ? "上次温度" : "当前温度"),
-                value: String(format: "%.0f°C", temperature),
+                value: "\(L10n.decimal(temperature, fractionDigits: 0))°C",
                 symbol: "thermometer.medium",
                 color: .blue
             ))
@@ -675,7 +675,7 @@ private struct DiskHealthDetail: View {
         Text(L10n.format(
             "来源：%@ · %@",
             snapshot.source,
-            snapshot.sampledAt.formatted(date: .abbreviated, time: .standard)
+            L10n.date(snapshot.sampledAt, date: .abbreviated, time: .standard)
         ))
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -729,8 +729,8 @@ private struct DiskHealthDetail: View {
     }
 
     private func counterText(_ value: UInt128Value) -> String {
-        if value.high == 0 { return value.low.formatted() }
-        return String(format: "%.0f", value.approximateDouble)
+        if value.high == 0 { return L10n.number(value.low) }
+        return L10n.decimal(value.approximateDouble, fractionDigits: 0)
     }
 }
 
@@ -1141,7 +1141,7 @@ private struct VolumeAccessTracePanel: View {
             Divider().frame(height: 42)
             VolumeTraceMetric(
                 title: "元数据访问",
-                value: store.metadataEventCount.map { $0.formatted() } ?? L10n.text("尚未开始"),
+                value: store.metadataEventCount.map { L10n.number($0) } ?? L10n.text("尚未开始"),
                 symbol: "list.bullet.rectangle",
                 color: .indigo
             )
@@ -1259,7 +1259,7 @@ private struct VolumeAccessTracePanel: View {
     }
 
     private var firstEventText: String {
-        store.firstEventAt?.formatted(date: .omitted, time: .standard)
+        store.firstEventAt.map { L10n.date($0, date: .omitted, time: .standard) }
             ?? L10n.text("等待访问")
     }
 
@@ -1471,9 +1471,9 @@ private struct VolumeAccessSourceTable: View {
 
     private func processSubtitle(_ row: VolumeAccessSourceRow) -> String {
         if let pid = row.pid {
-            return L10n.format("进程 ID %d · %@ 次事件", pid, eventCount(row).formatted())
+            return L10n.format("进程 ID %d · %@ 次事件", pid, L10n.number(eventCount(row)))
         }
-        return L10n.format("%@ 次事件", eventCount(row).formatted())
+        return L10n.format("%@ 次事件", L10n.number(eventCount(row)))
     }
 
     private func eventCount(_ row: VolumeAccessSourceRow) -> Int {
@@ -1607,7 +1607,7 @@ private func volumeTraceTableHeading(_ title: String, count: Int, symbol: String
         Image(systemName: symbol).foregroundStyle(.secondary)
         Text(L10n.text(title)).font(.headline)
         Spacer()
-        Text(count.formatted())
+        Text(L10n.number(count))
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
     }

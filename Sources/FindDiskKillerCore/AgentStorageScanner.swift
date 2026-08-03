@@ -403,7 +403,7 @@ private struct AgentStorageScanEngine {
                     completedScopes: index,
                     totalScopes: metadataScopes.count
                 )
-            case .codexDesktop, .claudeDesktop:
+            case .codexDesktop, .claudeDesktop, .rebuildableCache:
                 break
             }
             reportProgress(
@@ -1754,6 +1754,8 @@ private struct AgentStorageScanEngine {
         let relative = relativePath(of: url, under: scope.root)
         let components = relative.split(separator: "/").map(String.init)
         switch scope.kind {
+        case .rebuildableCache:
+            return claim(scope, url.path, .global(.cache), .other)
         case .codexHome:
             return classifyCodex(
                 path: url.path,
@@ -1954,8 +1956,11 @@ private struct AgentStorageScanEngine {
             || first == "session-env" {
             return claim(scope, path, .global(.directoryOverhead), .other)
         }
-        if first == "backups" || first == "telemetry" {
-            return claim(scope, path, .global(first == "backups" ? .cache : .other), .other)
+        if first == "backups" {
+            return claim(scope, path, .global(.configuration), .other)
+        }
+        if first == "telemetry" {
+            return claim(scope, path, .global(.other), .other)
         }
         return claim(scope, path, .global(.configuration), .other)
     }
@@ -3194,6 +3199,7 @@ private enum ScanScopeKind: Sendable {
     case claudeDesktop
     case claudeDesktopAgent
     case openCode
+    case rebuildableCache
 
     init(_ kind: AgentStorageSourceKind) {
         switch kind {
@@ -3203,6 +3209,7 @@ private enum ScanScopeKind: Sendable {
         case .claudeDesktop: self = .claudeDesktop
         case .claudeDesktopAgent: self = .claudeDesktopAgent
         case .openCode: self = .openCode
+        case .rebuildableCache: self = .rebuildableCache
         }
     }
 
@@ -3214,6 +3221,7 @@ private enum ScanScopeKind: Sendable {
         case .claudeDesktop: .claudeDesktop
         case .claudeDesktopAgent: .claudeDesktopAgent
         case .openCode: .openCode
+        case .rebuildableCache: .rebuildableCache
         }
     }
 }

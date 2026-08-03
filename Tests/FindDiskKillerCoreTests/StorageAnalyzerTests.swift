@@ -170,6 +170,45 @@ struct StorageAnalyzerTests {
         #expect(openCode.roots.first?.path.hasSuffix("/.local/share/opencode") == true)
     }
 
+    @Test func agentCachesAreCleanableWhileParentDataAndClaudeBackupsStayProtected() async throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        try fixture.writeFile(".codex/state_5.sqlite")
+        try fixture.writeFile(".codex/cache/download.bin", byteCount: 8_192)
+        try fixture.writeFile(".claude/projects/project/chat.jsonl")
+        try fixture.writeFile(".claude/backups/.claude.json.backup.1", byteCount: 8_192)
+        try fixture.writeFile(
+            "Library/Application Support/Claude/Code Cache/script.bin",
+            byteCount: 12_288
+        )
+
+        let snapshot = try await StorageAnalyzer(configuration: .init(
+            homeDirectory: fixture.home
+        )).scan()
+        let codex = try #require(snapshot.result(for: .codex))
+        let claude = try #require(snapshot.result(for: .claude))
+        let codexCache = try #require(codex.resourceTree.first {
+            $0.title.contains("· cache")
+        })
+        let claudeCache = try #require(claude.resourceTree.first {
+            $0.title.contains("· Code Cache")
+        })
+
+        #expect(codex.descriptor.cleanupCapability == .verifiedFiles)
+        #expect(claude.descriptor.cleanupCapability == .verifiedFiles)
+        #expect(codexCache.risk == .rebuildableCache)
+        #expect(!codexCache.isProtected)
+        #expect(codexCache.cleanupTarget != nil)
+        #expect(claudeCache.risk == .rebuildableCache)
+        #expect(!claudeCache.isProtected)
+        #expect(claudeCache.cleanupTarget != nil)
+        #expect(codex.resourceTree.first { $0.id == "codex.home" }?.cleanupTarget == nil)
+        #expect(claude.resourceTree.first { $0.id == "claude.code" }?.cleanupTarget == nil)
+        #expect(claude.components.contains {
+            $0.rootID == "claude.code" && $0.isProtected
+        })
+    }
+
     @Test func catalogDetectsVSCodeAsADeveloperToolWithSeparatedStorageRoots() throws {
         let fixture = try StorageFixture()
         defer { fixture.remove() }

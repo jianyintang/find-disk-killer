@@ -15,6 +15,7 @@ public enum AgentStorageSourceKind: String, Codable, Hashable, Sendable {
     case claudeDesktop
     case claudeDesktopAgent
     case openCode
+    case rebuildableCache
 }
 
 public enum AgentStorageProviderSupportStatus: String, Codable, Hashable, Sendable {

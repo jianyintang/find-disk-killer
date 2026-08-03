@@ -487,7 +487,7 @@ final class TraceHelperController {
             case .notRegistered, .notFound:
                 state = registrationNeedsApproval(after: error)
                     ? .requiresApproval
-                    : .operationFailed(error.localizedDescription)
+                    : .operationFailed(L10n.errorDescription(error))
             }
         }
     }
@@ -500,7 +500,7 @@ final class TraceHelperController {
             refreshStatus()
             return true
         } catch {
-            state = .operationFailed(error.localizedDescription)
+            state = .operationFailed(L10n.errorDescription(error))
             return false
         }
     }

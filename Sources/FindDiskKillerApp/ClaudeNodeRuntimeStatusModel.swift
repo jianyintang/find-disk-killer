@@ -86,7 +86,7 @@ final class ClaudeNodeRuntimeStatusModel {
                 return
             } catch {
                 guard let self, !Task.isCancelled, !self.isDownloading else { return }
-                self.phase = .failed(error.localizedDescription)
+                self.phase = .failed(L10n.errorDescription(error))
             }
         }
     }
@@ -107,7 +107,7 @@ final class ClaudeNodeRuntimeStatusModel {
                 self.phase = .available(Self.availability(from: runtime))
             } catch {
                 self.isDownloading = false
-                self.phase = .failed(error.localizedDescription)
+                self.phase = .failed(L10n.errorDescription(error))
             }
         }
     }

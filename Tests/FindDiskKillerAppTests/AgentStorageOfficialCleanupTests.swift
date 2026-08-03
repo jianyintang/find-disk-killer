@@ -341,6 +341,63 @@ private actor CancellationGate {
     #expect(review.retainedBytes == retained.allocatedBytes)
 }
 
+@Test func codexImmediateReleaseIncludesOnlyRolloutFiles() throws {
+    let fixture = try CleanupFixture(provider: .codex, count: 1)
+    defer { fixture.destroy() }
+    let conversation = fixture.families[0].cleanupArtifacts[0]
+    let snapshotURL = fixture.root.appending(
+        path: "shell_snapshots/\(fixture.families[0].nativeThreadID).sh"
+    )
+    let visualizationURL = fixture.root.appending(
+        path: "visualizations/\(fixture.families[0].nativeThreadID)/preview.png"
+    )
+    try FileManager.default.createDirectory(
+        at: snapshotURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+        at: visualizationURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try fixture.contents.write(to: snapshotURL)
+    try fixture.contents.write(to: visualizationURL)
+    let snapshot = try cleanupArtifactForOfficialTest(at: snapshotURL, category: .snapshot)
+    let visualization = try cleanupArtifactForOfficialTest(at: visualizationURL, category: .snapshot)
+    let original = fixture.families[0]
+    let family = AgentStorageThreadFamily(
+        id: original.id,
+        provider: original.provider,
+        sourceID: original.sourceID,
+        nativeThreadID: original.nativeThreadID,
+        title: original.title,
+        project: original.project,
+        updatedAt: original.updatedAt,
+        isArchived: original.isArchived,
+        mainAllocatedBytes: conversation.allocatedBytes
+            .addingClamped(snapshot.allocatedBytes)
+            .addingClamped(visualization.allocatedBytes),
+        subagentAllocatedBytes: 0,
+        familyOtherAllocatedBytes: 0,
+        artifactCount: 3,
+        path: original.path,
+        subagents: [],
+        composition: [
+            .conversation: conversation.allocatedBytes,
+            .snapshot: snapshot.allocatedBytes.addingClamped(visualization.allocatedBytes)
+        ],
+        cleanupArtifacts: [conversation, snapshot, visualization],
+        sourceKind: .codexHome,
+        sourcePath: original.sourcePath,
+        projectPath: original.projectPath
+    )
+
+    let review = AgentStorageCleanupReview(families: [family])
+
+    #expect(review.artifacts == [conversation])
+    #expect(review.reclaimableBytes == conversation.allocatedBytes)
+    #expect(review.retainedBytes == snapshot.allocatedBytes.addingClamped(visualization.allocatedBytes))
+}
+
 @Test func codexLocatorFindsCommonInstallationsAndDeduplicatesAliases() throws {
     let root = FileManager.default.temporaryDirectory
         .appending(path: "fdk-codex-locator-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -640,7 +697,9 @@ private final class CleanupFixture {
         var values: [AgentStorageThreadFamily] = []
         for index in 0..<count {
             let threadID = String(format: "00000000-0000-0000-0000-%012d", index + 1)
-            let url = root.appending(path: "projects/project/\(threadID).jsonl")
+            let url = provider == .codex
+                ? root.appending(path: "sessions/2026/08/03/rollout-\(threadID).jsonl")
+                : root.appending(path: "projects/project/\(threadID).jsonl")
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true

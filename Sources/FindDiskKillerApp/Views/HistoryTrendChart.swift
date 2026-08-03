@@ -581,7 +581,7 @@ private struct HistoryTimelineNavigator: View {
         .opacity(isEnabled ? 1 : 0.45)
         .accessibilityElement()
         .accessibilityLabel(L10n.text("浏览时间轴"))
-        .accessibilityValue(progress.formatted(.percent.precision(.fractionLength(0))))
+        .accessibilityValue(L10n.percent(progress))
         .accessibilityAdjustableAction { direction in
             guard isEnabled else { return }
             switch direction {

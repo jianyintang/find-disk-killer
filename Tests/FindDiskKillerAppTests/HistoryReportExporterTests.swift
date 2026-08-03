@@ -25,12 +25,37 @@ import Testing
 @Test func historyPDFMarksUnavailableApplicationMetricsWithoutRenderingTheSentinel() throws {
     let report = HistoryReport.exportFixtureWithUnavailableWrite
     let data = try HistoryReportExporter.pdfData(for: report)
-    let text = HistoryReportExporter.pdfText(for: report)
+    let text = HistoryReportExporter.pdfText(for: report, language: .english)
 
     #expect(!text.contains(String(Int64.max)))
-    #expect(text.contains("write Unavailable"))
-    #expect(text.contains("read 20 B"))
+    #expect(text.contains("Write Unavailable"))
+    #expect(text.contains("Read 20 B"))
     #expect(data.count > 1_000)
+}
+
+@Test func historyPDFTextFollowsTheSelectedApplicationLanguage() {
+    let report = HistoryReport.exportFixtureWithUnavailableWrite
+    let english = HistoryReportExporter.pdfText(for: report, language: .english)
+    let simplifiedChinese = HistoryReportExporter.pdfText(
+        for: report,
+        language: .simplifiedChinese
+    )
+
+    #expect(english.contains("History"))
+    #expect(english.contains("Write Unavailable"))
+    #expect(!english.containsCJKUnifiedIdeograph)
+    #expect(simplifiedChinese.contains("历史分析"))
+    #expect(simplifiedChinese.contains("写入 不可用"))
+}
+
+private extension String {
+    var containsCJKUnifiedIdeograph: Bool {
+        unicodeScalars.contains { scalar in
+            (0x3400...0x4DBF).contains(scalar.value)
+                || (0x4E00...0x9FFF).contains(scalar.value)
+                || (0xF900...0xFAFF).contains(scalar.value)
+        }
+    }
 }
 
 private extension HistoryReport {

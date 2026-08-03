@@ -216,10 +216,13 @@ import Testing
     let root = FileManager.default.temporaryDirectory
         .appending(path: UUID().uuidString, directoryHint: .isDirectory)
     defer { try? FileManager.default.removeItem(at: root) }
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    let url = root.appending(path: "artifact.jsonl")
+    let url = root.appending(path: "sessions/2026/08/03/rollout-thread.jsonl")
+    try FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
     try Data(repeating: 0x41, count: 4_096).write(to: url)
-    let artifact = try cleanupArtifact(at: url)
+    let artifact = try cleanupArtifact(at: url, category: .conversation)
     let family = AgentStorageThreadFamily(
         id: "family",
         provider: .codex,
@@ -236,7 +239,9 @@ import Testing
         path: url.path,
         subagents: [],
         composition: [.conversation: artifact.allocatedBytes],
-        cleanupArtifacts: [artifact, artifact]
+        cleanupArtifacts: [artifact, artifact],
+        sourceKind: .codexHome,
+        sourcePath: root.path
     )
 
     let review = AgentStorageCleanupReview(families: [family])
@@ -600,7 +605,10 @@ private func makeFamily(
     )
 }
 
-private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact {
+private func cleanupArtifact(
+    at url: URL,
+    category: AgentStorageArtifactCategory? = nil
+) throws -> AgentStorageCleanupArtifact {
     var value = stat()
     guard lstat(url.path, &value) == 0 else { throw CocoaError(.fileReadUnknown) }
     return AgentStorageCleanupArtifact(
@@ -611,7 +619,8 @@ private func cleanupArtifact(at url: URL) throws -> AgentStorageCleanupArtifact 
         logicalBytes: Int64(value.st_size),
         blocks: Int64(value.st_blocks),
         modifiedSeconds: Int64(value.st_mtimespec.tv_sec),
-        modifiedNanoseconds: Int64(value.st_mtimespec.tv_nsec)
+        modifiedNanoseconds: Int64(value.st_mtimespec.tv_nsec),
+        category: category
     )
 }
 

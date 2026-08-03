@@ -358,8 +358,8 @@ private struct ProcessPreviewRow: Identifiable, Sendable {
     static func placeholder(_ index: Int) -> Self {
         Self(
             id: "placeholder-\(index)",
-            name: "Application activity",
-            subtitle: "Full disk I/O",
+            name: L10n.text("应用"),
+            subtitle: L10n.text("全盘 I/O 合计"),
             cpu: "00.0%",
             totalWrite: "000 MB",
             currentWrite: "0.00 MB/s",
@@ -429,7 +429,7 @@ private struct SectionNavigationPlaceholder: View {
             if let snapshot {
                 Text(L10n.format(
                     "正在刷新 · 上次结果 %@",
-                    snapshot.capturedAt.formatted(date: .omitted, time: .standard)
+                    L10n.date(snapshot.capturedAt, date: .omitted, time: .standard)
                 ))
             } else {
                 Text(section == .processes

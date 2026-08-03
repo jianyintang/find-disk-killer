@@ -119,7 +119,21 @@ enum AgentStorageCleanupValidator {
                     || path.hasPrefix(sessionDirectory + "/")
             }
         } else {
-            artifacts = family.cleanupArtifacts
+            guard family.provider == .codex, let sourcePath = family.sourcePath else { return [] }
+            let canonicalSource = URL(fileURLWithPath: sourcePath, isDirectory: true)
+                .resolvingSymlinksInPath()
+                .standardizedFileURL.path
+            let sourcePrefix = canonicalSource.hasSuffix("/") ? canonicalSource : canonicalSource + "/"
+            artifacts = family.cleanupArtifacts.filter { artifact in
+                guard artifact.category == .conversation else { return false }
+                let canonicalPath = URL(fileURLWithPath: artifact.path)
+                    .resolvingSymlinksInPath()
+                    .standardizedFileURL.path
+                guard canonicalPath.hasPrefix(sourcePrefix) else { return false }
+                let relativePath = String(canonicalPath.dropFirst(sourcePrefix.count))
+                let first = relativePath.split(separator: "/").first.map(String.init)
+                return first == "sessions" || first == "archived_sessions"
+            }
         }
         var identities = Set<AgentStorageCleanupIdentity>()
         return artifacts.filter { identities.insert(AgentStorageCleanupIdentity($0)).inserted }

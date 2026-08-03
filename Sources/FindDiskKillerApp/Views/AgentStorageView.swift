@@ -610,7 +610,7 @@ enum AgentStorageProjectionEngine {
         hidesPrivateDetails: Bool
     ) -> String {
         guard hidesPrivateDetails else { return family.title }
-        return "\(family.provider.displayName) \(L10n.text("聊天")) · \(family.updatedAt.formatted(date: .abbreviated, time: .omitted))"
+        return "\(family.provider.displayName) \(L10n.text("聊天")) · \(L10n.date(family.updatedAt, date: .abbreviated, time: .omitted))"
     }
 
     private static func globalItem(
@@ -1210,7 +1210,7 @@ struct AgentStorageView: View {
                     Text(L10n.text("筛选"))
                         .foregroundStyle(.primary)
                     if scopeFilterCount > 0 {
-                        Text(scopeFilterCount.formatted())
+                        Text(L10n.number(scopeFilterCount))
                             .font(.caption2.monospacedDigit().weight(.bold))
                             .foregroundStyle(.white)
                             .frame(minWidth: 16, minHeight: 16)
@@ -1415,7 +1415,7 @@ struct AgentStorageView: View {
             HStack(spacing: 0) {
                 ForEach(0..<4, id: \.self) { _ in
                     VStack(alignment: .leading, spacing: 7) {
-                        Text("Storage").font(.caption)
+                        Text(L10n.text("物理占用")).font(.caption)
                         Text("00.00 GiB").font(.title3.weight(.semibold))
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1657,7 +1657,7 @@ struct AgentStorageView: View {
                 Group {
                     if row.isFamily {
                         VStack(alignment: .trailing, spacing: 1) {
-                            Text(row.subagentCount.formatted())
+                            Text(L10n.number(row.subagentCount))
                             Text(AgentStorageSizeFormatter.string(row.subagentAllocatedBytes))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
@@ -1807,7 +1807,7 @@ struct AgentStorageView: View {
             }
             .width(min: 220, ideal: 320)
             TableColumn(L10n.text("文件"), value: \.artifactCount) { item in
-                Text(item.artifactCount.formatted()).monospacedDigit()
+                Text(L10n.number(item.artifactCount)).monospacedDigit()
             }
             .width(min: 64, ideal: 80)
             TableColumn(L10n.text("最近变化")) { item in
@@ -1866,7 +1866,7 @@ struct AgentStorageView: View {
             }
             .width(min: 170, ideal: 240)
             TableColumn(L10n.text("文件"), value: \.artifactCount) { item in
-                Text(item.artifactCount.formatted()).monospacedDigit()
+                Text(L10n.number(item.artifactCount)).monospacedDigit()
             }
             .width(min: 64, ideal: 80)
             TableColumn(L10n.text("占用"), value: \.allocatedBytes) { item in
@@ -2682,7 +2682,7 @@ struct AgentStorageView: View {
     }
 
     private func relativeDate(_ date: Date) -> String {
-        date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated))
+        L10n.relativeDate(date, abbreviated: true)
     }
 }
 
@@ -2735,7 +2735,7 @@ private struct AgentStorageInlineCleanupInspector: View {
             HStack(spacing: 0) {
                 cleanupMetric(
                     L10n.text("已选聊天"),
-                    selectedFamilies.count.formatted(),
+                    L10n.number(selectedFamilies.count),
                     symbol: "checkmark.circle.fill"
                 )
                 Divider().frame(height: 44)
@@ -3377,7 +3377,7 @@ private struct AgentStorageProviderOverviewRow: View {
                         Label(L10n.text("聊天索引待适配"), systemImage: "exclamationmark.triangle")
                     } else {
                         Label(
-                            "\(item.summary.threadCount.formatted()) \(L10n.text("个主聊天"))",
+                            "\(L10n.number(item.summary.threadCount)) \(L10n.text("个主聊天"))",
                             systemImage: "bubble.left.and.bubble.right"
                         )
                         Label(
@@ -3899,7 +3899,7 @@ struct AgentStorageChatRow: Identifiable, Hashable, Sendable {
         familyID = family.id
         provider = family.provider
         title = hidesPrivateDetails
-            ? "\(family.provider.displayName) \(L10n.text("聊天")) · \(family.updatedAt.formatted(date: .abbreviated, time: .omitted))"
+            ? "\(family.provider.displayName) \(L10n.text("聊天")) · \(L10n.date(family.updatedAt, date: .abbreviated, time: .omitted))"
             : family.title
         project = hidesPrivateDetails
             ? L10n.text("已隐藏项目")
@@ -4221,7 +4221,7 @@ private struct AgentStorageProviderLabel: View {
             Text(summary.provider.displayName).fontWeight(.medium)
             Text(AgentStorageSizeFormatter.string(summary.exclusiveBytes))
                 .monospacedDigit()
-            Text("· \(summary.threadCount.formatted()) \(L10n.text("个主聊天"))")
+            Text("· \(L10n.number(summary.threadCount)) \(L10n.text("个主聊天"))")
                 .foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .combine)
@@ -4259,7 +4259,7 @@ private struct AgentStorageLocationStrip: View {
             HStack(spacing: 7) {
                 Image(systemName: source.kind?.locationSymbol ?? "folder")
                     .foregroundStyle(.secondary)
-                Text(source.displayName)
+                Text(L10n.text(source.displayName))
                     .font(.caption.weight(.semibold))
                 Text(AgentStorageSizeFormatter.string(source.allocatedBytes))
                     .font(.caption.monospacedDigit().weight(.semibold))
@@ -4322,6 +4322,7 @@ private extension AgentStorageSourceKind {
         case .codexHome, .claudeCode, .openCode: "terminal"
         case .codexDesktop, .claudeDesktop: "macwindow"
         case .claudeDesktopAgent: "point.3.connected.trianglepath.dotted"
+        case .rebuildableCache: "arrow.trianglehead.2.clockwise.rotate.90"
         }
     }
 }
@@ -5784,7 +5785,7 @@ private struct AgentStorageDetailView: View {
                     Text(L10n.text("最近活动"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(family.updatedAt.formatted(.relative(presentation: .named)))
+                    Text(L10n.relativeDate(family.updatedAt))
                         .font(.callout.weight(.medium))
                 }
             }
@@ -5980,7 +5981,7 @@ private struct AgentStorageDetailView: View {
     ) -> some View {
         let share = total == 0 ? 0 : min(1, Double(node.attributedBytes) / Double(total))
         return HStack(spacing: 10) {
-            Text(rank.formatted())
+            Text(L10n.number(rank))
                 .font(.caption2.weight(.semibold).monospacedDigit())
                 .foregroundStyle(rank == 1 ? Color.accentColor : Color.secondary)
                 .frame(width: 28, height: 28)
@@ -6028,8 +6029,8 @@ private struct AgentStorageDetailView: View {
             if node.databaseAttributedBytes > 0 {
                 detailValue(L10n.text("数据库记录（估算）"), node.databaseAttributedBytes)
             }
-            LabeledContent(L10n.text("文件"), value: node.artifactCount.formatted())
-            LabeledContent(L10n.text("层级"), value: node.depth.formatted())
+            LabeledContent(L10n.text("文件"), value: L10n.number(node.artifactCount))
+            LabeledContent(L10n.text("层级"), value: L10n.number(node.depth))
         }
         evidenceSection(
             id: node.nativeID,
@@ -6055,7 +6056,7 @@ private struct AgentStorageDetailView: View {
                 detailValue(L10n.text("物理占用"), item.allocatedBytes, emphasized: true)
             }
             detailValue(L10n.text("逻辑大小"), item.logicalBytes)
-            LabeledContent(L10n.text("文件"), value: item.artifactCount.formatted())
+            LabeledContent(L10n.text("文件"), value: L10n.number(item.artifactCount))
         }
         evidenceSection(
             id: item.id,
@@ -6094,7 +6095,7 @@ private struct AgentStorageDetailView: View {
         detailSection(L10n.text("占用摘要")) {
             detailValue(L10n.text("物理占用"), item.allocatedBytes, emphasized: true)
             detailValue(L10n.text("逻辑大小"), item.logicalBytes)
-            LabeledContent(L10n.text("文件"), value: item.artifactCount.formatted())
+            LabeledContent(L10n.text("文件"), value: L10n.number(item.artifactCount))
         }
         evidenceSection(
             id: item.id,
@@ -6238,10 +6239,16 @@ private struct AgentStorageDetailView: View {
 enum AgentStorageSizeFormatter {
     static func string(_ bytes: UInt64) -> String {
         let value = Double(bytes)
-        if bytes >= 1 << 30 { return String(format: "%.2f GiB", value / Double(1 << 30)) }
-        if bytes >= 1 << 20 { return String(format: "%.1f MiB", value / Double(1 << 20)) }
-        if bytes >= 1 << 10 { return String(format: "%.1f KiB", value / Double(1 << 10)) }
-        return "\(bytes) B"
+        if bytes >= 1 << 30 {
+            return String(format: "%.2f GiB", locale: L10n.locale, value / Double(1 << 30))
+        }
+        if bytes >= 1 << 20 {
+            return String(format: "%.1f MiB", locale: L10n.locale, value / Double(1 << 20))
+        }
+        if bytes >= 1 << 10 {
+            return String(format: "%.1f KiB", locale: L10n.locale, value / Double(1 << 10))
+        }
+        return "\(L10n.number(bytes)) B"
     }
 }
 

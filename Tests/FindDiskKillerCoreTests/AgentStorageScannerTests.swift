@@ -1385,6 +1385,44 @@ import Testing
     #expect(snapshot.coverage.measuredBytes == snapshot.coverage.classifiedBytes)
 }
 
+@Test func agentStorageScannerSeparatesCachesAndProtectsClaudeBackups() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let codexCacheFile = root.appending(path: ".codex/cache/download.bin")
+    let claudeBackupFile = root.appending(path: ".claude/backups/.claude.json.backup.1")
+    try FileManager.default.createDirectory(
+        at: codexCacheFile.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+        at: claudeBackupFile.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try Data(repeating: 0x41, count: 8_192).write(to: codexCacheFile)
+    try Data(repeating: 0x42, count: 12_288).write(to: claudeBackupFile)
+
+    let snapshot = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false
+    )).scan()
+
+    #expect(snapshot.sources.contains {
+        $0.provider == .codex && $0.kind == .rebuildableCache
+    })
+    #expect(snapshot.globalItems.contains {
+        $0.provider == .codex && $0.category == .cache
+            && $0.allocatedBytes >= allocatedBytes(of: codexCacheFile)
+    })
+    #expect(snapshot.globalItems.contains {
+        $0.provider == .claude && $0.category == .configuration
+            && $0.allocatedBytes >= allocatedBytes(of: claudeBackupFile)
+    })
+    #expect(!snapshot.globalItems.contains {
+        $0.provider == .claude && $0.category == .cache
+    })
+    #expect(snapshot.coverage.measuredBytes == snapshot.coverage.classifiedBytes)
+}
+
 @Test func liveAgentStorageScannerReconcilesWhenExplicitlyEnabled() async throws {
     guard ProcessInfo.processInfo.environment["RUN_AGENT_STORAGE_LIVE_SCAN"] == "1" else { return }
     let snapshot = try await AgentStorageScanner().scan()

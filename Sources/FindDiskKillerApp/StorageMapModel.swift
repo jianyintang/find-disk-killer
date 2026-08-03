@@ -402,7 +402,7 @@ final class StorageMapModel {
                 self.phase = .failed
                 self.progress = nil
                 self.progressBySource = [:]
-                self.errorMessage = error.localizedDescription
+                self.errorMessage = L10n.errorDescription(error)
                 self.scanTask = nil
                 self.drainPendingSourceRefreshes()
             }
@@ -456,8 +456,9 @@ final class StorageMapModel {
                 self.finishSourceAnalysis(sourceID, generation: requestedGeneration)
             } catch {
                 self.finishSourceAnalysis(sourceID, generation: requestedGeneration)
-                self.errorMessage = error.localizedDescription
-                self.refreshErrorsBySource[sourceID] = error.localizedDescription
+                let message = L10n.errorDescription(error)
+                self.errorMessage = message
+                self.refreshErrorsBySource[sourceID] = message
             }
         }
     }

@@ -50,6 +50,88 @@ struct AgentDataLocationDiscoveryTests {
         ]))
     }
 
+    @Test func codexHomeCachesAreSeparateForDefaultEnvironmentAndCustomHomes() throws {
+        let fixture = try AgentLocationFixture()
+        defer { fixture.remove() }
+        let defaultCache = try fixture.directory("home/.codex/cache")
+        let configuredTmp = try fixture.directory("configured-codex/tmp")
+        let customHiddenTmp = try fixture.directory("custom/codex/.tmp")
+        try fixture.file("home/.codex/state_5.sqlite")
+        try fixture.file("configured-codex/state_5.sqlite")
+        try fixture.file("custom/codex/state_5.sqlite")
+
+        let locations = AgentDataLocationDiscovery(configuration: .init(
+            homeDirectory: fixture.home,
+            additionalRoots: [customHiddenTmp.deletingLastPathComponent()],
+            includesDesktopData: false,
+            environment: ["CODEX_HOME": configuredTmp.deletingLastPathComponent().path],
+            mountedVolumes: [fixture.systemVolume, fixture.externalVolume]
+        )).discover()
+        let cachePaths = Set(locations.filter {
+            $0.provider == .codex && $0.kind == .rebuildableCache
+        }.map(\.resolvedPath))
+
+        #expect(cachePaths == Set([
+            fixture.canonicalPath(defaultCache),
+            fixture.canonicalPath(configuredTmp),
+            fixture.canonicalPath(customHiddenTmp)
+        ]))
+    }
+
+    @Test func standardMacOSCachesAreDiscoveredWithoutProtectedBrowserState() throws {
+        let fixture = try AgentLocationFixture()
+        defer { fixture.remove() }
+        let codexCache = try fixture.directory("home/Library/Caches/Codex")
+        let codexCodeCache = try fixture.directory(
+            "home/Library/Application Support/Codex/Default/Code Cache"
+        )
+        let claudeGPUCache = try fixture.directory(
+            "home/Library/Application Support/Claude/GPUCache"
+        )
+        let claudeCLICache = try fixture.directory("home/Library/Caches/claude-cli-nodejs")
+        _ = try fixture.directory("home/Library/Application Support/Codex/Partitions")
+        _ = try fixture.directory("home/Library/Application Support/Claude/IndexedDB")
+
+        let locations = AgentDataLocationDiscovery(configuration: .init(
+            homeDirectory: fixture.home,
+            includesDesktopData: true,
+            environment: [:],
+            mountedVolumes: [fixture.systemVolume]
+        )).discover()
+        let cachePaths = Set(locations.filter { $0.kind == .rebuildableCache }.map(\.resolvedPath))
+
+        #expect(cachePaths == Set([
+            fixture.canonicalPath(codexCache),
+            fixture.canonicalPath(codexCodeCache),
+            fixture.canonicalPath(claudeGPUCache),
+            fixture.canonicalPath(claudeCLICache)
+        ]))
+        #expect(!cachePaths.contains { $0.hasSuffix("/Partitions") || $0.hasSuffix("/IndexedDB") })
+    }
+
+    @Test func cacheAliasesAreDeduplicatedByPhysicalIdentity() throws {
+        let fixture = try AgentLocationFixture()
+        defer { fixture.remove() }
+        let target = try fixture.directory("external/codex/cache")
+        try fixture.file("external/codex/state_5.sqlite")
+        try FileManager.default.createSymbolicLink(
+            at: fixture.home.appending(path: ".codex"),
+            withDestinationURL: target.deletingLastPathComponent()
+        )
+        let alias = fixture.root.appending(path: "codex-environment")
+        try FileManager.default.createSymbolicLink(
+            at: alias,
+            withDestinationURL: target.deletingLastPathComponent()
+        )
+
+        let caches = fixture.discovery(environment: ["CODEX_HOME": alias.path])
+            .discover()
+            .filter { $0.provider == .codex && $0.kind == .rebuildableCache }
+
+        #expect(caches.count == 1)
+        #expect(caches[0].resolvedPath == fixture.canonicalPath(target))
+    }
+
     @Test func symlinkedCodexCCIsAttributedToItsResolvedExternalVolume() throws {
         let fixture = try AgentLocationFixture()
         defer { fixture.remove() }
