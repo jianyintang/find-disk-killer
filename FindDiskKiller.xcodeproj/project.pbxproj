@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 54;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -13,6 +13,7 @@
 		1421079DC284212459FB2DA2 /* chrome.svg in Resources */ = {isa = PBXBuildFile; fileRef = DC2FCEBE4534296A5E190E2E /* chrome.svg */; };
 		1499823B10B0CC6D47F29166 /* codex-openai.svg in Resources */ = {isa = PBXBuildFile; fileRef = 557B99818141A5F6C7641804 /* codex-openai.svg */; };
 		149AD03F0F95F5953BC2472D /* THIRD_PARTY_ASSETS.md in Resources */ = {isa = PBXBuildFile; fileRef = DEAF50A4052D9A28723D4E58 /* THIRD_PARTY_ASSETS.md */; };
+		16018BAD5CCCDC7D193BA0FF /* AppActivationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 256499511F300BBD1F551B1C /* AppActivationPolicy.swift */; };
 		1BFD6A0C548294189B5161F1 /* FindDiskKillerCore in Frameworks */ = {isa = PBXBuildFile; productRef = DF40BF11AB711252275ECD86 /* FindDiskKillerCore */; };
 		1CF94FEA1AAD695571D07FC2 /* AgentStorageBatchCleanupSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43B4192B923BB2DCC2EDE4B6 /* AgentStorageBatchCleanupSheet.swift */; };
 		1E2FA69EBE3D6F52D819A016 /* docker.png in Resources */ = {isa = PBXBuildFile; fileRef = F7EDED53B2EF91B59253BF61 /* docker.png */; };
@@ -119,10 +120,10 @@
 		1CD4BC1DF097731EE34DD149 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 6;
+			dstPath = Contents/Library/LaunchDaemons;
+			dstSubfolderSpec = 1;
 			files = (
-				F56D28AD59EEE6EAF5521F2A /* FindDiskKillerClaudeCleanupHelper in Embed Dependencies */,
+				9E3B6D513AAF6D1ECFA54F73 /* FindDiskKillerTraceHelper in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -141,10 +142,10 @@
 		EF8A0DAD366D2321393EC137 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = Contents/Library/LaunchDaemons;
-			dstSubfolderSpec = 1;
+			dstPath = "";
+			dstSubfolderSpec = 6;
 			files = (
-				9E3B6D513AAF6D1ECFA54F73 /* FindDiskKillerTraceHelper in Embed Dependencies */,
+				F56D28AD59EEE6EAF5521F2A /* FindDiskKillerClaudeCleanupHelper in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -169,6 +170,7 @@
 		1F0023EE9E80BF9FD710B334 /* FileAccessTraceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileAccessTraceStore.swift; sourceTree = "<group>"; };
 		200053F2C1C0330D1C8DE08B /* podman.svg */ = {isa = PBXFileReference; path = podman.svg; sourceTree = "<group>"; };
 		23796DF1553F0D104683CE6B /* xcode.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = xcode.png; sourceTree = "<group>"; };
+		256499511F300BBD1F551B1C /* AppActivationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppActivationPolicy.swift; sourceTree = "<group>"; };
 		2848171CEE38313F3FC594EC /* AgentStorageQualityViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStorageQualityViews.swift; sourceTree = "<group>"; };
 		294F590D986AF1CE1F5F6243 /* HistoryApplicationTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryApplicationTable.swift; sourceTree = "<group>"; };
 		2A31940C062C714728E9ACF6 /* StorageMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageMapView.swift; sourceTree = "<group>"; };
@@ -295,7 +297,6 @@
 				73D1E9A8CB4ED5D09C2B90D7 /* FindDiskKiller.icns */,
 				04A7966706E952F64F3F123A /* go.png */,
 				DF56BEF152FD832388171A2E /* go.svg */,
-				710BED35EF73FDAAD7FBB024 /* Localizable.strings */,
 				73B6B934C85B0BF27848BFDC /* npm.png */,
 				CACA7EF9AC852657B16B3DA6 /* npm.svg */,
 				686BBE4C0B4DDBC12F0135E0 /* opencode.icns */,
@@ -309,6 +310,7 @@
 				DEAF50A4052D9A28723D4E58 /* THIRD_PARTY_ASSETS.md */,
 				23796DF1553F0D104683CE6B /* xcode.png */,
 				B3439FC452E8B3EA0BA1AF82 /* xcode.svg */,
+				710BED35EF73FDAAD7FBB024 /* Localizable.strings */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -420,6 +422,7 @@
 				E2B7CDE4FFBC48FA99A96EE0 /* AgentStorageCleanup.swift */,
 				4553CEB12FD65DB0D81627E2 /* AgentStorageModel.swift */,
 				4818B06BC95ADCCD74173C94 /* AgentStorageOfficialCleanupAdapters.swift */,
+				256499511F300BBD1F551B1C /* AppActivationPolicy.swift */,
 				2CD437307D2C3FFC14DBC510 /* AppNavigation.swift */,
 				F233B95DF10CF40F0DE7228B /* AppRuntime.swift */,
 				AE77A398DCA93D9D1D69BAF1 /* BrandLinks.swift */,
@@ -544,7 +547,6 @@
 				};
 			};
 			buildConfigurationList = 19C1D950E6FE91EB9C3A897E /* Build configuration list for PBXProject "FindDiskKiller" */;
-			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -561,10 +563,13 @@
 				"zh-Hant",
 			);
 			mainGroup = 8AE0D5862A6A544A027A5547;
+			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A38F28F6130F4B6E2A5F7963 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				C69B2DE5357ED997757EABFA /* XCLocalSwiftPackageReference "." */,
 			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 31732817356D2EB3ED683351 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -656,6 +661,7 @@
 				24785A3A48032270D42A5699 /* AgentStorageOfficialCleanupAdapters.swift in Sources */,
 				0979572E0A5DF2D9EC840C36 /* AgentStorageQualityViews.swift in Sources */,
 				3AB42A16B49F82400C7FF300 /* AgentStorageView.swift in Sources */,
+				16018BAD5CCCDC7D193BA0FF /* AppActivationPolicy.swift in Sources */,
 				38188339774F720B848980D0 /* AppNavigation.swift in Sources */,
 				F9330F09999DF74A07CFD4C2 /* AppRuntime.swift in Sources */,
 				9DA65F4A10AA2A81637FBC85 /* BrandLinks.swift in Sources */,
@@ -1026,6 +1032,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		C69B2DE5357ED997757EABFA /* XCLocalSwiftPackageReference "." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = .;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		A38F28F6130F4B6E2A5F7963 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -1036,13 +1049,6 @@
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCLocalSwiftPackageReference section */
-		C69B2DE5357ED997757EABFA /* XCLocalSwiftPackageReference "." */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = .;
-		};
-/* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		0259DB70CBFEB5BF4CC58FFA /* FindDiskKillerNodeRuntime */ = {

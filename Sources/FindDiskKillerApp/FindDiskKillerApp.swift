@@ -184,7 +184,7 @@ private struct FindDiskKillerCommands: Commands {
     }
 
     private func presentMainWindow() {
-        NSApp.setActivationPolicy(.regular)
+        AppActivationPolicy.applyPreferred()
         openWindow(id: "main")
         DispatchQueue.main.async {
             let window = NSApp.windows.first {
@@ -263,30 +263,25 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
         let forcesMainWindow = CommandLine.arguments.contains("--show-main-window")
         let isDefaultLaunch = notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey]
             as? Bool ?? true
-        let shouldShowWindow = UserDefaults.standard.bool(forKey: "openMainWindowAtLogin")
-        if !forcesMainWindow && !isDefaultLaunch && !shouldShowWindow {
-            NSApp.setActivationPolicy(.accessory)
-            DispatchQueue.main.async {
-                NSApp.windows.forEach { $0.orderOut(nil) }
-            }
-        } else {
-            NSApp.setActivationPolicy(.regular)
-            if forcesMainWindow {
-                NSApp.activate(ignoringOtherApps: true)
-                Task { @MainActor [weak self] in
-                    try? await Task.sleep(for: .milliseconds(250))
-                    guard let self else { return }
+        _ = AppActivationPolicy.configureLaunch(
+            isDefaultLaunch: isDefaultLaunch,
+            forcesMainWindow: forcesMainWindow
+        )
+        if forcesMainWindow {
+            NSApp.activate(ignoringOtherApps: true)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(250))
+                guard let self else { return }
 #if DEBUG
-                    if self.reopenMainWindow(NSApp) {
-                        NSApp.activate(ignoringOtherApps: true)
-                        return
-                    }
-                    try? await Task.sleep(for: .milliseconds(750))
-                    self.presentDebugMainWindow()
-#else
-                    _ = self.reopenMainWindow(NSApp)
-#endif
+                if self.reopenMainWindow(NSApp) {
+                    NSApp.activate(ignoringOtherApps: true)
+                    return
                 }
+                try? await Task.sleep(for: .milliseconds(750))
+                self.presentDebugMainWindow()
+#else
+                _ = self.reopenMainWindow(NSApp)
+#endif
             }
         }
     }
@@ -300,7 +295,7 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
-        sender.setActivationPolicy(.regular)
+        AppActivationPolicy.applyPreferred(application: sender)
         sender.activate(ignoringOtherApps: true)
         return reopenMainWindow(sender)
     }

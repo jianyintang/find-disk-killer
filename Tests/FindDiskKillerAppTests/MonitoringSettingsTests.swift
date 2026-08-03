@@ -225,6 +225,7 @@ private struct LoginFixtureError: LocalizedError {
     let root = FileManager.default.temporaryDirectory
         .appending(path: UUID().uuidString, directoryHint: .isDirectory)
     defer { try? FileManager.default.removeItem(at: root) }
+    UserDefaults.standard.removeObject(forKey: AppActivationPolicy.menuBarOnlyModeKey)
     let runtime = AppRuntime(
         store: MonitorStore(),
         history: HistoryModel(databaseURL: root.appending(path: "monitor.sqlite3"))
@@ -241,6 +242,80 @@ private struct LoginFixtureError: LocalizedError {
     #expect(handled)
     #expect(restoredMainWindow)
     #expect(application.activationPolicy() == .regular)
+}
+
+@MainActor
+@Test func menuBarOnlyModeKeepsAccessoryPolicyWhenPresentingAndReopening() throws {
+    let suiteName = "MenuBarOnlyModeTests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    defaults.set(true, forKey: AppActivationPolicy.menuBarOnlyModeKey)
+
+    #expect(AppActivationPolicy.preferred(defaults: defaults) == .accessory)
+
+    let showed = AppActivationPolicy.configureLaunch(
+        isDefaultLaunch: true,
+        forcesMainWindow: false,
+        defaults: defaults
+    )
+    #expect(!showed)
+    #expect(NSApplication.shared.activationPolicy() == .accessory)
+
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let previous = UserDefaults.standard.bool(forKey: AppActivationPolicy.menuBarOnlyModeKey)
+    UserDefaults.standard.set(true, forKey: AppActivationPolicy.menuBarOnlyModeKey)
+    defer {
+        if previous {
+            UserDefaults.standard.set(true, forKey: AppActivationPolicy.menuBarOnlyModeKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: AppActivationPolicy.menuBarOnlyModeKey)
+        }
+    }
+
+    let runtime = AppRuntime(
+        store: MonitorStore(),
+        history: HistoryModel(databaseURL: root.appending(path: "monitor.sqlite3"))
+    ) {}
+    var restoredMainWindow = false
+    let delegate = FindDiskKillerApplicationDelegate(runtime: runtime) { _ in
+        restoredMainWindow = true
+        return true
+    }
+    let handled = delegate.applicationShouldHandleReopen(
+        NSApplication.shared,
+        hasVisibleWindows: false
+    )
+    #expect(handled)
+    #expect(restoredMainWindow)
+    #expect(NSApplication.shared.activationPolicy() == .accessory)
+}
+
+@MainActor
+@Test func menuBarOnlyLaunchShowsWindowWhenOpenAtLoginIsEnabled() throws {
+    let suiteName = "MenuBarOnlyLoginWindowTests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    defaults.set(true, forKey: AppActivationPolicy.menuBarOnlyModeKey)
+    defaults.set(true, forKey: "openMainWindowAtLogin")
+
+    let showed = AppActivationPolicy.configureLaunch(
+        isDefaultLaunch: false,
+        forcesMainWindow: false,
+        defaults: defaults
+    )
+    #expect(showed)
+    #expect(NSApplication.shared.activationPolicy() == .accessory)
+}
+
+@MainActor
+@Test func menuBarOnlyCopyHasEnglishTranslation() {
+    #expect(L10n.text("仅菜单栏模式", language: .english) == "Menu Bar Only")
+    #expect(
+        L10n.text("不显示 Dock 图标，通过菜单栏运行。", language: .english)
+            == "Hide the Dock icon and run from the menu bar."
+    )
 }
 
 private actor UncooperativeAgentStorageScan {

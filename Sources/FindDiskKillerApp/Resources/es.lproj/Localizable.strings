@@ -103,6 +103,8 @@
 "语言" = "Idioma";
 "登录时启动" = "Abrir al iniciar sesión";
 "在菜单栏显示写入速率" = "Mostrar la velocidad de escritura en la barra de menús";
+"仅菜单栏模式" = "Solo barra de menús";
+"不显示 Dock 图标，通过菜单栏运行。" = "Ocultar el icono del Dock y ejecutar desde la barra de menús.";
 "采样间隔" = "Intervalo de muestreo";
 "1 秒" = "1 segundo";
 "%.0f 秒" = "%.0f s";
@@ -118,6 +120,14 @@
 "应用资源行为 · 持续监控" = "Actividad de recursos · Supervisión continua";
 "当前写入最高 · %@" = "Mayor escritura actual · %@";
 "打开 FindDiskKiller" = "Abrir FindDiskKiller";
+"退出" = "Salir";
+"退出 FindDiskKiller" = "Salir de FindDiskKiller";
+"退出应用" = "Salir de la app";
+"打开窗口" = "Abrir ventana";
+"采集中" = "Capturando";
+"暂无最高写入" = "Sin proceso principal";
+"采集进行中" = "Recopilación en curso";
+"等待写入活动" = "Esperando actividad de escritura";
 "正在建立采样" = "Estableciendo el muestreo";
 "磁盘活动正常" = "Actividad de disco normal";
 "检测到持续写入" = "Escritura sostenida detectada";
