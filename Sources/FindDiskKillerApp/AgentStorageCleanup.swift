@@ -223,6 +223,11 @@ enum AgentStorageCleanupValidator {
 protocol AgentStorageCleanupCapabilityProviding: Sendable {
     func availability(for family: AgentStorageThreadFamily) async -> AgentStorageCleanupAvailability
     func delete(_ family: AgentStorageThreadFamily) async -> AgentStorageCleanupOutcome
+    func resetDetection() async
+}
+
+extension AgentStorageCleanupCapabilityProviding {
+    func resetDetection() async {}
 }
 
 protocol AgentStorageCleanupActivityInspecting: Sendable {
@@ -482,6 +487,13 @@ actor AgentStorageCleanupCoordinator {
         return targets
     }
 
+    func resetDetection() async {
+        capabilityCache.removeAll()
+        await codex.resetDetection()
+        await claude.resetDetection()
+        await openCode.resetDetection()
+    }
+
     private static func checkingTarget(for family: AgentStorageThreadFamily) -> AgentStorageCleanupTarget {
         AgentStorageCleanupTarget(
             family: family,
@@ -650,6 +662,29 @@ final class AgentStorageCleanupSession: ObservableObject, Identifiable {
         phase = .ready
     }
 
+    func redetect() async {
+        guard phase != .deleting else { return }
+        phase = .checking
+        result = nil
+        cancellationRequested = false
+        targets = review.families.map { family in
+            AgentStorageCleanupTarget(
+                family: family,
+                immediateArtifacts: AgentStorageCleanupValidator.officialArtifacts(for: family),
+                availability: .checking,
+                outcome: nil
+            )
+        }
+        await coordinator.resetDetection()
+        targets = await coordinator.prepare(
+            review,
+            didUpdate: { [weak self] updated in
+                await MainActor.run { self?.targets = updated }
+            }
+        )
+        phase = .ready
+    }
+
     func execute() async {
         guard phase == .ready, readyCount > 0 else { return }
         cancellationRequested = false
@@ -664,6 +699,15 @@ final class AgentStorageCleanupSession: ObservableObject, Identifiable {
     }
 
     func cancelRemaining() { cancellationRequested = true }
+
+    var canRedetectCodexRuntime: Bool {
+        targets.contains { target in
+            guard target.family.provider == .codex else { return false }
+            if case .unsupported = target.availability { return true }
+            if case .failed = target.outcome { return true }
+            return false
+        }
+    }
 }
 
 struct AgentStorageCleanupReviewView: View {
@@ -690,6 +734,7 @@ struct AgentStorageCleanupReviewView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .task { await session.prepare() }
         .onChange(of: session.phase) { _, phase in
+            if phase == .checking { didReportResult = false }
             guard phase == .finished,
                   !didReportResult,
                   let result = session.result else { return }
@@ -765,7 +810,7 @@ struct AgentStorageCleanupReviewView: View {
             Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 4) {
                 Text(L10n.text("由官方接口永久删除")).font(.callout.weight(.semibold))
-                Text(L10n.text("操作不可撤销。活动聊天、身份变化或协议不兼容会立即跳过；不会改写数据库，也不会降级为手工删除文件。"))
+                Text(L10n.text("操作不可撤销。活动聊天或身份变化会立即跳过；官方执行器失败时会自动切换，不会改写数据库，也不会降级为手工删除文件。"))
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -896,6 +941,14 @@ struct AgentStorageCleanupReviewView: View {
                 Button(L10n.text("取消剩余任务")) { session.cancelRemaining() }
                     .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .large))
             } else if session.phase == .finished {
+                if session.canRedetectCodexRuntime {
+                    Button {
+                        Task { await session.redetect() }
+                    } label: {
+                        Label(L10n.text("重新检测"), systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .large))
+                }
                 Button(
                     L10n.text(shouldContinueCleaning ? "继续清理" : "完成"),
                     action: dismissReview
@@ -906,6 +959,14 @@ struct AgentStorageCleanupReviewView: View {
                 Button(L10n.text("取消"), action: close)
                     .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .large))
                     .keyboardShortcut(.cancelAction)
+                if session.phase == .ready, session.canRedetectCodexRuntime {
+                    Button {
+                        Task { await session.redetect() }
+                    } label: {
+                        Label(L10n.text("重新检测"), systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(AppActionButtonStyle(kind: .secondary, size: .large))
+                }
                 Button {
                     Task { await session.execute() }
                 } label: {

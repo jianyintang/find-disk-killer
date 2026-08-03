@@ -341,16 +341,54 @@ private actor CancellationGate {
     #expect(review.retainedBytes == retained.allocatedBytes)
 }
 
-@Test func codexVersionGateAllowsPrereleasesWhenTheProtocolCanBeProbed() {
-    #expect(CodexExecutableLocator.supportsThreadDelete("codex-cli 0.146.0"))
-    #expect(CodexExecutableLocator.supportsThreadDelete("codex-cli 0.146.0-alpha.3.1"))
-    #expect(CodexExecutableLocator.supportsThreadDelete("codex-cli 0.146.0-beta.2"))
-    #expect(CodexExecutableLocator.supportsThreadDelete("codex-cli 0.146.0-rc.1"))
-    #expect(!CodexExecutableLocator.supportsThreadDelete("codex-cli 0.145.9"))
-    #expect(!CodexExecutableLocator.supportsThreadDelete("unexpected"))
+@Test func codexLocatorFindsCommonInstallationsAndDeduplicatesAliases() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "fdk-codex-locator-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = root.appending(path: "home", directoryHint: .isDirectory)
+    let appRoot = root.appending(path: "Applications", directoryHint: .isDirectory)
+    let paths: [(String, CodexRuntimeCandidate.Origin)] = [
+        ("path-bin/codex", .path),
+        ("home/.npm-global/bin/codex", .npm),
+        ("home/.nvm/versions/node/v24/bin/codex", .nvm),
+        ("home/.local/share/fnm/node-versions/v22/installation/bin/codex", .fnm),
+        ("home/.volta/bin/codex", .volta),
+        ("home/.bun/bin/codex", .bun),
+        ("Applications/ChatGPT.app/Contents/Resources/codex", .application),
+        ("Applications/Codex.app/Contents/Resources/codex", .application)
+    ]
+    for (relativePath, _) in paths {
+        try makeExecutable(at: root.appending(path: relativePath), script: "#!/bin/sh\nexit 0\n")
+    }
+    let override = root.appending(path: "override-codex")
+    try makeExecutable(at: override, script: "#!/bin/sh\nexit 0\n")
+    let pathAliasDirectory = root.appending(path: "path-alias", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: pathAliasDirectory, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+        at: pathAliasDirectory.appending(path: "codex"),
+        withDestinationURL: root.appending(path: "path-bin/codex")
+    )
+
+    let candidates = CodexExecutableLocator.locate(
+        environment: [
+            "PATH": [root.appending(path: "path-bin").path, pathAliasDirectory.path]
+                .joined(separator: ":"),
+            "FDK_CODEX_APP_SERVER": override.path
+        ],
+        homeDirectory: home,
+        applicationDirectories: [appRoot],
+        includeSystemLocations: false
+    )
+
+    #expect(candidates.count == paths.count + 1)
+    #expect(candidates.first?.origin == .override)
+    #expect(Set(candidates.map(\.origin)) == Set(paths.map(\.1)).union([.override]))
+    #expect(Set(candidates.map { "\($0.device):\($0.inode)" }).count == candidates.count)
+    let pathCanonical = root.appending(path: "path-bin/codex").resolvingSymlinksInPath().path
+    #expect(candidates.count(where: { $0.canonicalPath == pathCanonical }) == 1)
 }
 
-@Test func codexJSONRPCUsesOfficialDeleteAndVerifiesNotFound() async throws {
+@Test func codexAvailabilityDoesNotLaunchVersionOrCapabilityProbes() async throws {
     let fixture = try CleanupFixture(
         provider: .codex,
         count: 1,
@@ -358,20 +396,19 @@ private actor CancellationGate {
     )
     defer { fixture.destroy() }
     let script = fixture.root.appending(path: "fake-codex")
+    let log = fixture.root.appending(path: "requests.log")
     let scriptText = """
     #!/usr/bin/ruby
     require 'json'
-    if ARGV == ['--version']
-      puts 'codex-cli 0.146.0-alpha.3.1'
-      exit 0
-    end
+    File.open('\(log.path)', 'a') { |file| file.puts(ARGV.join(' ')) }
     reads = 0
     STDIN.each_line do |line|
       request = JSON.parse(line)
       next unless request['id']
+      File.open('\(log.path)', 'a') { |file| file.puts(request['method'].to_s + ':' + request.dig('params', 'threadId').to_s) }
       case request['method']
       when 'initialize'
-        puts({id: request['id'], result: {userAgent: 'Codex fixture', codexHome: ENV.fetch('CODEX_HOME'), platformFamily: 'unix', platformOs: 'macos'}}.to_json)
+        puts({id: request['id'], result: {userAgent: 'Codex fixture', codexHome: File.realpath(ENV.fetch('CODEX_HOME')), platformFamily: 'unix', platformOs: 'macos'}}.to_json)
       when 'thread/read'
         reads += 1
         if reads == 1
@@ -380,23 +417,157 @@ private actor CancellationGate {
           puts({id: request['id'], error: {code: -32600, message: 'thread not loaded: ' + request['params']['threadId']}}.to_json)
         end
       when 'thread/delete'
-        if request['params']['threadId'] == 'find-disk-killer-capability-probe'
-          puts({id: request['id'], error: {code: -32600, message: 'invalid thread id: invalid UUID'}}.to_json)
-        else
-          puts({id: request['id'], result: {}}.to_json)
-        end
+        puts({id: request['id'], result: {}}.to_json)
       end
       STDOUT.flush
     end
     """
-    try Data(scriptText.utf8).write(to: script)
-    #expect(chmod(script.path, 0o755) == 0)
+    try makeExecutable(at: script, script: scriptText)
 
     let adapter = CodexAppServerCleanupAdapter(executableOverride: script.path)
     let availability = await adapter.availability(for: fixture.families[0])
     #expect(availability == .ready)
+    #expect(!FileManager.default.fileExists(atPath: log.path))
     let outcome = await adapter.delete(fixture.families[0])
     #expect(outcome == .succeeded)
+    let requests = try String(contentsOf: log, encoding: .utf8)
+    #expect(!requests.contains("--version"))
+    #expect(!requests.contains("find-disk-killer-capability-probe"))
+    #expect(requests.contains("thread/read:\(fixture.families[0].nativeThreadID)"))
+    #expect(requests.contains("thread/delete:\(fixture.families[0].nativeThreadID)"))
+}
+
+@Test func codexCleanupFailsOverAfterTheFirstRuntimeCannotStart() async throws {
+    let fixture = try CleanupFixture(provider: .codex, count: 1)
+    defer { fixture.destroy() }
+    let first = fixture.root.appending(path: "01-codex")
+    let second = fixture.root.appending(path: "02-codex")
+    try makeExecutable(at: first, script: "#!/bin/sh\nexit 9\n")
+    try makeExecutable(at: second, script: successfulCodexScript())
+
+    let adapter = CodexAppServerCleanupAdapter(candidatePaths: [first.path, second.path])
+    #expect(await adapter.availability(for: fixture.families[0]) == .ready)
+    #expect(await adapter.delete(fixture.families[0]) == .succeeded)
+}
+
+@Test func codexCleanupReusesTheSuccessfulRuntimeAndSkipsFailedCandidates() async throws {
+    let fixture = try CleanupFixture(provider: .codex, count: 2)
+    defer { fixture.destroy() }
+    let first = fixture.root.appending(path: "01-codex")
+    let second = fixture.root.appending(path: "02-codex")
+    let firstLog = fixture.root.appending(path: "first.log")
+    let secondLog = fixture.root.appending(path: "second.log")
+    try makeExecutable(
+        at: first,
+        script: "#!/bin/sh\necho start >> '\(firstLog.path)'\nexit 9\n"
+    )
+    let secondScript = successfulCodexScript().replacingOccurrences(
+        of: "require 'json'",
+        with: "require 'json'\nFile.open('\(secondLog.path)', 'a') { |file| file.puts('start') }"
+    )
+    try makeExecutable(at: second, script: secondScript)
+
+    let adapter = CodexAppServerCleanupAdapter(candidatePaths: [first.path, second.path])
+    #expect(await adapter.delete(fixture.families[0]) == .succeeded)
+    #expect(await adapter.delete(fixture.families[1]) == .succeeded)
+    let firstStarts = try String(contentsOf: firstLog, encoding: .utf8).split(separator: "\n")
+    let secondStarts = try String(contentsOf: secondLog, encoding: .utf8).split(separator: "\n")
+    #expect(firstStarts.count == 1)
+    #expect(secondStarts.count == 2)
+}
+
+@Test func codexCleanupTreatsADeleteWithLostResponseAsIdempotentSuccess() async throws {
+    let fixture = try CleanupFixture(provider: .codex, count: 1)
+    defer { fixture.destroy() }
+    let first = fixture.root.appending(path: "01-codex")
+    let second = fixture.root.appending(path: "02-codex")
+    let deletionMarker = fixture.root.appending(path: "deleted.marker")
+    try makeExecutable(at: first, script: """
+    #!/usr/bin/ruby
+    require 'json'
+    STDIN.each_line do |line|
+      request = JSON.parse(line)
+      next unless request['id']
+      case request['method']
+      when 'initialize'
+        puts({id: request['id'], result: {userAgent: 'Codex fixture', codexHome: ENV.fetch('CODEX_HOME')}}.to_json)
+      when 'thread/read'
+        puts({id: request['id'], result: {thread: {id: request['params']['threadId']}}}.to_json)
+      when 'thread/delete'
+        File.write('\(deletionMarker.path)', 'deleted')
+        exit 0
+      end
+      STDOUT.flush
+    end
+    """)
+    try makeExecutable(at: second, script: """
+    #!/usr/bin/ruby
+    require 'json'
+    STDIN.each_line do |line|
+      request = JSON.parse(line)
+      next unless request['id']
+      if request['method'] == 'initialize'
+        puts({id: request['id'], result: {userAgent: 'Codex fixture', codexHome: ENV.fetch('CODEX_HOME')}}.to_json)
+      elsif request['method'] == 'thread/read' && File.exist?('\(deletionMarker.path)')
+        puts({id: request['id'], error: {code: -32600, message: 'thread not found: ' + request['params']['threadId']}}.to_json)
+      else
+        puts({id: request['id'], error: {code: -32600, message: 'unexpected request'}}.to_json)
+      end
+      STDOUT.flush
+    end
+    """)
+
+    let adapter = CodexAppServerCleanupAdapter(
+        candidatePaths: [first.path, second.path],
+        requestTimeout: 2
+    )
+    #expect(await adapter.delete(fixture.families[0]) == .succeeded)
+    #expect(FileManager.default.fileExists(atPath: deletionMarker.path))
+}
+
+@Test func codexCleanupDoesNotFailOverAroundThreadIdentityChanges() async throws {
+    let fixture = try CleanupFixture(provider: .codex, count: 1)
+    defer { fixture.destroy() }
+    let first = fixture.root.appending(path: "01-codex")
+    let second = fixture.root.appending(path: "02-codex")
+    let secondStarted = fixture.root.appending(path: "second-started")
+    try makeExecutable(at: first, script: """
+    #!/usr/bin/ruby
+    require 'json'
+    STDIN.each_line do |line|
+      request = JSON.parse(line)
+      next unless request['id']
+      if request['method'] == 'initialize'
+        puts({id: request['id'], result: {userAgent: 'Codex fixture', codexHome: ENV.fetch('CODEX_HOME')}}.to_json)
+      elsif request['method'] == 'thread/read'
+        puts({id: request['id'], result: {thread: {id: request['params']['threadId'], parentThreadId: 'changed-parent'}}}.to_json)
+      end
+      STDOUT.flush
+    end
+    """)
+    try makeExecutable(at: second, script: "#!/bin/sh\ntouch '\(secondStarted.path)'\nexit 0\n")
+
+    let outcome = await CodexAppServerCleanupAdapter(candidatePaths: [first.path, second.path])
+        .delete(fixture.families[0])
+    guard case .failed(let reason) = outcome else {
+        Issue.record("Expected a safety refusal")
+        return
+    }
+    #expect(reason == L10n.text("Codex 聊天身份或父子关系已变化"))
+    #expect(!FileManager.default.fileExists(atPath: secondStarted.path))
+}
+
+@Test func codexRedetectionReenumeratesPreviouslyMissingCandidates() async throws {
+    let fixture = try CleanupFixture(provider: .codex, count: 1)
+    defer { fixture.destroy() }
+    let executable = fixture.root.appending(path: "late-codex")
+    let adapter = CodexAppServerCleanupAdapter(candidatePaths: [executable.path])
+
+    #expect(await adapter.availability(for: fixture.families[0]) == .unsupported("未找到 Codex 官方执行器"))
+    try makeExecutable(at: executable, script: successfulCodexScript())
+    #expect(await adapter.availability(for: fixture.families[0]) == .unsupported("未找到 Codex 官方执行器"))
+    await adapter.resetDetection()
+    #expect(await adapter.availability(for: fixture.families[0]) == .ready)
 }
 
 @Test func openCodeCleanupAcceptsOfficialXDGDataLayout() async throws {
@@ -547,6 +718,41 @@ private func cleanupArtifactForOfficialTest(
         modifiedNanoseconds: Int64(value.st_mtimespec.tv_nsec),
         category: category
     )
+}
+
+private func makeExecutable(at url: URL, script: String) throws {
+    try FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try Data(script.utf8).write(to: url)
+    guard chmod(url.path, 0o755) == 0 else { throw CocoaError(.fileWriteUnknown) }
+}
+
+private func successfulCodexScript() -> String {
+    """
+    #!/usr/bin/ruby
+    require 'json'
+    reads = 0
+    STDIN.each_line do |line|
+      request = JSON.parse(line)
+      next unless request['id']
+      case request['method']
+      when 'initialize'
+        puts({id: request['id'], result: {userAgent: 'Codex fixture', codexHome: ENV.fetch('CODEX_HOME')}}.to_json)
+      when 'thread/read'
+        reads += 1
+        if reads == 1
+          puts({id: request['id'], result: {thread: {id: request['params']['threadId']}}}.to_json)
+        else
+          puts({id: request['id'], error: {code: -32600, message: 'thread not found: ' + request['params']['threadId']}}.to_json)
+        end
+      when 'thread/delete'
+        puts({id: request['id'], result: {}}.to_json)
+      end
+      STDOUT.flush
+    end
+    """
 }
 
 private extension UInt64 {
