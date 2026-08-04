@@ -2,7 +2,7 @@
   <img src="docs/assets/find-disk-killer-icon.png" width="128" height="128" alt="FindDiskKiller app icon">
   <h1>FindDiskKiller</h1>
   <p><strong>See what keeps using your disk.</strong></p>
-  <p>Start with application disk I/O, then follow the evidence through file activity, AI Agent storage, and physical disks.</p>
+  <p>A native macOS investigation workspace for finding the app, files, and device behind sustained disk activity.</p>
   <p>
     <a href="README.md">English</a> ·
     <a href="README.zh-CN.md">简体中文</a> ·
@@ -27,83 +27,75 @@
 
 ---
 
-<a href="docs/assets/screenshots/overview-sustained-activity.webp">
-  <img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="The complete FindDiskKiller Now workspace showing sustained disk activity, resource trends, and leading applications.">
-</a>
+<p align="center">
+  <a href="docs/assets/screenshots/overview-sustained-activity.webp">
+    <img src="docs/assets/screenshots/overview-sustained-activity.webp" width="100%" alt="FindDiskKiller Now workspace showing sustained disk activity, resource trends, and leading applications.">
+  </a>
+</p>
+<p align="center"><sub>Start with the signal: see sustained activity before you investigate its cause.</sub></p>
 
-<p align="center"><sub>Find sustained disk activity and identify the applications behind it. Click the image to open the original.</sub></p>
+FindDiskKiller is for the moment when your Mac is warm, the disk is busy, and a process list does not explain why. It keeps the investigation in one path: identify the application, inspect the locations it touches, then start a bounded trace when you need direct file evidence.
 
-FindDiskKiller is a native macOS tool focused on one job: follow sustained disk activity from a visible signal to the applications, files, and physical devices behind it. CPU, disk, and network evidence stays application-centered, so you do not have to assemble the story across several system tools.
+## Follow the evidence
+
+### 1. Find the application
+
+Compare CPU, disk I/O, network, memory, and time-range trends in the application workspace. Sustained activity is easier to understand when the evidence stays attached to the app that produced it.
 
 <p align="center">
-  <strong>100%</strong> local processing　·　<strong>0</strong> data uploaded　·　<strong>10</strong> interface languages　·　<strong>macOS 14+</strong>
+  <a href="docs/assets/screenshots/app-codex-overview.webp">
+    <img src="docs/assets/screenshots/app-codex-overview.webp" width="100%" alt="Codex application overview with CPU, disk I/O, network, memory, and application activity trends.">
+  </a>
 </p>
+<p align="center"><sub>Ask first: which application is keeping the disk busy, and is the activity sustained?</sub></p>
 
-## Everything in One Workspace
+### 2. Follow it to the locations
 
-### AI Agent Storage
-
-Codex and Claude accumulate transcripts, subagent sessions, snapshots, visualizations, and shared databases. AI Storage starts only after an explicit click, attributes storage to individual threads or sessions, and provides a complete review before permanent deletion.
-
-<a href="docs/assets/screenshots/ai-storage-overview.webp">
-  <img src="docs/assets/screenshots/ai-storage-overview.webp" width="100%" alt="AI Storage overview separating chat, global, and unattributed storage for Codex and Claude.">
-</a>
-
-<p align="center"><sub>Measure total provider storage first, then separate chats, global data, and unattributed space.</sub></p>
+File Activity shows related locations, writable folders, open files, and recent changes. It gives you a useful next question without pretending that a changed path alone proves who wrote it.
 
 <p align="center">
-  <a href="docs/assets/screenshots/ai-storage-thread-details.webp"><img src="docs/assets/screenshots/ai-storage-thread-details.webp" width="57%" alt="Codex AI Storage listing activity, subagents, and the selected thread's complete storage breakdown."></a>
-  <a href="docs/assets/screenshots/ai-storage-batch-cleanup.webp"><img src="docs/assets/screenshots/ai-storage-batch-cleanup.webp" width="41%" alt="AI Agent batch cleanup review showing the selected scope and estimated immediate reclaim before permanent deletion."></a>
+  <a href="docs/assets/screenshots/app-codex-file-activity.webp">
+    <img src="docs/assets/screenshots/app-codex-file-activity.webp" width="100%" alt="Codex File Activity showing related locations, writable folders, open files, and recent changes.">
+  </a>
 </p>
+<p align="center"><sub>Move from the application to the folders and files involved.</sub></p>
 
-<p align="center"><sub>Left: attribute storage to a conversation　·　Right: review age, project, and conversation scope before permanent deletion</sub></p>
+### 3. Trace only when you need proof
 
-Analysis never starts automatically. Active or identity-changed sessions are skipped, and unsupported providers never fall back to direct database writes or manual transcript deletion. Claude Desktop and Cowork sessions currently remain deletable only inside Claude Desktop.
-
-### Application Activity and File Evidence
-
-Compare an application's CPU, disk I/O, and network trends, then move into its open locations and recently changed directories. When you need stronger evidence, explicitly start a time-bounded file or folder trace.
+Start a time-bounded folder or file trace explicitly. The trace reports requested reads and writes, active files, rates, and the verified process sessions responsible for the requests.
 
 <p align="center">
-  <a href="docs/assets/screenshots/app-codex-overview.webp"><img src="docs/assets/screenshots/app-codex-overview.webp" width="49%" alt="Codex application detail with separate CPU, disk I/O, and network timelines."></a>
-  <a href="docs/assets/screenshots/app-codex-file-activity.webp"><img src="docs/assets/screenshots/app-codex-file-activity.webp" width="49%" alt="Codex File Activity showing related locations, writable folders, and recent changes."></a>
+  <a href="docs/assets/screenshots/folder-access-trace.webp">
+    <img src="docs/assets/screenshots/folder-access-trace.webp" width="100%" alt="A bounded folder trace showing requested read and write rates, active files, recent events, and accessing processes.">
+  </a>
 </p>
+<p align="center"><sub>Use direct tracing as a focused investigation, not as a permanent background watcher.</sub></p>
 
-<p align="center"><sub>Left: determine whether resource activity is sustained　·　Right: move into the locations involved</sub></p>
+## One workspace for the next question
 
-<p align="center">
-  <a href="docs/assets/screenshots/folder-access-trace.webp"><img src="docs/assets/screenshots/folder-access-trace.webp" width="86%" alt="A bounded folder trace showing requested read and write rates, active files, and accessing processes."></a>
-</p>
+- **Now and Applications** show who is active across CPU, disk, and network signals.
+- **File Activity and folder tracing** show where requests are happening and which verified sessions made them.
+- **Storage Map** explains how space is distributed across volumes, applications, developer tools, simulators, containers, and AI Agent data.
+- **Disks and History** connect mounted volumes to physical-device activity and preserve longer-term trends.
 
-<p align="center"><sub>Tracing runs only after an explicit start and shows requested I/O, active files, and verified process sessions.</sub></p>
+AI Storage is explicit and reviewable. Codex and Claude data is measured only after you ask for analysis, attributed where the provider exposes a reliable identity, and never deleted by guessing from a path or writing directly to a database. Active or changed sessions remain protected.
 
-### Physical Disks and Health
+## Measurements stay honest
 
-Map familiar volume names such as Macintosh HD and external drives to physical-device throughput, then inspect the SMART/NVMe health fields that macOS and the hardware actually expose.
+FindDiskKiller keeps measurements with different meanings separate:
 
-<p align="center">
-  <a href="docs/assets/screenshots/disk-live-activity.webp"><img src="docs/assets/screenshots/disk-live-activity.webp" width="49%" alt="Disks workspace showing physical-device throughput, mounted volumes, and hardware diagnostics."></a>
-  <a href="docs/assets/screenshots/disk-health.webp"><img src="docs/assets/screenshots/disk-health.webp" width="49%" alt="Disk Health showing SMART status, wear, temperature, host writes, power history, and media errors."></a>
-</p>
-
-<p align="center"><sub>Left: see which physical device is busy　·　Right: inspect the health evidence the device reports</sub></p>
-
-## No False Precision
-
-FindDiskKiller presents related evidence together without forcing measurements with different meanings into one number:
-
-- **Application I/O** reports process requests across storage; it is not physical NAND traffic.
-- **Physical-device throughput** cannot be assigned exactly to one process, and application totals are not expected to equal device totals.
-- **Recently changed locations** show that macOS observed a change; they do not identify the writer by themselves.
-- **AI database attribution** is a clearly labelled logical estimate, not immediate physical disk reclaim.
+- Application I/O is process-requested traffic; it is not the same as physical NAND traffic.
+- Physical-device throughput cannot be assigned exactly to one process, so app totals do not need to equal device totals.
+- A recently changed location proves that macOS observed a change, not who caused it.
+- AI storage attribution is a labelled logical estimate, not a promise of immediate physical reclaim.
 
 Missing, partial, or unsupported evidence is shown as unavailable rather than replaced with zero.
 
-## Privacy and Permissions
+## Private by design
 
-All monitoring, analysis, and display happen on the Mac. The current release uploads no process names, file paths, disk serial numbers, or monitoring history, and contains no ads, telemetry, analytics, or third-party tracking SDKs.
+Monitoring, analysis, and display happen on your Mac. The current release uploads no process names, file paths, disk serial numbers, or monitoring history, and includes no ads, telemetry, analytics, or third-party tracking SDKs.
 
-Basic CPU, disk, network, volume, and process monitoring needs no administrator approval. Only when you explicitly start file or directory tracing may macOS ask you to approve the signed, fixed-purpose background component; protected locations may also require Full Disk Access. You always control when tracing starts and stops.
+Basic CPU, disk, network, volume, and process monitoring needs no administrator approval. macOS may ask for approval only after you explicitly start file or directory tracing; protected locations may also require Full Disk Access. You control when tracing starts and stops.
 
 Read the complete [Privacy Policy](PRIVACY.md) and [Security Policy](SECURITY.md).
 
@@ -115,10 +107,10 @@ Read the complete [Privacy Policy](PRIVACY.md) and [Security Policy](SECURITY.md
 
 Official releases support Apple silicon and Intel Macs and include a SHA-256 checksum. Do not bypass Gatekeeper if signature or notarization validation fails.
 
-## Development and Documentation
+## Build and test
 
 <details>
-<summary><strong>Build from source and run tests</strong></summary>
+<summary><strong>Build FindDiskKiller from source</strong></summary>
 
 Development requires Xcode 16+ and XcodeGen 2.42.0+.
 
@@ -141,13 +133,15 @@ The unsigned build covers basic monitoring but cannot complete privileged file t
 
 </details>
 
+## Documentation
+
 - [Product and Technical Plan](docs/find-disk-killer-product-and-technical-plan.md)
 - [Deep File Tracing and SSD Health Plan](docs/find-disk-killer-deep-tracing-and-ssd-health-plan.md)
 - [Website Release Checklist](docs/website-release-checklist.md)
 - [Contributing](CONTRIBUTING.md)
 - [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 
-## Support and License
+## Support and license
 
 Use [GitHub Issues](https://github.com/jianyintang/find-disk-killer/issues) for questions, bugs, and feature requests. Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/jianyintang/find-disk-killer/security/advisories/new); remove sensitive paths, usernames, and disk serial numbers before submitting diagnostics or screenshots.
 
