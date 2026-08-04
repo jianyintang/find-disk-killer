@@ -94,11 +94,7 @@ struct AboutUpdateSection: View {
                     .padding(16)
                 }
             }
-            .background(Color.secondary.opacity(0.035))
-            .overlay {
-                RoundedRectangle(cornerRadius: 7)
-                    .strokeBorder(Color.secondary.opacity(0.14), lineWidth: 0.5)
-            }
+            .glassSurface(padding: 0)
         }
     }
 }

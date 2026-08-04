@@ -1399,11 +1399,6 @@ struct ProcessTable: View {
             .onContinuousHover { phase in
                 updateContinuousHover(for: process, phase: phase)
             }
-            .background {
-                ProcessRowMouseDownMonitor(
-                    onMouseDown: { select(process) }
-                )
-            }
             .popover(
                 isPresented: popoverBinding(for: process.id),
                 attachmentAnchor: .rect(.bounds)
@@ -1851,66 +1846,6 @@ private struct SystemLayerExplanationView: View {
     }
 }
 
-private struct ProcessRowMouseDownMonitor: NSViewRepresentable {
-    let onMouseDown: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        context.coordinator.view = view
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        context.coordinator.view = nsView
-        context.coordinator.onMouseDown = onMouseDown
-        context.coordinator.installIfNeeded()
-    }
-
-    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-        coordinator.uninstall()
-    }
-
-    @MainActor
-    final class Coordinator: NSObject {
-        weak var view: NSView?
-        var onMouseDown: (() -> Void)?
-        private var monitor: Any?
-
-        func installIfNeeded() {
-            guard monitor == nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) {
-                [weak self] event in
-                guard !event.modifierFlags.contains(.control),
-                      let self,
-                      let view = self.view,
-                      self.containsCurrentPointer(in: view)
-                else { return event }
-
-                let action = self.onMouseDown
-                Task { @MainActor in action?() }
-                return nil
-            }
-        }
-
-        func uninstall() {
-            guard let monitor else { return }
-            NSEvent.removeMonitor(monitor)
-            self.monitor = nil
-        }
-
-        private func containsCurrentPointer(in view: NSView) -> Bool {
-            guard let window = view.window else { return false }
-            let rowRectInWindow = view.convert(view.bounds, to: nil)
-            let rowRectOnScreen = window.convertToScreen(rowRectInWindow)
-            return rowRectOnScreen.contains(NSEvent.mouseLocation)
-        }
-    }
-}
-
 private struct ProcessRowButtonStyle: ButtonStyle {
     let isSelected: Bool
     let isHovered: Bool
@@ -2116,7 +2051,7 @@ struct ProcessDetailSheet: View {
         processID = presentation.id
         updatesLive = presentation.updatesLive
         _process = State(initialValue: presentation.process)
-        _chartPoints = State(initialValue: Self.optimizedChartPoints(presentation.process.metrics))
+        _chartPoints = State(initialValue: [])
         _fileAccessTrace = State(initialValue: FileAccessTraceStore(
             activityRegistry: traceActivityRegistry
         ))
@@ -2201,16 +2136,19 @@ struct ProcessDetailSheet: View {
     }
 
     private func runPresentationLifecycle() async {
-        do {
-            try await Task.sleep(for: .milliseconds(120))
-        } catch {
-            return
-        }
+        await Task.yield()
+        guard !Task.isCancelled else { return }
+
+        let initialMetrics = process.metrics
+        let initialPoints = await Task.detached(priority: .userInitiated) {
+            Self.optimizedChartPoints(initialMetrics)
+        }.value
         guard !Task.isCancelled else { return }
 
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
+            chartPoints = initialPoints
             chartsReady = true
         }
 
@@ -2229,7 +2167,10 @@ struct ProcessDetailSheet: View {
             let hasNewSample = latest.lastActivity != process.lastActivity
                 || latest.metrics.last?.timestamp != process.metrics.last?.timestamp
             guard hasNewSample || !isProcessAvailable else { continue }
-            let points = Self.optimizedChartPoints(latest.metrics)
+            let points = await Task.detached(priority: .userInitiated) {
+                Self.optimizedChartPoints(latest.metrics)
+            }.value
+            guard !Task.isCancelled else { return }
             withTransaction(transaction) {
                 process = latest
                 chartPoints = points
@@ -2238,7 +2179,7 @@ struct ProcessDetailSheet: View {
         }
     }
 
-    private static func optimizedChartPoints(
+    nonisolated private static func optimizedChartPoints(
         _ points: [ProcessMetricPoint]
     ) -> [ProcessMetricPoint] {
         downsampledChartPoints(points, maxCount: 120, segment: { $0.networkSegment }) {
@@ -2262,7 +2203,7 @@ enum ProcessDetailSection: String, CaseIterable, Identifiable {
     var title: String { L10n.text(self == .overview ? "概览" : "文件活动") }
 }
 
-private struct FileAccessDirectory: Identifiable, Sendable {
+private struct FileAccessDirectory: Identifiable, Equatable, Sendable {
     let path: String
     let displayName: String
     let volumeName: String
@@ -2281,7 +2222,28 @@ private struct TrackedFileLocation: Sendable {
     let lastSeenOpenAt: Date
 }
 
-private enum FileActivityFilter: String, CaseIterable, Identifiable {
+private struct FileActivityRefreshProjection: Sendable {
+    let rows: [FileAccessDirectory]
+    let trackedLocations: [String: TrackedFileLocation]
+    let changesUnavailable: Bool
+    let summary: FileActivityRowSummary
+}
+
+private struct FileActivityRowSummary: Sendable {
+    static let empty = Self(
+        writableCount: 0,
+        changedCount: 0,
+        openFileCount: 0,
+        fileCountHistogram: []
+    )
+
+    let writableCount: Int
+    let changedCount: Int
+    let openFileCount: Int
+    let fileCountHistogram: [Double]
+}
+
+private enum FileActivityFilter: String, CaseIterable, Identifiable, Sendable {
     case all
     case writable
     case changed
@@ -2296,7 +2258,7 @@ private enum FileActivityFilter: String, CaseIterable, Identifiable {
     }
 }
 
-private enum FileActivitySort: String, CaseIterable, Identifiable {
+private enum FileActivitySort: String, CaseIterable, Identifiable, Sendable {
     case name
     case fileCount
     case recentChange
@@ -2324,11 +2286,18 @@ private struct ProcessFileActivityView: View {
     @State private var filter: FileActivityFilter = .all
     @State private var sort: FileActivitySort = .fileCount
     @State private var searchText = ""
+    @State private var visibleRows: [FileAccessDirectory] = []
+    @State private var isUpdatingVisibleRows = false
+    @State private var visibleRowsTask: Task<Void, Never>?
+    @State private var rowSummary = FileActivityRowSummary.empty
     @State private var trackedLocations: [String: TrackedFileLocation] = [:]
     @State private var monitoredSessions: [ProcessSession]
     @State private var monitoredVolumes: [VolumeInfo]
     @State private var isFileActivityHelpPresented = false
     @State private var tracedPath: String?
+    @State private var pendingTracePath: String?
+    @State private var tracePreparationError: String?
+    @State private var tracePreparationTask: Task<Void, Never>?
     @State private var isObservationPaused = false
 
     init(
@@ -2350,6 +2319,9 @@ private struct ProcessFileActivityView: View {
                     store: traceStore,
                     contextProcessName: process.localizedDisplayName,
                     onBack: {
+                        tracePreparationTask?.cancel()
+                        pendingTracePath = nil
+                        tracePreparationError = nil
                         traceStore.endEphemeralSession()
                         traceStore.removeTarget()
                         tracedPath = nil
@@ -2374,44 +2346,51 @@ private struct ProcessFileActivityView: View {
             monitoredSessions = sessions
             traceStore.setProcessSessions(sessions)
         }
-        .onChange(of: filteredRows.map(\.id)) { _, identifiers in
-            if let selectedPath, identifiers.contains(selectedPath) { return }
-            selectedPath = identifiers.first
+        .onChange(of: rows, initial: true) { _, _ in
+            scheduleVisibleRowsUpdate()
+        }
+        .onChange(of: filter) { _, _ in
+            scheduleVisibleRowsUpdate(showsProgress: true)
+        }
+        .onChange(of: sort) { _, _ in
+            scheduleVisibleRowsUpdate(showsProgress: true)
+        }
+        .onChange(of: searchText) { _, _ in
+            scheduleVisibleRowsUpdate(debounce: true, showsProgress: true)
+        }
+        .onDisappear {
+            visibleRowsTask?.cancel()
+            tracePreparationTask?.cancel()
         }
     }
 
     private var fileActivityHeader: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline, spacing: 16) {
-                HStack(alignment: .top, spacing: 7) {
+        VStack(alignment: .leading, spacing: InstrumentDesign.Spacing.section) {
+            HStack(alignment: .firstTextBaseline, spacing: 14) {
+                HStack(spacing: 7) {
                     SectionHeading(
                         "相关位置",
                         subtitle: "当前打开的位置，以及最近 5 分钟观察到修改的位置"
                     )
-                    Button {
-                        isFileActivityHelpPresented.toggle()
-                    } label: {
+                    Button { isFileActivityHelpPresented.toggle() } label: {
                         Image(systemName: "questionmark.circle")
                     }
-                    .buttonStyle(AppIconButtonStyle(size: 28, isFramed: false))
-                    .onHover { isInside in
-                        if isInside { isFileActivityHelpPresented = true }
-                    }
+                    .buttonStyle(AppIconButtonStyle(size: 26, isFramed: false))
+                    .onHover { if $0 { isFileActivityHelpPresented = true } }
                     .popover(isPresented: $isFileActivityHelpPresented, arrowEdge: .top) {
                         FileActivityExplanationPopover()
                     }
                     .accessibilityLabel(L10n.text("了解文件活动"))
                 }
-                Spacer()
+                Spacer(minLength: 10)
                 status
                 if let snapshot {
                     Text(L10n.date(snapshot.capturedAt, date: .omitted, time: .standard))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
+                        .fixedSize()
                 }
-                Button {
-                    isObservationPaused.toggle()
-                } label: {
+                Button { isObservationPaused.toggle() } label: {
                     Image(systemName: isObservationPaused ? "play.fill" : "pause.fill")
                 }
                 .buttonStyle(AppIconButtonStyle(size: 30))
@@ -2419,44 +2398,77 @@ private struct ProcessFileActivityView: View {
                 .accessibilityLabel(L10n.text(isObservationPaused ? "返回实时" : "暂停实时跟随"))
             }
 
-            HStack(spacing: 18) {
-                FileActivityMetric(
+            HStack(spacing: 0) {
+                FileActivityInstrument(
                     title: "位置",
                     value: L10n.number(rows.count),
                     symbol: "folder",
-                    color: .blue
-                )
-                Divider().frame(height: 32)
-                FileActivityMetric(
+                    color: InstrumentDesign.ColorRole.cpu
+                ) {
+                    MicroHistogram(
+                        values: rowSummary.fileCountHistogram,
+                        accent: InstrumentDesign.ColorRole.cpu
+                    )
+                }
+                .frame(maxWidth: .infinity)
+                Divider().frame(height: 46).padding(.horizontal, 12)
+                FileActivityInstrument(
                     title: "可写",
-                    value: L10n.number(writableRows.count),
+                    value: L10n.number(rowSummary.writableCount),
                     symbol: "pencil.line",
-                    color: .orange
-                )
-                Divider().frame(height: 32)
-                FileActivityMetric(
+                    color: InstrumentDesign.ColorRole.write
+                ) {
+                    SegmentedEnergyMeter(
+                        fraction: rows.isEmpty
+                            ? 0
+                            : Double(rowSummary.writableCount) / Double(rows.count),
+                        color: InstrumentDesign.ColorRole.write,
+                        segments: 12
+                    )
+                }
+                .frame(maxWidth: .infinity)
+                Divider().frame(height: 46).padding(.horizontal, 12)
+                FileActivityInstrument(
                     title: "打开文件",
-                    value: L10n.number(rows.reduce(0) { $0 + $1.fileCount }),
+                    value: L10n.number(rowSummary.openFileCount),
                     symbol: "doc.on.doc",
-                    color: .teal
-                )
-                Divider().frame(height: 32)
-                FileActivityMetric(
+                    color: InstrumentDesign.ColorRole.read
+                ) {
+                    MicroHistogram(
+                        values: rowSummary.fileCountHistogram,
+                        accent: InstrumentDesign.ColorRole.read
+                    )
+                }
+                .frame(maxWidth: .infinity)
+                Divider().frame(height: 46).padding(.horizontal, 12)
+                FileActivityInstrument(
                     title: "最近 5 分钟修改",
-                    value: L10n.number(rows.filter { $0.lastChangedAt != nil }.count),
+                    value: L10n.number(rowSummary.changedCount),
                     symbol: "clock.arrow.circlepath",
-                    color: .purple
-                )
-                Spacer()
-                observationSummary
+                    color: InstrumentDesign.ColorRole.memory
+                ) {
+                    SegmentedEnergyMeter(
+                        fraction: rows.isEmpty
+                            ? 0
+                            : Double(rowSummary.changedCount) / Double(rows.count),
+                        color: InstrumentDesign.ColorRole.memory,
+                        segments: 12
+                    )
+                }
+                .frame(maxWidth: .infinity)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .glassSurface(padding: 0)
 
-            if traceStore.selection != nil {
-                traceSessionShortcut
+            HStack(spacing: 10) {
+                observationSummary
+                Spacer(minLength: 8)
+                if traceStore.selection != nil { traceSessionShortcut }
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
+        .padding(.horizontal, InstrumentDesign.Spacing.page)
+        .padding(.vertical, InstrumentDesign.Spacing.section)
     }
 
     private var traceSessionShortcut: some View {
@@ -2582,13 +2594,14 @@ private struct ProcessFileActivityView: View {
             } else {
                 VStack(spacing: 0) {
                     locationBrowser
-                        .frame(height: min(320, geometry.size.height * 0.46))
+                        .frame(height: min(300, max(230, geometry.size.height * 0.42)))
                     Divider()
                     locationDetail
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }
+        .glassSurface(padding: 0)
     }
 
     private func fileBrowserWidth(for availableWidth: CGFloat) -> CGFloat {
@@ -2603,6 +2616,12 @@ private struct ProcessFileActivityView: View {
                         .foregroundStyle(.secondary)
                     TextField(L10n.text("筛选位置"), text: $searchText)
                         .textFieldStyle(.plain)
+                    if isUpdatingVisibleRows {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .help(L10n.text("正在更新筛选结果"))
+                            .accessibilityLabel(L10n.text("正在更新筛选结果"))
+                    }
                     Menu {
                         Picker(L10n.text("排序"), selection: $sort) {
                             ForEach(FileActivitySort.allCases) { option in
@@ -2619,16 +2638,14 @@ private struct ProcessFileActivityView: View {
                 }
                 .padding(.horizontal, 10)
                 .frame(height: 32)
-                .background(Color(nsColor: .controlBackgroundColor))
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.42))
+                .overlay {
+                    RoundedRectangle(cornerRadius: InstrumentDesign.Radius.control)
+                        .strokeBorder(Color.primary.opacity(0.10), lineWidth: InstrumentDesign.Stroke.hairline)
+                }
                 .clipShape(RoundedRectangle(cornerRadius: 6))
 
-                Picker(L10n.text("位置筛选"), selection: $filter) {
-                    ForEach(FileActivityFilter.allCases) { option in
-                        Text(option.title).tag(option)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                FileActivityFilterControl(selection: $filter)
             }
             .padding(12)
 
@@ -2636,9 +2653,10 @@ private struct ProcessFileActivityView: View {
 
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(filteredRows) { row in
+                    ForEach(visibleRows) { row in
                         Button {
                             selectedPath = row.id
+                            tracePreparationError = nil
                         } label: {
                             FileLocationRow(
                                 row: row,
@@ -2661,23 +2679,23 @@ private struct ProcessFileActivityView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.45))
+        .background(InstrumentDesign.Palette.sidebarTint.opacity(0.42))
     }
 
     @ViewBuilder
     private var locationDetail: some View {
         if let selectedRow {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 18) {
                     HStack(alignment: .top, spacing: 14) {
                         Image(systemName: isWritable(selectedRow) ? "folder.badge.gearshape" : "folder.fill")
                             .font(.system(size: 24))
                             .foregroundStyle(isWritable(selectedRow) ? Color.orange : Color.blue)
-                            .frame(width: 42, height: 42)
-                            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+                            .frame(width: 48, height: 48)
+                            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: InstrumentDesign.Radius.icon))
                         VStack(alignment: .leading, spacing: 4) {
                             Text(selectedRow.displayName)
-                                .font(.title3.weight(.semibold))
+                                .font(.system(size: 20, weight: .semibold))
                                 .textSelection(.enabled)
                             Text(displayPath(selectedRow.path))
                                 .font(.caption.monospaced())
@@ -2688,13 +2706,23 @@ private struct ProcessFileActivityView: View {
                         Button {
                             openTrace(selectedRow)
                         } label: {
-                            Label(
-                                L10n.text(isActiveTraceTarget(selectedRow) ? "查看追踪" : "追踪此目录"),
-                                systemImage: "scope"
-                            )
+                            if pendingTracePath == selectedRow.path {
+                                HStack(spacing: 7) {
+                                    ProgressView().controlSize(.small)
+                                    Text(L10n.text("正在开始"))
+                                }
+                            } else {
+                                Label(
+                                    L10n.text(isActiveTraceTarget(selectedRow) ? "查看追踪" : "追踪此目录"),
+                                    systemImage: "scope"
+                                )
+                            }
                         }
                         .buttonStyle(AppActionButtonStyle(kind: .primary, size: .compact))
-                        .disabled(!canOpenTrace(selectedRow))
+                        .disabled(
+                            !canOpenTrace(selectedRow)
+                                || pendingTracePath == selectedRow.path
+                        )
                         .help(L10n.text(
                             canOpenTrace(selectedRow)
                                 ? "查看此目录内具体的请求读写、活跃文件和访问应用"
@@ -2716,9 +2744,16 @@ private struct ProcessFileActivityView: View {
                         .help(L10n.text("在 Finder 中显示"))
                     }
 
+                    if let tracePreparationError {
+                        Label(tracePreparationError, systemImage: "exclamationmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .accessibilityLabel(tracePreparationError)
+                    }
+
                     Divider()
 
-                    Grid(alignment: .leading, horizontalSpacing: 34, verticalSpacing: 14) {
+                    Grid(alignment: .leading, horizontalSpacing: 34, verticalSpacing: 12) {
                         locationMetadataRow(
                             selectedRow.isCurrentlyOpen ? "打开方式" : "状态",
                             selectedRow.isCurrentlyOpen
@@ -2755,7 +2790,7 @@ private struct ProcessFileActivityView: View {
                     }
                 }
                 .padding(22)
-                .frame(maxWidth: 680, alignment: .leading)
+                .frame(maxWidth: 760, alignment: .leading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
@@ -2810,25 +2845,73 @@ private struct ProcessFileActivityView: View {
         .accessibilityHidden(true)
     }
 
-    private var writableRows: [FileAccessDirectory] {
-        rows.filter(isWritable)
+    @MainActor
+    private func scheduleVisibleRowsUpdate(
+        debounce: Bool = false,
+        showsProgress: Bool = false
+    ) {
+        visibleRowsTask?.cancel()
+        isUpdatingVisibleRows = showsProgress || isUpdatingVisibleRows || visibleRows.isEmpty
+        let sourceRows = rows
+        let requestedFilter = filter
+        let requestedSort = sort
+        let requestedSearch = searchText
+
+        visibleRowsTask = Task { @MainActor in
+            await Task.yield()
+            if debounce {
+                do {
+                    try await Task.sleep(for: .milliseconds(90))
+                } catch {
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
+            let nextRows = await Task.detached(priority: .userInitiated) {
+                Self.makeVisibleRows(
+                    sourceRows,
+                    filter: requestedFilter,
+                    sort: requestedSort,
+                    searchText: requestedSearch
+                )
+            }.value
+            guard !Task.isCancelled else { return }
+
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                visibleRows = nextRows
+                if let selectedPath, nextRows.contains(where: { $0.id == selectedPath }) {
+                    self.selectedPath = selectedPath
+                } else {
+                    selectedPath = nextRows.first?.id
+                }
+                isUpdatingVisibleRows = false
+            }
+        }
     }
 
-    private var filteredRows: [FileAccessDirectory] {
+    nonisolated private static func makeVisibleRows(
+        _ rows: [FileAccessDirectory],
+        filter: FileActivityFilter,
+        sort: FileActivitySort,
+        searchText: String
+    ) -> [FileAccessDirectory] {
         let searched = rows.filter { row in
             searchText.isEmpty
                 || row.displayName.localizedCaseInsensitiveContains(searchText)
                 || row.path.localizedCaseInsensitiveContains(searchText)
                 || row.volumeName.localizedCaseInsensitiveContains(searchText)
         }
-        let filtered = searched.filter { row in
+        return searched.filter { row in
             switch filter {
             case .all: true
-            case .writable: isWritable(row)
+            case .writable:
+                row.modes.contains(.writeOnly) || row.modes.contains(.readWrite)
             case .changed: row.lastChangedAt != nil
             }
         }
-        return filtered.sorted { lhs, rhs in
+        .sorted { lhs, rhs in
             switch sort {
             case .name:
                 return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
@@ -2846,8 +2929,8 @@ private struct ProcessFileActivityView: View {
     }
 
     private var selectedRow: FileAccessDirectory? {
-        guard let selectedPath else { return filteredRows.first }
-        return filteredRows.first { $0.id == selectedPath }
+        guard let selectedPath else { return visibleRows.first }
+        return visibleRows.first { $0.id == selectedPath }
     }
 
     private var selectedTrackedLocation: TrackedFileLocation? {
@@ -2910,26 +2993,43 @@ private struct ProcessFileActivityView: View {
     }
 
     private func openTrace(_ row: FileAccessDirectory) {
+        selectedPath = row.id
+        tracePreparationError = nil
         guard canOpenTrace(row) else {
-            selectedPath = row.id
             return
         }
         let url = URL(fileURLWithPath: row.path, isDirectory: true).standardizedFileURL
         let isExistingTarget = isActiveTraceTarget(row)
-        if !isExistingTarget {
-            traceStore.select(url)
+        if isExistingTarget {
+            pendingTracePath = nil
+            tracedPath = url.path
+            return
         }
-        guard traceStore.selection?.url.standardizedFileURL.path == url.path else { return }
-        tracedPath = url.path
-        let shouldBegin = !isExistingTarget || (
-            traceStore.startedAt == nil && traceStore.state != .waitingForApproval
-        )
-        guard shouldBegin else { return }
-        Task { @MainActor in
-            // Commit the workspace transition before Service Management performs
-            // registration so the click always has immediate visual feedback.
+
+        tracePreparationTask?.cancel()
+        pendingTracePath = row.path
+        tracePreparationTask = Task { @MainActor in
             await Task.yield()
-            traceStore.start()
+            do {
+                let preparedSelection = try await Task.detached(priority: .userInitiated) {
+                    try FileAccessTraceSelection.make(url: url)
+                }.value
+                guard !Task.isCancelled, pendingTracePath == row.path else { return }
+                traceStore.select(preparedSelection)
+                guard traceStore.selection?.url.standardizedFileURL.path == url.path else {
+                    pendingTracePath = nil
+                    return
+                }
+                tracedPath = url.path
+                pendingTracePath = nil
+            } catch is CancellationError {
+                if pendingTracePath == row.path { pendingTracePath = nil }
+            } catch {
+                guard !Task.isCancelled, pendingTracePath == row.path else { return }
+                traceStore.reportSelectionPreparationFailure()
+                tracePreparationError = L10n.text("无法读取所选位置的信息")
+                pendingTracePath = nil
+            }
         }
     }
 
@@ -2990,65 +3090,26 @@ private struct ProcessFileActivityView: View {
             let currentRows = await Task.detached(priority: .utility) {
                 Self.buildRows(snapshot: next, volumes: currentVolumes)
             }.value
-            let currentRowsByPath = Dictionary(uniqueKeysWithValues: currentRows.map { ($0.path, $0) })
-            let currentPaths = Set(currentRowsByPath.keys)
-            let trackingCutoff = next.capturedAt.addingTimeInterval(
-                -FileChangeWatcher.recentChangeWindow
-            )
-            var nextTrackedLocations = trackedLocations.filter { path, tracked in
-                let retainedChange = RecentFileChangeRetention.retainedTimestamp(
-                    previous: tracked.row.lastChangedAt,
-                    observed: nil,
-                    now: next.capturedAt
+            let previousTrackedLocations = trackedLocations
+            let trackingCandidates = await Task.detached(priority: .utility) {
+                Self.makeTrackingCandidates(
+                    currentRows: currentRows,
+                    previousTrackedLocations: previousTrackedLocations,
+                    capturedAt: next.capturedAt
                 )
-                return currentPaths.contains(path)
-                    || tracked.lastSeenOpenAt >= trackingCutoff
-                    || retainedChange != nil
-            }
-            for row in currentRows {
-                let existing = nextTrackedLocations[row.path]
-                let retainedRow = existing?.row ?? row
-                nextTrackedLocations[row.path] = TrackedFileLocation(
-                    row: retainedRow,
-                    firstObservedAt: existing?.firstObservedAt ?? next.capturedAt,
-                    lastSeenOpenAt: next.capturedAt
-                )
-            }
-
+            }.value
             let changes = await FileChangeWatcher.shared.recentChanges(
-                for: Array(nextTrackedLocations.keys)
+                for: Array(trackingCandidates.keys)
             )
-            let nextRows = nextTrackedLocations.values.compactMap { tracked -> FileAccessDirectory? in
-                let currentRow = currentRowsByPath[tracked.row.path]
-                let lastChangedAt = RecentFileChangeRetention.retainedTimestamp(
-                    previous: tracked.row.lastChangedAt,
-                    observed: changes.latestByPath[tracked.row.path],
-                    now: next.capturedAt
-                )
-                guard currentRow != nil || lastChangedAt != nil else { return nil }
-                let row = Self.rebindingVolume(
-                    currentRow ?? tracked.row,
+            let projection = await Task.detached(priority: .utility) {
+                Self.makeRefreshProjection(
+                    currentRows: currentRows,
+                    trackingCandidates: trackingCandidates,
+                    changes: changes,
+                    capturedAt: next.capturedAt,
                     volumes: currentVolumes
                 )
-                return FileAccessDirectory(
-                    path: row.path,
-                    displayName: row.displayName,
-                    volumeName: row.volumeName,
-                    modes: row.modes,
-                    fileCount: currentRow?.fileCount ?? 0,
-                    lastChangedAt: lastChangedAt,
-                    changeObservationStatus: changes.statusByPath[row.path] ?? .unavailable,
-                    isCurrentlyOpen: currentRow != nil
-                )
-            }
-            for row in nextRows {
-                guard let tracked = nextTrackedLocations[row.path] else { continue }
-                nextTrackedLocations[row.path] = TrackedFileLocation(
-                    row: row,
-                    firstObservedAt: tracked.firstObservedAt,
-                    lastSeenOpenAt: tracked.lastSeenOpenAt
-                )
-            }
+            }.value
             guard !Task.isCancelled else { return }
             var transaction = Transaction()
             transaction.disablesAnimations = true
@@ -3068,13 +3129,12 @@ private struct ProcessFileActivityView: View {
                 } else {
                     snapshot = next
                 }
-                trackedLocations = nextTrackedLocations
-                rows = nextRows
+                trackedLocations = projection.trackedLocations
+                rows = projection.rows
+                rowSummary = projection.summary
                 fileChangesHaveGap = changes.hasCoverageGap
                 fileChangesObservedSince = changes.observedSince
-                fileChangesUnavailable = !nextRows.isEmpty && nextRows.allSatisfy {
-                    $0.changeObservationStatus == .unavailable
-                }
+                fileChangesUnavailable = projection.changesUnavailable
             }
             do {
                 try await Task.sleep(for: .seconds(2))
@@ -3082,6 +3142,105 @@ private struct ProcessFileActivityView: View {
                 return
             }
         }
+    }
+
+    nonisolated private static func makeTrackingCandidates(
+        currentRows: [FileAccessDirectory],
+        previousTrackedLocations: [String: TrackedFileLocation],
+        capturedAt: Date
+    ) -> [String: TrackedFileLocation] {
+        let currentPaths = Set(currentRows.map(\.path))
+        let trackingCutoff = capturedAt.addingTimeInterval(-FileChangeWatcher.recentChangeWindow)
+        var candidates = previousTrackedLocations.filter { path, tracked in
+            let retainedChange = RecentFileChangeRetention.retainedTimestamp(
+                previous: tracked.row.lastChangedAt,
+                observed: nil,
+                now: capturedAt
+            )
+            return currentPaths.contains(path)
+                || tracked.lastSeenOpenAt >= trackingCutoff
+                || retainedChange != nil
+        }
+        for row in currentRows {
+            let existing = candidates[row.path]
+            candidates[row.path] = TrackedFileLocation(
+                row: existing?.row ?? row,
+                firstObservedAt: existing?.firstObservedAt ?? capturedAt,
+                lastSeenOpenAt: capturedAt
+            )
+        }
+        return candidates
+    }
+
+    nonisolated private static func makeRefreshProjection(
+        currentRows: [FileAccessDirectory],
+        trackingCandidates: [String: TrackedFileLocation],
+        changes: FileChangeLookup,
+        capturedAt: Date,
+        volumes: [VolumeInfo]
+    ) -> FileActivityRefreshProjection {
+        let currentRowsByPath = Dictionary(uniqueKeysWithValues: currentRows.map { ($0.path, $0) })
+        var updatedTrackedLocations = trackingCandidates
+        let nextRows = trackingCandidates.values.compactMap { tracked -> FileAccessDirectory? in
+            let currentRow = currentRowsByPath[tracked.row.path]
+            let lastChangedAt = RecentFileChangeRetention.retainedTimestamp(
+                previous: tracked.row.lastChangedAt,
+                observed: changes.latestByPath[tracked.row.path],
+                now: capturedAt
+            )
+            guard currentRow != nil || lastChangedAt != nil else { return nil }
+            let row = rebindingVolume(currentRow ?? tracked.row, volumes: volumes)
+            return FileAccessDirectory(
+                path: row.path,
+                displayName: row.displayName,
+                volumeName: row.volumeName,
+                modes: row.modes,
+                fileCount: currentRow?.fileCount ?? 0,
+                lastChangedAt: lastChangedAt,
+                changeObservationStatus: changes.statusByPath[row.path] ?? .unavailable,
+                isCurrentlyOpen: currentRow != nil
+            )
+        }
+        for row in nextRows {
+            guard let tracked = updatedTrackedLocations[row.path] else { continue }
+            updatedTrackedLocations[row.path] = TrackedFileLocation(
+                row: row,
+                firstObservedAt: tracked.firstObservedAt,
+                lastSeenOpenAt: tracked.lastSeenOpenAt
+            )
+        }
+        return FileActivityRefreshProjection(
+            rows: nextRows,
+            trackedLocations: updatedTrackedLocations,
+            changesUnavailable: !nextRows.isEmpty && nextRows.allSatisfy {
+                $0.changeObservationStatus == .unavailable
+            },
+            summary: makeRowSummary(nextRows)
+        )
+    }
+
+    nonisolated private static func makeRowSummary(
+        _ rows: [FileAccessDirectory]
+    ) -> FileActivityRowSummary {
+        var writableCount = 0
+        var changedCount = 0
+        var openFileCount = 0
+        var fileCountHistogram: [Double] = []
+        fileCountHistogram.reserveCapacity(rows.count)
+        for row in rows {
+            if row.modes.contains(.writeOnly) || row.modes.contains(.readWrite) {
+                writableCount += 1
+            }
+            if row.lastChangedAt != nil { changedCount += 1 }
+            openFileCount += row.fileCount
+            fileCountHistogram.append(Double(row.fileCount))
+        }
+        return FileActivityRowSummary(
+            writableCount: writableCount,
+            changedCount: changedCount,
+            openFileCount: openFileCount,
+            fileCountHistogram: fileCountHistogram
+        )
     }
 
     nonisolated private static func buildRows(
@@ -3183,6 +3342,58 @@ private struct ProcessFileActivityView: View {
     }
 }
 
+private struct FileActivityInstrument<Visualization: View>: View {
+    let title: String
+    let value: String
+    let symbol: String
+    let color: Color
+    @ViewBuilder let visualization: () -> Visualization
+
+    init(
+        title: String,
+        value: String,
+        symbol: String,
+        color: Color,
+        @ViewBuilder visualization: @escaping () -> Visualization
+    ) {
+        self.title = title
+        self.value = value
+        self.symbol = symbol
+        self.color = color
+        self.visualization = visualization
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 7) {
+                Text(L10n.text(title))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                Spacer(minLength: 4)
+                Image(systemName: symbol)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(color.opacity(0.88))
+                    .accessibilityHidden(true)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
+                Text(value)
+                    .font(.system(size: 28, weight: .light, design: .default))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.68)
+                visualization()
+                    .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 34, alignment: .center)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(L10n.text(title))
+        .accessibilityValue(value)
+    }
+}
+
 private struct FileActivityMetric: View {
     let title: String
     let value: String
@@ -3206,6 +3417,50 @@ private struct FileActivityMetric: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct FileActivityFilterControl: View {
+    @Binding var selection: FileActivityFilter
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(FileActivityFilter.allCases) { option in
+                Button {
+                    selection = option
+                } label: {
+                    Text(option.title)
+                        .font(.system(size: 12, weight: selection == option ? .medium : .regular))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                        .frame(maxWidth: .infinity, minHeight: 29)
+                        .foregroundStyle(selection == option ? .primary : .secondary)
+                        .background {
+                            RoundedRectangle(cornerRadius: InstrumentDesign.Radius.control)
+                                .fill(selection == option ? Color.primary.opacity(0.13) : .clear)
+                                .overlay {
+                                    if selection == option {
+                                        RoundedRectangle(cornerRadius: InstrumentDesign.Radius.control)
+                                            .strokeBorder(Color.white.opacity(0.11), lineWidth: 0.5)
+                                    }
+                                }
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selection == option ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background {
+            RoundedRectangle(cornerRadius: InstrumentDesign.Radius.control)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.48))
+                .overlay {
+                    RoundedRectangle(cornerRadius: InstrumentDesign.Radius.control)
+                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: InstrumentDesign.Stroke.hairline)
+                }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(L10n.text("位置筛选"))
     }
 }
 

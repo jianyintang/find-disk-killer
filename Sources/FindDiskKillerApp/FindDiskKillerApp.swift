@@ -92,6 +92,7 @@ struct FindDiskKillerApp: App {
             SidebarCommands()
             FindDiskKillerCommands(runtime: runtime)
             MonitoringCommands(store: runtime.store)
+            WindowCloseCommands()
         }
 
         WindowGroup(
@@ -150,6 +151,17 @@ struct FindDiskKillerApp: App {
         case .unavailable: "xmark.octagon.fill"
         case .stopped: "pause.circle"
         default: "internaldrive"
+        }
+    }
+}
+
+private struct WindowCloseCommands: Commands {
+    var body: some Commands {
+        CommandGroup(after: .windowArrangement) {
+            Button(L10n.text("关闭")) {
+                NSApp.keyWindow?.performClose(nil)
+            }
+            .keyboardShortcut("w", modifiers: [.command])
         }
     }
 }
@@ -390,7 +402,23 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
         ))
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        window.center()
+        // Debug windows must stay on the primary display even when another
+        // display currently owns keyboard focus.
+        let primaryFrame = (NSScreen.screens.first ?? NSScreen.main)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let windowSize = NSSize(
+            width: MainWindowMetrics.defaultWidth,
+            height: MainWindowMetrics.defaultHeight
+        )
+        window.setFrame(
+            NSRect(
+                x: primaryFrame.midX - windowSize.width / 2,
+                y: primaryFrame.midY - windowSize.height / 2,
+                width: windowSize.width,
+                height: windowSize.height
+            ),
+            display: false
+        )
         debugMainWindow = window
         window.orderFrontRegardless()
         window.makeKey()

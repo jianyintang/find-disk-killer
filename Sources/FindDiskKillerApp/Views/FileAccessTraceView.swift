@@ -27,13 +27,16 @@ struct FileAccessTraceView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background { InstrumentCanvas() }
         .onReceive(NotificationCenter.default.publisher(
             for: NSApplication.didBecomeActiveNotification
         )) { _ in
             store.refreshPermissionStatus()
         }
-        .onAppear {
+        .task {
             guard onBack != nil else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
             store.start()
         }
         .onDisappear {
@@ -57,21 +60,25 @@ struct FileAccessTraceView: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 18)
-                .frame(height: 44)
+                .frame(height: 42)
+                .background(.ultraThinMaterial)
                 Divider()
             }
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 22) {
                     targetHeader
+                        .glassSurface(padding: 16)
                     if contextProcessName != nil { applicationContextNote }
                     if needsStatusBand { statusBand }
                     measurementRail
-                    TraceRateChart(points: store.ratePoints)
+                    GlassSurface(padding: 15) {
+                        TraceRateChart(points: store.ratePoints)
+                    }
                     traceTables
                     semanticsNote
                 }
-                .padding(22)
+                .padding(InstrumentDesign.Spacing.page)
             }
         }
     }
@@ -101,9 +108,9 @@ struct FileAccessTraceView: View {
         HStack(spacing: 14) {
             Image(systemName: store.selection?.kind == .directory ? "folder.fill" : "doc.fill")
                 .font(.system(size: 22, weight: .medium))
-                .foregroundStyle(.blue)
+                .foregroundStyle(InstrumentDesign.ColorRole.cpu)
                 .frame(width: 42, height: 42)
-                .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
+                .background(InstrumentDesign.ColorRole.cpu.opacity(0.10), in: RoundedRectangle(cornerRadius: InstrumentDesign.Radius.icon))
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
@@ -118,6 +125,20 @@ struct FileAccessTraceView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .help(store.selection?.privatePath ?? "")
+                if let volumeIdentifier = store.selection?.target.volumeIdentifier {
+                    HStack(spacing: 5) {
+                        Image(systemName: "externaldrive")
+                            .accessibilityHidden(true)
+                        Text(L10n.text("所在卷"))
+                        Text(volumeIdentifier)
+                            .font(.caption.monospaced())
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                }
             }
             Spacer(minLength: 12)
             traceActions
@@ -192,7 +213,7 @@ struct FileAccessTraceView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(statusColor.opacity(0.06))
+        .glassSurface(padding: 14)
         .overlay(alignment: .leading) {
             Rectangle().fill(statusColor).frame(width: 3)
         }
@@ -237,79 +258,72 @@ struct FileAccessTraceView: View {
     }
 
     private var measurementRail: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
+        GlassSurface(padding: 12) {
+            HStack(spacing: 0) {
                 TraceMetric(
                     title: "累计请求读取",
                     value: bytes(store.requestedReadBytes),
                     symbol: "eye",
                     color: InstrumentDesign.ColorRole.diskRead
                 )
-                Divider().frame(height: 42)
+                Divider().frame(height: 42).padding(.horizontal, 10)
                 TraceMetric(
                     title: "累计请求写入",
                     value: bytes(store.requestedWriteBytes),
                     symbol: "pencil.line",
                     color: InstrumentDesign.ColorRole.diskWrite
                 )
-                Divider().frame(height: 42)
-                TraceMetric(
-                    title: "已运行",
-                    value: elapsedText,
-                    symbol: "timer",
-                    color: .blue
-                )
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-
-            Divider()
-
-            HStack(spacing: 14) {
+                Divider().frame(height: 42).padding(.horizontal, 10)
                 TraceMetric(
                     title: "当前请求读取 · 5 秒",
                     value: rate(store.currentReadBytesPerSecond),
                     symbol: "arrow.down.to.line",
                     color: InstrumentDesign.ColorRole.diskRead
                 )
-                Divider().frame(height: 42)
+                Divider().frame(height: 42).padding(.horizontal, 10)
                 TraceMetric(
                     title: "当前请求写入 · 5 秒",
                     value: rate(store.currentWriteBytesPerSecond),
                     symbol: "arrow.right.to.line",
                     color: InstrumentDesign.ColorRole.diskWrite
                 )
-                Divider().frame(height: 42)
+                Divider().frame(height: 42).padding(.horizontal, 10)
+                TraceMetric(
+                    title: "已运行",
+                    value: elapsedText,
+                    symbol: "timer",
+                    color: InstrumentDesign.ColorRole.cpu
+                )
+                Divider().frame(height: 42).padding(.horizontal, 10)
                 TraceMetric(
                     title: "会话峰值 · 读 / 写",
                     value: peakText,
                     symbol: "waveform.path.ecg",
-                    color: .purple
+                    color: InstrumentDesign.ColorRole.memory
                 )
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-        }
-        .background(Color.secondary.opacity(0.035))
-        .overlay {
-            RoundedRectangle(cornerRadius: 7)
-                .strokeBorder(Color.secondary.opacity(0.14), lineWidth: 0.5)
         }
     }
 
     private var traceTables: some View {
         VStack(alignment: .leading, spacing: 18) {
-            TraceEventTable(
-                items: store.recentEvents,
-                discardedCount: store.discardedRecentEventCount
-            )
-            .frame(height: 320)
+            GlassSurface(padding: 0) {
+                TraceEventTable(
+                    items: store.recentEvents,
+                    discardedCount: store.discardedRecentEventCount
+                )
+                .frame(height: 320)
+            }
 
             HSplitView {
-                TraceFileTable(items: store.files)
-                    .frame(minWidth: 440, idealWidth: 590, minHeight: 320)
-                TraceProcessTable(items: store.processes)
-                    .frame(minWidth: 300, idealWidth: 360, minHeight: 320)
+                GlassSurface(padding: 0) {
+                    TraceFileTable(items: store.files)
+                }
+                .frame(minWidth: 440, idealWidth: 590, minHeight: 320)
+                GlassSurface(padding: 0) {
+                    TraceProcessTable(items: store.processes)
+                }
+                .frame(minWidth: 300, idealWidth: 360, minHeight: 320)
             }
             .frame(height: 360)
         }
@@ -584,6 +598,12 @@ private struct TraceRateChart: View {
         VStack(alignment: .leading, spacing: 10) {
             SectionHeading("请求读写速率", subtitle: "最近 5 秒平均值 · 折线")
             Chart(points) { point in
+                AreaMark(
+                    x: .value(L10n.text("时间"), point.timestamp),
+                    y: .value(L10n.text("读取"), point.readBytesPerSecond),
+                    series: .value(L10n.text("系列"), "read-area")
+                )
+                .foregroundStyle(InstrumentDesign.ColorRole.diskRead.opacity(0.10))
                 LineMark(
                     x: .value(L10n.text("时间"), point.timestamp),
                     y: .value(L10n.text("读取"), point.readBytesPerSecond),
@@ -592,6 +612,12 @@ private struct TraceRateChart: View {
                 .foregroundStyle(InstrumentDesign.ColorRole.diskRead)
                 .lineStyle(StrokeStyle(lineWidth: 2))
                 .interpolationMethod(.linear)
+                AreaMark(
+                    x: .value(L10n.text("时间"), point.timestamp),
+                    y: .value(L10n.text("写入"), point.writeBytesPerSecond),
+                    series: .value(L10n.text("系列"), "write-area")
+                )
+                .foregroundStyle(InstrumentDesign.ColorRole.diskWrite.opacity(0.10))
                 LineMark(
                     x: .value(L10n.text("时间"), point.timestamp),
                     y: .value(L10n.text("写入"), point.writeBytesPerSecond),
@@ -718,7 +744,7 @@ private struct TraceChartTooltip: View {
     }
 }
 
-private struct TraceFileRow: Identifiable, Equatable {
+private struct TraceFileRow: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     let rawPath: String
@@ -743,7 +769,7 @@ private struct TraceFileRow: Identifiable, Equatable {
     }
 }
 
-private enum TraceEventFilter: String, CaseIterable, Identifiable {
+private enum TraceEventFilter: String, CaseIterable, Identifiable, Sendable {
     case all
     case reads
     case writes
@@ -758,7 +784,7 @@ private enum TraceEventFilter: String, CaseIterable, Identifiable {
     }
 }
 
-private struct TraceEventRow: Identifiable, Equatable {
+private struct TraceEventRow: Identifiable, Equatable, Sendable {
     let id: UInt64
     let timestamp: Date
     let direction: FileAccessTraceDirection
@@ -787,6 +813,9 @@ private struct TraceEventTable: View {
     let items: [FileAccessTraceEventSummary]
     let discardedCount: UInt64
     @State private var filter: TraceEventFilter = .all
+    @State private var rows: [TraceEventRow] = []
+    @State private var rowsTask: Task<Void, Never>?
+    @State private var isUpdatingRows = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -795,7 +824,7 @@ private struct TraceEventTable: View {
                     .foregroundStyle(.secondary)
                 Text(L10n.text("最近事件"))
                     .font(.headline)
-                Text(L10n.number(filteredRows.count))
+                Text(L10n.number(rows.count))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                 if discardedCount > 0 {
@@ -808,6 +837,12 @@ private struct TraceEventTable: View {
                     .help(L10n.text("累计读写量不会受事件列表淘汰影响"))
                 }
                 Spacer()
+                if isUpdatingRows {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .help(L10n.text("正在更新筛选结果"))
+                        .accessibilityLabel(L10n.text("正在更新筛选结果"))
+                }
                 Picker(L10n.text("文件活动"), selection: $filter) {
                     ForEach(TraceEventFilter.allCases) { option in
                         Text(option.title).tag(option)
@@ -822,7 +857,7 @@ private struct TraceEventTable: View {
 
             Divider()
 
-            Table(filteredRows) {
+            Table(rows) {
                 TableColumn(L10n.text("时间")) { row in
                     Text(row.timestamp, format: .dateTime.hour().minute().second().secondFraction(.fractional(3)))
                         .font(.caption.monospacedDigit())
@@ -866,7 +901,11 @@ private struct TraceEventTable: View {
                 .width(min: 74, ideal: 88)
             }
             .overlay {
-                if filteredRows.isEmpty {
+                if rows.isEmpty, isUpdatingRows {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel(L10n.text("正在更新筛选结果"))
+                } else if rows.isEmpty {
                     ContentUnavailableView(
                         L10n.text("当前没有观察到读写请求"),
                         systemImage: "waveform.path.ecg"
@@ -880,23 +919,49 @@ private struct TraceEventTable: View {
             RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(Color.secondary.opacity(0.16), lineWidth: 0.5)
         }
+        .onChange(of: items, initial: true) { _, _ in
+            scheduleRowsUpdate()
+        }
+        .onChange(of: filter) { _, _ in
+            scheduleRowsUpdate(showsProgress: true)
+        }
+        .onDisappear {
+            rowsTask?.cancel()
+        }
     }
 
-    private var filteredRows: [TraceEventRow] {
-        items.reversed().compactMap { event in
-            switch filter {
-            case .all:
-                return TraceEventRow(event)
-            case .reads:
-                return event.direction == .read ? TraceEventRow(event) : nil
-            case .writes:
-                return event.direction == .write ? TraceEventRow(event) : nil
+    @MainActor
+    private func scheduleRowsUpdate(showsProgress: Bool = false) {
+        rowsTask?.cancel()
+        isUpdatingRows = showsProgress || isUpdatingRows || rows.isEmpty
+        let sourceItems = items
+        let requestedFilter = filter
+        rowsTask = Task { @MainActor in
+            await Task.yield()
+            let nextRows = await Task.detached(priority: .userInitiated) {
+                sourceItems.reversed().compactMap { event in
+                    switch requestedFilter {
+                    case .all:
+                        return TraceEventRow(event)
+                    case .reads:
+                        return event.direction == .read ? TraceEventRow(event) : nil
+                    case .writes:
+                        return event.direction == .write ? TraceEventRow(event) : nil
+                    }
+                }
+            }.value
+            guard !Task.isCancelled else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                rows = nextRows
+                isUpdatingRows = false
             }
         }
     }
 }
 
-private struct TraceProcessRow: Identifiable, Equatable {
+private struct TraceProcessRow: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     let pid: Int32
@@ -920,6 +985,8 @@ private struct TraceFileTable: View {
     @State private var sortOrder = [
         KeyPathComparator(\TraceFileRow.write, order: .reverse)
     ]
+    @State private var rowsTask: Task<Void, Never>?
+    @State private var isUpdatingRows = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -946,7 +1013,11 @@ private struct TraceFileTable: View {
                 .width(min: 82, ideal: 98)
             }
             .overlay {
-                if rows.isEmpty {
+                if rows.isEmpty, isUpdatingRows {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel(L10n.text("正在更新筛选结果"))
+                } else if rows.isEmpty {
                     ContentUnavailableView(
                         L10n.text("当前没有观察到读写请求"),
                         systemImage: "doc"
@@ -960,11 +1031,35 @@ private struct TraceFileTable: View {
             RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(Color.secondary.opacity(0.16), lineWidth: 0.5)
         }
-        .onChange(of: items, initial: true) { _, newValue in
-            rows = newValue.map(TraceFileRow.init).sorted(using: sortOrder)
+        .onChange(of: items, initial: true) { _, _ in
+            scheduleRowsUpdate()
         }
-        .onChange(of: sortOrder) { _, newValue in
-            rows.sort(using: newValue)
+        .onChange(of: sortOrder) { _, _ in
+            scheduleRowsUpdate(showsProgress: true)
+        }
+        .onDisappear {
+            rowsTask?.cancel()
+        }
+    }
+
+    @MainActor
+    private func scheduleRowsUpdate(showsProgress: Bool = false) {
+        rowsTask?.cancel()
+        isUpdatingRows = showsProgress || isUpdatingRows || rows.isEmpty
+        let sourceItems = items
+        let requestedSortOrder = sortOrder
+        rowsTask = Task { @MainActor in
+            await Task.yield()
+            let nextRows = await Task.detached(priority: .userInitiated) {
+                sourceItems.map(TraceFileRow.init).sorted(using: requestedSortOrder)
+            }.value
+            guard !Task.isCancelled else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                rows = nextRows
+                isUpdatingRows = false
+            }
         }
     }
 }
@@ -1073,6 +1168,8 @@ private struct TraceProcessTable: View {
     @State private var sortOrder = [
         KeyPathComparator(\TraceProcessRow.write, order: .reverse)
     ]
+    @State private var rowsTask: Task<Void, Never>?
+    @State private var isUpdatingRows = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1101,7 +1198,11 @@ private struct TraceProcessTable: View {
                 .width(min: 78, ideal: 96)
             }
             .overlay {
-                if rows.isEmpty {
+                if rows.isEmpty, isUpdatingRows {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel(L10n.text("正在更新筛选结果"))
+                } else if rows.isEmpty {
                     ContentUnavailableView(
                         L10n.text("当前没有观察到访问应用"),
                         systemImage: "app.dashed"
@@ -1115,11 +1216,35 @@ private struct TraceProcessTable: View {
             RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(Color.secondary.opacity(0.16), lineWidth: 0.5)
         }
-        .onChange(of: items, initial: true) { _, newValue in
-            rows = newValue.map(TraceProcessRow.init).sorted(using: sortOrder)
+        .onChange(of: items, initial: true) { _, _ in
+            scheduleRowsUpdate()
         }
-        .onChange(of: sortOrder) { _, newValue in
-            rows.sort(using: newValue)
+        .onChange(of: sortOrder) { _, _ in
+            scheduleRowsUpdate(showsProgress: true)
+        }
+        .onDisappear {
+            rowsTask?.cancel()
+        }
+    }
+
+    @MainActor
+    private func scheduleRowsUpdate(showsProgress: Bool = false) {
+        rowsTask?.cancel()
+        isUpdatingRows = showsProgress || isUpdatingRows || rows.isEmpty
+        let sourceItems = items
+        let requestedSortOrder = sortOrder
+        rowsTask = Task { @MainActor in
+            await Task.yield()
+            let nextRows = await Task.detached(priority: .userInitiated) {
+                sourceItems.map(TraceProcessRow.init).sorted(using: requestedSortOrder)
+            }.value
+            guard !Task.isCancelled else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                rows = nextRows
+                isUpdatingRows = false
+            }
         }
     }
 }

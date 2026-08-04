@@ -29,11 +29,10 @@ struct SettingsPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 20) {
-                Text(L10n.text("设置"))
-                    .font(.title2.bold())
-                    .accessibilityAddTraits(.isHeader)
-                Spacer()
+            InstrumentPageHeader(
+                "设置",
+                symbol: "gearshape"
+            ) {
                 ViewThatFits(in: .horizontal) {
                     settingsPanePicker(style: .segmented)
                         .fixedSize(horizontal: true, vertical: false)
@@ -41,10 +40,6 @@ struct SettingsPage: View {
                         .frame(width: 190)
                 }
             }
-            .padding(.horizontal, 28)
-            .frame(height: 64)
-
-            Divider()
 
             Group {
                 switch navigation.settingsPane {
@@ -201,6 +196,8 @@ struct SettingsPage: View {
                 }
             }
             .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .background(InstrumentDesign.Palette.canvas)
 
                 case .dataAndPrivacy:
             Form {
@@ -500,11 +497,13 @@ struct SettingsPage: View {
                 }
             }
             .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .background(InstrumentDesign.Palette.canvas)
 
                 }
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(InstrumentCanvas())
         .alert(item: $confirmation, content: historySettingsAlert)
         .confirmationDialog(
             L10n.text("停止保存监测历史？"),
@@ -552,7 +551,14 @@ struct SettingsPage: View {
         }
         switch style {
         case .segmented:
-            picker.pickerStyle(.segmented)
+            GlassSegmentedControl(
+                "设置类别",
+                selection: settingsPaneBinding
+            ) {
+                ForEach(SettingsPane.allCases) { pane in
+                    Text(pane.title).tag(pane)
+                }
+            }
         case .menu:
             picker.pickerStyle(.menu)
         }

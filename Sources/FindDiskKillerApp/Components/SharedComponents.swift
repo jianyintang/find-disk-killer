@@ -1263,6 +1263,11 @@ private struct AppActionButtonBody<Label: View>: View {
                 RoundedRectangle(cornerRadius: size.cornerRadius)
                     .stroke(borderColor, lineWidth: kind == .secondary ? 0.75 : 0.5)
             }
+            .overlay(alignment: .top) {
+                RoundedRectangle(cornerRadius: size.cornerRadius)
+                    .stroke(Color.white.opacity(kind == .secondary ? 0.07 : 0.16), lineWidth: 0.5)
+                    .mask(Rectangle().frame(height: 10).frame(maxHeight: .infinity, alignment: .top))
+            }
             .shadow(
                 color: shadowColor,
                 radius: kind == .secondary ? 0 : 2,
@@ -1286,7 +1291,7 @@ private struct AppActionButtonBody<Label: View>: View {
     private var backgroundColor: Color {
         switch kind {
         case .primary:
-            return Color.accentColor.opacity(isPressed ? 0.78 : isHovering ? 0.9 : 1)
+            return Color.accentColor.opacity(isPressed ? 0.78 : isHovering ? 0.92 : 0.86)
         case .secondary:
             if isPressed { return Color.primary.opacity(0.13) }
             if isHovering { return Color.primary.opacity(0.09) }
@@ -1341,7 +1346,7 @@ private struct AppIconButtonBody<Label: View>: View {
 
     var body: some View {
         label
-            .font(.system(size: 12, weight: .semibold))
+            .font(.system(size: 13, weight: .medium))
             .foregroundStyle(.primary)
             .frame(width: size, height: size)
             .background(backgroundColor, in: RoundedRectangle(cornerRadius: 6))
@@ -1349,6 +1354,13 @@ private struct AppIconButtonBody<Label: View>: View {
                 if isFramed {
                     RoundedRectangle(cornerRadius: 6)
                         .stroke(Color(nsColor: .separatorColor).opacity(0.72), lineWidth: 0.5)
+                }
+            }
+            .overlay(alignment: .top) {
+                if isFramed {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                        .mask(Rectangle().frame(height: 8).frame(maxHeight: .infinity, alignment: .top))
                 }
             }
             .contentShape(RoundedRectangle(cornerRadius: 6))
@@ -1396,6 +1408,74 @@ struct SectionHeading<Trailing: View>: View {
             Spacer()
             trailing()
         }
+    }
+}
+
+/// A compact instrument-style page header shared by secondary destinations.
+/// The header keeps the title, context and controls on one stable glass plane
+/// so switching pages does not produce a white flash or a layout jump.
+struct InstrumentPageHeader<Trailing: View>: View {
+    let title: String
+    let subtitle: String?
+    let symbol: String
+    @ViewBuilder let trailing: () -> Trailing
+
+    init(
+        _ title: String,
+        subtitle: String? = nil,
+        symbol: String,
+        @ViewBuilder trailing: @escaping () -> Trailing
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.symbol = symbol
+        self.trailing = trailing
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 17, weight: .medium))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(InstrumentDesign.ColorRole.cpu)
+                .frame(width: 34, height: 34)
+                .background(
+                    InstrumentDesign.ColorRole.cpu.opacity(0.11),
+                    in: RoundedRectangle(cornerRadius: InstrumentDesign.Radius.icon)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: InstrumentDesign.Radius.icon)
+                        .strokeBorder(Color.white.opacity(0.16), lineWidth: 0.5)
+                }
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.text(title))
+                    .font(.system(size: 19, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                if let subtitle {
+                    Text(L10n.text(subtitle))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+                }
+            }
+
+            Spacer(minLength: 10)
+            trailing()
+        }
+        .padding(.horizontal, InstrumentDesign.Spacing.page)
+        .padding(.vertical, 12)
+        .glassSurface(padding: 0)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+extension InstrumentPageHeader where Trailing == EmptyView {
+    init(_ title: String, subtitle: String? = nil, symbol: String) {
+        self.init(title, subtitle: subtitle, symbol: symbol) { EmptyView() }
     }
 }
 

@@ -31,54 +31,53 @@ struct HistoryReportView: View {
     }
 
     private var reportToolbar: some View {
-        HStack(spacing: 16) {
-            Text(L10n.text("分析周期"))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Picker(L10n.text("分析周期"), selection: $range) {
-                ForEach(HistoryRetention.allCases) { option in
-                    Text(option.localizedTitle).tag(option)
+        InstrumentPageHeader("历史分析", symbol: "chart.xyaxis.line") {
+            HStack(spacing: InstrumentDesign.Spacing.related) {
+                Text(L10n.text("分析周期"))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                GlassSegmentedControl(
+                    "分析周期",
+                    selection: $range
+                ) {
+                    ForEach(HistoryRetention.allCases) { option in
+                        Text(option.localizedTitle).tag(option)
+                    }
                 }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 260)
+                .frame(width: 260)
 
-            Spacer()
+                storageStatus
 
-            storageStatus
-
-            if case .loaded(let report) = history.reportState {
-                Menu {
-                    Button {
-                        export(report, as: .pdf)
+                if case .loaded(let report) = history.reportState {
+                    Menu {
+                        Button {
+                            export(report, as: .pdf)
+                        } label: {
+                            Label(L10n.text("导出 PDF"), systemImage: "doc.richtext")
+                        }
+                        Button {
+                            export(report, as: .csv)
+                        } label: {
+                            Label(L10n.text("导出 CSV"), systemImage: "tablecells")
+                        }
                     } label: {
-                        Label(L10n.text("导出 PDF"), systemImage: "doc.richtext")
+                        Image(systemName: "square.and.arrow.up")
                     }
-                    Button {
-                        export(report, as: .csv)
-                    } label: {
-                        Label(L10n.text("导出 CSV"), systemImage: "tablecells")
-                    }
+                    .menuStyle(.borderlessButton)
+                    .help(L10n.text("导出历史分析"))
+                    .accessibilityLabel(L10n.text("导出历史分析"))
+                }
+
+                Button {
+                    Task { await history.loadReport(range: range) }
                 } label: {
-                    Image(systemName: "square.and.arrow.up")
+                    Image(systemName: "arrow.clockwise")
                 }
-                .menuStyle(.borderlessButton)
-                .help(L10n.text("导出历史分析"))
-                .accessibilityLabel(L10n.text("导出历史分析"))
+                .buttonStyle(AppIconButtonStyle(size: 30))
+                .help(L10n.text("刷新分析"))
+                .accessibilityLabel(L10n.text("刷新分析"))
             }
-
-            Button {
-                Task { await history.loadReport(range: range) }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(AppIconButtonStyle(size: 30))
-            .help(L10n.text("刷新分析"))
-            .accessibilityLabel(L10n.text("刷新分析"))
         }
-        .padding(.horizontal, 22)
-        .frame(height: 54)
     }
 
     @ViewBuilder
@@ -135,31 +134,23 @@ struct HistoryReportView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 reportHeader(report)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 20)
-
-                Divider()
+                    .glassSurface(padding: 18)
 
                 metricBand(report)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 20)
-
-                Divider()
+                    .glassSurface(padding: 18)
 
                 trendSection(report)
-                    .padding(24)
-
-                Divider()
+                    .glassSurface(padding: 18)
 
                 insightSection(report)
-                    .padding(24)
-
-                Divider()
+                    .glassSurface(padding: 18)
 
                 applicationSection(report)
-                    .padding(24)
+                    .glassSurface(padding: 18)
             }
+            .padding(InstrumentDesign.Spacing.page)
         }
+        .background(InstrumentDesign.Palette.canvas)
     }
 
     private func reportHeader(_ report: HistoryReport) -> some View {
@@ -232,7 +223,7 @@ struct HistoryReportView: View {
             title: L10n.text("平均 CPU"),
             value: report.summary.averageCPUPercent.map(PercentFormatter.cpu) ?? L10n.text("不可用"),
             symbol: "cpu",
-            color: .orange
+            color: InstrumentDesign.ColorRole.cpu
         )
     }
 
@@ -245,7 +236,7 @@ struct HistoryReportView: View {
                 )
                 : L10n.text("不可用"),
             symbol: "arrow.up.arrow.down",
-            color: .teal
+            color: InstrumentDesign.ColorRole.read
         )
     }
 
@@ -259,13 +250,14 @@ struct HistoryReportView: View {
                 Text(trendMetric.chartTitle)
                     .font(.headline)
                 Spacer()
-                Picker(L10n.text("趋势指标"), selection: $trendMetric) {
+                GlassSegmentedControl(
+                    "趋势指标",
+                    selection: $trendMetric
+                ) {
                     ForEach(HistoryTrendMetric.allCases) { metric in
                         Text(metric.title).tag(metric)
                     }
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
                 .frame(width: 210)
             }
 
@@ -415,7 +407,6 @@ struct HistoryReportNavigationPlaceholder: View {
     var body: some View {
         VStack(spacing: 0) {
             HistoryReportLoadingToolbar()
-            Divider()
             HistoryReportLoadingContent()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -426,36 +417,28 @@ struct HistoryReportNavigationPlaceholder: View {
 
 private struct HistoryReportLoadingToolbar: View {
     var body: some View {
-        HStack(spacing: 16) {
-            Text(L10n.text("分析周期"))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-
-            Picker(
-                L10n.text("分析周期"),
-                selection: Binding.constant(HistoryRetention.sevenDays)
-            ) {
-                ForEach(HistoryRetention.allCases) { option in
-                    Text(option.localizedTitle).tag(option)
+        InstrumentPageHeader("历史分析", symbol: "chart.xyaxis.line") {
+            HStack(spacing: InstrumentDesign.Spacing.related) {
+                Text(L10n.text("分析周期"))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                GlassSegmentedControl(
+                    "分析周期",
+                    selection: Binding.constant(HistoryRetention.sevenDays)
+                ) {
+                    ForEach(HistoryRetention.allCases) { option in
+                        Text(option.localizedTitle).tag(option)
+                    }
                 }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 260)
-
-            Spacer()
-
-            Label(L10n.text("历史保存正常"), systemImage: "checkmark.circle")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Button {} label: {
+                .frame(width: 260)
+                Label(L10n.text("历史保存正常"), systemImage: "checkmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Image(systemName: "arrow.clockwise")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
-            .buttonStyle(.borderless)
         }
-        .padding(.horizontal, 22)
-        .frame(height: 54)
     }
 }
 
@@ -464,32 +447,24 @@ private struct HistoryReportLoadingContent: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 20)
-
-                Divider()
+                    .glassSurface(padding: 18)
 
                 metricBand
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 20)
-
-                Divider()
+                    .glassSurface(padding: 18)
 
                 trendSection
-                    .padding(24)
-
-                Divider()
+                    .glassSurface(padding: 18)
 
                 insightSection
-                    .padding(24)
-
-                Divider()
+                    .glassSurface(padding: 18)
 
                 applicationSection
-                    .padding(24)
+                    .glassSurface(padding: 18)
             }
+            .padding(InstrumentDesign.Spacing.page)
         }
         .redacted(reason: .placeholder)
+        .background(InstrumentDesign.Palette.canvas)
     }
 
     private var header: some View {
@@ -561,16 +536,14 @@ private struct HistoryReportLoadingContent: View {
                 Text(L10n.text("磁盘活动趋势"))
                     .font(.headline)
                 Spacer()
-                Picker(
-                    L10n.text("趋势指标"),
+                GlassSegmentedControl(
+                    "趋势指标",
                     selection: Binding.constant(HistoryTrendMetric.disk)
                 ) {
                     ForEach(HistoryTrendMetric.allCases) { metric in
                         Text(metric.title).tag(metric)
                     }
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
                 .frame(width: 210)
             }
 

@@ -302,15 +302,26 @@ final class FileAccessTraceStore {
 
     func select(_ url: URL) {
         guard !isRunning else { return }
-        cancelPendingStart()
         do {
-            selection = try FileAccessTraceSelection.make(url: url)
-            resetMeasurements()
-            helper.refreshStatus()
-            state = stateForHelper()
+            select(try FileAccessTraceSelection.make(url: url))
         } catch {
-            state = .failed(L10n.text("无法读取所选位置的信息"))
+            reportSelectionPreparationFailure()
         }
+    }
+
+    func select(_ preparedSelection: FileAccessTraceSelection) {
+        guard !isRunning else { return }
+        cancelPendingStart()
+        selection = preparedSelection
+        resetMeasurements()
+        helper.refreshStatus()
+        state = stateForHelper()
+    }
+
+    func reportSelectionPreparationFailure() {
+        guard !isRunning else { return }
+        cancelPendingStart()
+        state = .failed(L10n.text("无法读取所选位置的信息"))
     }
 
     func requestPermission() {

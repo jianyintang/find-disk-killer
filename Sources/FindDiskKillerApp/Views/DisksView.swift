@@ -11,36 +11,29 @@ struct DisksView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Picker(L10n.text("磁盘视图"), selection: $selectedMode) {
-                    ForEach(DiskPageMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 260)
-                Spacer()
-                if selectedMode == .health {
-                    Button {
-                        Task {
-                            await store.diskHealth.refresh(
-                                devices: healthDevices,
-                                force: true
-                            )
+            InstrumentPageHeader("磁盘", symbol: "internaldrive") {
+                HStack(spacing: InstrumentDesign.Spacing.related) {
+                    GlassSegmentedControl(
+                        "磁盘视图",
+                        selection: $selectedMode
+                    ) {
+                        ForEach(DiskPageMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
                         }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
                     }
-                    .buttonStyle(AppIconButtonStyle(size: 32))
-                    .help(L10n.text("重新读取健康数据"))
-                    .disabled(healthRefreshInProgress)
+                    .frame(width: 260)
+
+                    if selectedMode == .health {
+                        Button(action: refreshHealth) {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(AppIconButtonStyle(size: 30))
+                        .help(L10n.text("重新读取健康数据"))
+                        .accessibilityLabel(L10n.text("重新读取健康数据"))
+                        .disabled(healthRefreshInProgress)
+                    }
                 }
             }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 12)
-
-            Divider()
 
             switch selectedMode {
             case .activity:
@@ -63,6 +56,7 @@ struct DisksView: View {
         )) { _ in
             volumeTraceStore.refreshPermissionStatus()
         }
+        .background(InstrumentCanvas())
     }
 
     private var activityContent: some View {
@@ -94,6 +88,7 @@ struct DisksView: View {
                         color: .blue
                     )
                 }
+                .glassSurface(padding: 16)
 
                 VStack(alignment: .leading, spacing: 10) {
                     SectionHeading("物理设备总吞吐", subtitle: "虚拟磁盘不计入总量")
@@ -104,6 +99,7 @@ struct DisksView: View {
                         windowDuration: store.selectedRange.seconds
                     )
                 }
+                .glassSurface(padding: 16)
 
                 VStack(alignment: .leading, spacing: 8) {
                     SectionHeading("已挂载卷", subtitle: "卷名直接对应底层设备的实时吞吐")
@@ -120,6 +116,7 @@ struct DisksView: View {
                         Divider()
                     }
                 }
+                .glassSurface(padding: 16)
 
                 if volumeTraceStore.selection != nil {
                     VolumeAccessTracePanel(store: volumeTraceStore)
@@ -138,8 +135,9 @@ struct DisksView: View {
                         .font(.headline)
                 }
                 .help(L10n.text("显示底层 IOKit 设备节点"))
+                .glassSurface(padding: 16)
             }
-            .padding(22)
+            .padding(InstrumentDesign.Spacing.page)
         }
     }
 
@@ -197,6 +195,7 @@ struct DisksView: View {
                     }
                 }
                 .frame(minWidth: 200, idealWidth: 240, maxWidth: 300)
+                .glassSurface(padding: 0)
 
                 if let selectedHealthDisk,
                    let disk = physicalHealthDisks.first(where: {
@@ -209,6 +208,7 @@ struct DisksView: View {
                         state: store.diskHealth.state(for: selectedHealthDisk)
                     )
                     .frame(minWidth: 340, maxWidth: .infinity, maxHeight: .infinity)
+                    .glassSurface(padding: 0)
                 } else if let selectedHealthDisk,
                           let snapshot = store.diskHealth.state(for: selectedHealthDisk).snapshot {
                     DiskHealthDetail(
@@ -218,6 +218,7 @@ struct DisksView: View {
                         state: store.diskHealth.state(for: selectedHealthDisk)
                     )
                     .frame(minWidth: 340, maxWidth: .infinity, maxHeight: .infinity)
+                    .glassSurface(padding: 0)
                 } else {
                     ContentUnavailableView(
                         L10n.text("选择物理磁盘"),
@@ -250,6 +251,12 @@ struct DisksView: View {
         healthDeviceNames.contains { name in
             if case .loading = store.diskHealth.state(for: name) { return true }
             return false
+        }
+    }
+
+    private func refreshHealth() {
+        Task {
+            await store.diskHealth.refresh(devices: healthDevices, force: true)
         }
     }
 
@@ -973,7 +980,11 @@ private struct VolumeRow: View {
                     .font(.caption.monospaced())
                 ProgressView(value: volume.usedFraction)
                     .frame(width: 150)
-                    .tint(volume.usedFraction > 0.9 ? .red : .accentColor)
+                    .tint(
+                        volume.usedFraction > 0.9
+                            ? InstrumentDesign.ColorRole.warning
+                            : InstrumentDesign.ColorRole.cpu.opacity(0.78)
+                    )
             }
         }
         .padding(.vertical, 7)

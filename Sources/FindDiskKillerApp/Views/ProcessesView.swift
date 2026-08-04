@@ -11,10 +11,15 @@ struct ProcessesView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            InstrumentPageHeader(
+                "应用",
+                symbol: "square.stack.3d.up"
+            )
             processesToolbar
-                .padding(16)
-
-            Divider()
+                .padding(.horizontal, InstrumentDesign.Spacing.page)
+                .padding(.vertical, InstrumentDesign.Spacing.related)
+                .glassSurface(padding: 10)
+                .padding(.horizontal, InstrumentDesign.Spacing.page)
 
             ProcessTable(
                 processes: filteredProcesses,
@@ -27,7 +32,11 @@ struct ProcessesView: View {
                 emptyStateSymbol: searchText.isEmpty ? "waveform.path.ecg" : "magnifyingglass"
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .glassSurface(padding: 0)
+            .padding(.horizontal, InstrumentDesign.Spacing.page)
+            .padding(.bottom, InstrumentDesign.Spacing.page)
         }
+        .background(InstrumentCanvas())
     }
 
     private var processesToolbar: some View {
@@ -61,13 +70,14 @@ struct ProcessesView: View {
                     .fixedSize(horizontal: true, vertical: false)
             }
 
-            Picker("", selection: Bindable(store).selectedRange) {
+            GlassSegmentedControl(
+                "时间范围",
+                selection: Bindable(store).selectedRange
+            ) {
                 ForEach(SampleRange.allCases) { range in
                     Text(range.localizedTitle).tag(range)
                 }
             }
-            .labelsHidden()
-            .pickerStyle(.segmented)
             .frame(width: 260)
             .accessibilityLabel(L10n.text("时间范围"))
         }

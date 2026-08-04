@@ -40,8 +40,8 @@ enum HistoryTrendMetric: String, CaseIterable, Identifiable {
             InstrumentDesign.ColorRole.diskWrite,
             InstrumentDesign.ColorRole.diskRead
         ]
-        case .cpu: [.orange]
-        case .network: [.teal, .indigo]
+        case .cpu: [InstrumentDesign.ColorRole.cpu]
+        case .network: [InstrumentDesign.ColorRole.read, InstrumentDesign.ColorRole.upload]
         }
     }
 }
@@ -129,6 +129,7 @@ struct HistoryTrendChart: View {
                     )
                 }
             }
+            .clipped()
         }
         .coordinateSpace(name: "history-chart")
         .chartXScale(domain: viewport.visibleDomain)
@@ -315,12 +316,12 @@ struct HistoryTrendChart: View {
                 tooltipValue(
                     L10n.text("平均 CPU"),
                     point.averageCPUPercent.map(PercentFormatter.cpu) ?? L10n.text("不可用"),
-                    color: .orange
+                    color: InstrumentDesign.ColorRole.cpu
                 )
                 tooltipValue(
                     L10n.text("峰值 CPU"),
                     point.peakCPUPercent.map(PercentFormatter.cpu) ?? L10n.text("不可用"),
-                    color: .orange.opacity(0.7)
+                    color: InstrumentDesign.ColorRole.cpu.opacity(0.7)
                 )
             case .network:
                 tooltipValue(
@@ -331,7 +332,7 @@ struct HistoryTrendChart: View {
                             duration: point.networkObservedSeconds
                         ))
                         : L10n.text("不可用"),
-                    color: .teal
+                    color: InstrumentDesign.ColorRole.read
                 )
                 tooltipValue(
                     L10n.text("发送"),
@@ -341,7 +342,7 @@ struct HistoryTrendChart: View {
                             duration: point.networkObservedSeconds
                         ))
                         : L10n.text("不可用"),
-                    color: .indigo
+                    color: InstrumentDesign.ColorRole.upload
                 )
             }
         }

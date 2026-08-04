@@ -21,7 +21,7 @@ struct AboutPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 brandHeader
-                Divider()
+                    .glassSurface(padding: 20)
                 AboutUpdateSection(updates: updates)
                 VStack(spacing: 0) {
                     ExternalBrandLinkRow(
@@ -49,6 +49,7 @@ struct AboutPage: View {
                     RoundedRectangle(cornerRadius: 7)
                         .strokeBorder(Color.secondary.opacity(0.14), lineWidth: 0.5)
                 }
+                .glassSurface(padding: 0)
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text(L10n.text("更多信息"))
@@ -66,20 +67,21 @@ struct AboutPage: View {
                         )
                     }
                 }
+                .glassSurface(padding: 16)
             }
             .frame(maxWidth: 760, alignment: .leading)
             .padding(32)
             .frame(maxWidth: .infinity, alignment: .top)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(InstrumentCanvas())
     }
 
     private var brandHeader: some View {
         HStack(spacing: 20) {
-            Image(nsImage: NSApp.applicationIconImage)
+            Image(nsImage: findDiskKillerIcon)
                 .resizable()
                 .interpolation(.high)
-                .frame(width: 76, height: 76)
+                .frame(width: 84, height: 84)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
                 Text("FindDiskKiller")
@@ -91,7 +93,26 @@ struct AboutPage: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
+    }
+
+    private var findDiskKillerIcon: NSImage {
+        var urls: [URL] = []
+        if let url = Bundle.main.url(forResource: "FindDiskKiller", withExtension: "icns") {
+            urls.append(url)
+        }
+        if let bundleURL = Bundle.main.url(
+            forResource: "FindDiskKiller_FindDiskKillerApp",
+            withExtension: "bundle"
+        ), let bundle = Bundle(url: bundleURL),
+           let url = bundle.url(forResource: "FindDiskKiller", withExtension: "icns") {
+            urls.append(url)
+        }
+        for url in urls {
+            if let image = NSImage(contentsOf: url) { return image }
+        }
+        return NSApp.applicationIconImage
     }
 
     private func compactLink(_ title: String, symbol: String, url: URL) -> some View {
