@@ -105,6 +105,8 @@
 "语言" = "Language";
 "登录时启动" = "Launch at Login";
 "在菜单栏显示写入速率" = "Show write rate in menu bar";
+"仅菜单栏模式" = "Menu Bar Only";
+"不显示 Dock 图标，通过菜单栏运行。" = "Hide the Dock icon and run from the menu bar.";
 "采样间隔" = "Sampling Interval";
 "1 秒" = "1 Second";
 "%.0f 秒" = "%.0f sec";
@@ -120,6 +122,14 @@
 "应用资源行为 · 持续监控" = "App resource activity · Continuous monitoring";
 "当前写入最高 · %@" = "Top writer · %@";
 "打开 FindDiskKiller" = "Open FindDiskKiller";
+"退出" = "Quit";
+"退出 FindDiskKiller" = "Quit FindDiskKiller";
+"退出应用" = "Quit App";
+"打开窗口" = "Open Window";
+"采集中" = "Collecting";
+"暂无最高写入" = "No Top Writer";
+"采集进行中" = "Collection in progress";
+"等待写入活动" = "Waiting for write activity";
 "正在建立采样" = "Establishing samples";
 "磁盘活动正常" = "Disk activity is normal";
 "检测到持续写入" = "Sustained writes detected";

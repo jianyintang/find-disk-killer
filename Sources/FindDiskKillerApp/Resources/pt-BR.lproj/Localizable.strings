@@ -105,6 +105,8 @@
 "语言" = "Idioma";
 "登录时启动" = "Abrir ao iniciar a sessão";
 "在菜单栏显示写入速率" = "Mostrar a taxa de gravação na barra de menus";
+"仅菜单栏模式" = "Somente barra de menus";
+"不显示 Dock 图标，通过菜单栏运行。" = "Ocultar o ícone do Dock e executar pela barra de menus.";
 "采样间隔" = "Intervalo de coleta";
 "1 秒" = "1 segundo";
 "%.0f 秒" = "%.0f s";
@@ -120,6 +122,14 @@
 "应用资源行为 · 持续监控" = "Atividade de recursos · Monitoramento contínuo";
 "当前写入最高 · %@" = "Maior gravação atual · %@";
 "打开 FindDiskKiller" = "Abrir o FindDiskKiller";
+"退出" = "Sair";
+"退出 FindDiskKiller" = "Sair do FindDiskKiller";
+"退出应用" = "Sair do app";
+"打开窗口" = "Abrir janela";
+"采集中" = "Coletando";
+"暂无最高写入" = "Sem gravador principal";
+"采集进行中" = "Coleta em andamento";
+"等待写入活动" = "Aguardando atividade de gravação";
 "正在建立采样" = "Preparando a coleta";
 "磁盘活动正常" = "Atividade de disco normal";
 "检测到持续写入" = "Gravação contínua detectada";

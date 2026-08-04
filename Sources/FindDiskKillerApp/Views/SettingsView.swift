@@ -27,6 +27,7 @@ struct SettingsPage: View {
     let agentStorage: AgentStorageModel
     let nodeRuntime: ClaudeNodeRuntimeStatusModel
     @AppStorage("showRateInMenuBar") private var showRateInMenuBar = true
+    @AppStorage(AppActivationPolicy.menuBarOnlyModeKey) private var menuBarOnlyMode = false
     @AppStorage("sampleInterval") private var sampleInterval = MonitorStore.defaultSamplingInterval
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.system.rawValue
     @AppStorage("visualEffectLevel") private var visualEffectLevelRaw = VisualEffectLevel.balanced.rawValue
@@ -117,6 +118,15 @@ struct SettingsPage: View {
 
                 Section {
                     Toggle(L10n.text("在菜单栏显示写入速率"), isOn: $showRateInMenuBar)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle(L10n.text("仅菜单栏模式"), isOn: $menuBarOnlyMode)
+                        Text(L10n.text("不显示 Dock 图标，通过菜单栏运行。"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
                     VStack(spacing: 8) {
                         HStack(spacing: 12) {
                             Text(L10n.text("采样间隔"))
@@ -596,6 +606,9 @@ struct SettingsPage: View {
         }
         .onChange(of: sampleInterval) { _, newValue in
             store.setSamplingInterval(newValue)
+        }
+        .onChange(of: menuBarOnlyMode) { _, _ in
+            AppActivationPolicy.applyPreferred()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             activationRefreshGeneration &+= 1
