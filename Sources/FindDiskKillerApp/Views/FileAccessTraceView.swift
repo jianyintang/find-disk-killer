@@ -243,14 +243,14 @@ struct FileAccessTraceView: View {
                     title: "累计请求读取",
                     value: bytes(store.requestedReadBytes),
                     symbol: "eye",
-                    color: .teal
+                    color: InstrumentDesign.ColorRole.diskRead
                 )
                 Divider().frame(height: 42)
                 TraceMetric(
                     title: "累计请求写入",
                     value: bytes(store.requestedWriteBytes),
                     symbol: "pencil.line",
-                    color: .orange
+                    color: InstrumentDesign.ColorRole.diskWrite
                 )
                 Divider().frame(height: 42)
                 TraceMetric(
@@ -270,14 +270,14 @@ struct FileAccessTraceView: View {
                     title: "当前请求读取 · 5 秒",
                     value: rate(store.currentReadBytesPerSecond),
                     symbol: "arrow.down.to.line",
-                    color: .teal
+                    color: InstrumentDesign.ColorRole.diskRead
                 )
                 Divider().frame(height: 42)
                 TraceMetric(
                     title: "当前请求写入 · 5 秒",
                     value: rate(store.currentWriteBytesPerSecond),
                     symbol: "arrow.right.to.line",
-                    color: .orange
+                    color: InstrumentDesign.ColorRole.diskWrite
                 )
                 Divider().frame(height: 42)
                 TraceMetric(
@@ -589,7 +589,7 @@ private struct TraceRateChart: View {
                     y: .value(L10n.text("读取"), point.readBytesPerSecond),
                     series: .value(L10n.text("系列"), "read")
                 )
-                .foregroundStyle(Color.teal)
+                .foregroundStyle(InstrumentDesign.ColorRole.diskRead)
                 .lineStyle(StrokeStyle(lineWidth: 2))
                 .interpolationMethod(.linear)
                 LineMark(
@@ -597,7 +597,7 @@ private struct TraceRateChart: View {
                     y: .value(L10n.text("写入"), point.writeBytesPerSecond),
                     series: .value(L10n.text("系列"), "write")
                 )
-                .foregroundStyle(Color.orange)
+                .foregroundStyle(InstrumentDesign.ColorRole.diskWrite)
                 .lineStyle(StrokeStyle(lineWidth: 2, dash: [6, 4]))
                 .interpolationMethod(.linear)
                 if selectedPoint?.timestamp == point.timestamp {
@@ -607,12 +607,12 @@ private struct TraceRateChart: View {
                         x: .value(L10n.text("时间"), point.timestamp),
                         y: .value(L10n.text("读取"), point.readBytesPerSecond)
                     )
-                    .foregroundStyle(Color.teal)
+                    .foregroundStyle(InstrumentDesign.ColorRole.diskRead)
                     PointMark(
                         x: .value(L10n.text("时间"), point.timestamp),
                         y: .value(L10n.text("写入"), point.writeBytesPerSecond)
                     )
-                    .foregroundStyle(Color.orange)
+                    .foregroundStyle(InstrumentDesign.ColorRole.diskWrite)
                 }
             }
             .chartLegend(.hidden)
@@ -682,8 +682,16 @@ private struct TraceChartTooltip: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text(point.timestamp, format: .dateTime.hour().minute().second())
                     .font(.caption.weight(.semibold))
-                tooltipRow("读取", point.readBytesPerSecond, .teal)
-                tooltipRow("写入", point.writeBytesPerSecond, .orange)
+                tooltipRow(
+                    "读取",
+                    point.readBytesPerSecond,
+                    InstrumentDesign.ColorRole.diskRead
+                )
+                tooltipRow(
+                    "写入",
+                    point.writeBytesPerSecond,
+                    InstrumentDesign.ColorRole.diskWrite
+                )
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -825,7 +833,11 @@ private struct TraceEventTable: View {
                         L10n.text(row.direction == .read ? "读取" : "写入"),
                         systemImage: row.direction == .read ? "arrow.down" : "arrow.up"
                     )
-                    .foregroundStyle(row.direction == .read ? Color.teal : Color.orange)
+                    .foregroundStyle(
+                        row.direction == .read
+                            ? InstrumentDesign.ColorRole.diskRead
+                            : InstrumentDesign.ColorRole.diskWrite
+                    )
                 }
                 .width(min: 74, ideal: 88)
                 TableColumn(L10n.text("文件")) { row in
@@ -919,11 +931,17 @@ private struct TraceFileTable: View {
                 }
                 .width(min: 220, ideal: 320)
                 TableColumn(L10n.text("请求读取"), value: \.read) { row in
-                    TraceTransferCell(value: row.read, color: .teal)
+                    TraceTransferCell(
+                        value: row.read,
+                        color: InstrumentDesign.ColorRole.diskRead
+                    )
                 }
                 .width(min: 82, ideal: 98)
                 TableColumn(L10n.text("请求写入"), value: \.write) { row in
-                    TraceTransferCell(value: row.write, color: .orange)
+                    TraceTransferCell(
+                        value: row.write,
+                        color: InstrumentDesign.ColorRole.diskWrite
+                    )
                 }
                 .width(min: 82, ideal: 98)
             }

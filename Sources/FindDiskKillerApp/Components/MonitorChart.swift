@@ -1,57 +1,391 @@
 import Charts
 import FindDiskKillerCore
+import Observation
 import SwiftUI
+
+@Observable
+private final class StreamingChartBuffer<Point> {
+    var renderedPoints: [Point]
+    var domainStart: TimeInterval
+    var domainEnd: TimeInterval
+    @ObservationIgnored private let timestamp: KeyPath<Point, Date>
+    @ObservationIgnored private var windowDuration: TimeInterval?
+    @ObservationIgnored private var transitionTask: Task<Void, Never>?
+
+    init(
+        points: [Point],
+        timestamp: KeyPath<Point, Date>,
+        windowDuration: TimeInterval? = nil
+    ) {
+        self.renderedPoints = points
+        self.timestamp = timestamp
+        self.windowDuration = windowDuration
+        let domain = Self.domain(
+            for: points,
+            timestamp: timestamp,
+            windowDuration: windowDuration
+        )
+        self.domainStart = domain.lowerBound
+        self.domainEnd = domain.upperBound
+    }
+
+    var domain: ClosedRange<Date> {
+        ClosedRange(uncheckedBounds: (
+            lower: Date(timeIntervalSinceReferenceDate: domainStart),
+            upper: Date(timeIntervalSinceReferenceDate: domainEnd)
+        ))
+    }
+
+    @MainActor
+    func update(
+        with next: [Point],
+        reduceMotion: Bool,
+        windowDuration: TimeInterval?
+    ) {
+        transitionTask?.cancel()
+        let currentDates = renderedPoints.map { $0[keyPath: timestamp] }
+        let nextDates = next.map { $0[keyPath: timestamp] }
+        let durationChanged = self.windowDuration != windowDuration
+        self.windowDuration = windowDuration
+        guard currentDates != nextDates || durationChanged else { return }
+        let nextDomain = Self.domain(
+            for: next,
+            timestamp: timestamp,
+            windowDuration: windowDuration
+        )
+
+        let isRolling = currentDates.count == nextDates.count
+            && currentDates.count > 1
+            && Array(currentDates.dropFirst()) == Array(nextDates.dropLast())
+        let isGrowing = nextDates.count == currentDates.count + 1
+            && Array(nextDates.dropLast()) == currentDates
+        guard !durationChanged,
+              !reduceMotion,
+              isRolling || isGrowing,
+              let latest = next.last
+        else {
+            replace(with: next, domain: nextDomain)
+            return
+        }
+
+        withAnimation(.easeInOut(duration: InstrumentDesign.Motion.sampleTransitionDuration)) {
+            renderedPoints.append(latest)
+            domainStart = nextDomain.lowerBound
+            domainEnd = nextDomain.upperBound
+        }
+        transitionTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(
+                for: .seconds(InstrumentDesign.Motion.sampleTransitionDuration)
+            )
+            guard !Task.isCancelled, let self else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                self.renderedPoints = next
+                self.domainStart = nextDomain.lowerBound
+                self.domainEnd = nextDomain.upperBound
+            }
+        }
+    }
+
+    func cancelTransition() {
+        transitionTask?.cancel()
+    }
+
+    @MainActor
+    private func replace(with next: [Point], domain: ClosedRange<TimeInterval>) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            renderedPoints = next
+            domainStart = domain.lowerBound
+            domainEnd = domain.upperBound
+        }
+    }
+
+    private static func domain(
+        for points: [Point],
+        timestamp: KeyPath<Point, Date>,
+        windowDuration: TimeInterval?
+    ) -> ClosedRange<TimeInterval> {
+        guard let first = points.first, let last = points.last else { return 0...1 }
+        let upper = last[keyPath: timestamp].timeIntervalSinceReferenceDate
+        let lower = windowDuration.map { upper - max($0, 1) }
+            ?? first[keyPath: timestamp].timeIntervalSinceReferenceDate
+        return lower...max(upper, lower + 1)
+    }
+}
+
+private struct TimelineUpdateKey: Equatable {
+    let timestamps: [Date]
+    let windowDuration: TimeInterval
+}
+
+struct WarningThroughputSample: Equatable {
+    let timestamp: Date
+    let value: Double?
+    let segment: Int
+}
+
+struct WarningThroughputPoint: Identifiable, Equatable {
+    let id: String
+    let timestamp: Date
+    let value: Double
+}
+
+struct WarningThroughputSegment: Identifiable, Equatable {
+    let id: Int
+    let points: [WarningThroughputPoint]
+}
+
+/// Builds only the continuous portions of a write series that are above the
+/// warning threshold. Interpolated threshold crossings keep the red overlay
+/// joined to the underlying write line instead of producing isolated points.
+func warningThroughputSegments(
+    samples: [WarningThroughputSample],
+    threshold: Double
+) -> [WarningThroughputSegment] {
+    guard samples.count > 1 else { return [] }
+
+    var segments: [WarningThroughputSegment] = []
+    var current: [WarningThroughputPoint] = []
+    var nextID = 0
+
+    func flush() {
+        guard current.count > 1 else {
+            current.removeAll(keepingCapacity: true)
+            return
+        }
+        segments.append(WarningThroughputSegment(id: nextID, points: current))
+        nextID += 1
+        current.removeAll(keepingCapacity: true)
+    }
+
+    for index in 1..<samples.count {
+        let previous = samples[index - 1]
+        let next = samples[index]
+        guard let previousValue = previous.value,
+              let nextValue = next.value,
+              previous.segment == next.segment,
+              previousValue.isFinite,
+              nextValue.isFinite
+        else {
+            flush()
+            continue
+        }
+
+        let previousWarning = previousValue > threshold
+        let nextWarning = nextValue > threshold
+        guard previousWarning || nextWarning else {
+            flush()
+            continue
+        }
+
+        let piece: [WarningThroughputPoint]
+        switch (previousWarning, nextWarning) {
+        case (true, true):
+            piece = [
+                WarningThroughputPoint(
+                    id: "sample-\(previous.timestamp.timeIntervalSinceReferenceDate)",
+                    timestamp: previous.timestamp,
+                    value: previousValue
+                ),
+                WarningThroughputPoint(
+                    id: "sample-\(next.timestamp.timeIntervalSinceReferenceDate)",
+                    timestamp: next.timestamp,
+                    value: nextValue
+                )
+            ]
+        case (false, true), (true, false):
+            let delta = nextValue - previousValue
+            let fraction = delta == 0
+                ? 0
+                : (threshold - previousValue) / delta
+            let crossingDate = previous.timestamp.addingTimeInterval(
+                next.timestamp.timeIntervalSince(previous.timestamp)
+                    * min(1, max(0, fraction))
+            )
+            let crossing = WarningThroughputPoint(
+                id: "crossing-\(crossingDate.timeIntervalSinceReferenceDate)",
+                timestamp: crossingDate,
+                value: threshold
+            )
+            if previousWarning {
+                piece = [
+                    WarningThroughputPoint(
+                        id: "sample-\(previous.timestamp.timeIntervalSinceReferenceDate)",
+                        timestamp: previous.timestamp,
+                        value: previousValue
+                    ),
+                    crossing
+                ]
+            } else {
+                piece = [
+                    crossing,
+                    WarningThroughputPoint(
+                        id: "sample-\(next.timestamp.timeIntervalSinceReferenceDate)",
+                        timestamp: next.timestamp,
+                        value: nextValue
+                    )
+                ]
+            }
+        case (false, false):
+            continue
+        }
+
+        if let last = current.last, last.timestamp == piece[0].timestamp {
+            current.append(contentsOf: piece.dropFirst())
+        } else {
+            flush()
+            current = piece
+        }
+    }
+    flush()
+    return segments
+}
 
 struct MonitorChart: View {
     let points: [ThroughputPoint]
     var height: CGFloat = 210
+    var warningThreshold: Double? = nil
+    let windowDuration: TimeInterval
+    @State private var timeline: StreamingChartBuffer<ThroughputPoint>
     @State private var hoverDate: Date?
     @State private var hoverLocation: CGPoint?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(
+        points: [ThroughputPoint],
+        height: CGFloat = 210,
+        warningThreshold: Double? = nil,
+        windowDuration: TimeInterval = SampleRange.minute.seconds
+    ) {
+        self.points = points
+        self.height = height
+        self.warningThreshold = warningThreshold
+        self.windowDuration = windowDuration
+        _timeline = State(initialValue: StreamingChartBuffer(
+            points: points,
+            timestamp: \.timestamp,
+            windowDuration: windowDuration
+        ))
+    }
 
     var body: some View {
         let selectedTimestamp = selectedPoint?.timestamp
-        Chart(points) { point in
-            if let read = point.readBytesPerSecond {
+        let chartPoints = timeline.renderedPoints
+        let warningSegments = warningThroughputSegments(
+            samples: chartPoints.map {
+                WarningThroughputSample(
+                    timestamp: $0.timestamp,
+                    value: $0.writeBytesPerSecond,
+                    segment: $0.segment
+                )
+            },
+            threshold: warningThreshold ?? .greatestFiniteMagnitude
+        )
+        Chart {
+            ForEach(chartPoints) { point in
+                if let read = point.readBytesPerSecond {
+                AreaMark(
+                    x: .value(L10n.text("时间"), point.timestamp),
+                    yStart: .value(L10n.text("读取"), 0),
+                    yEnd: .value(L10n.text("读取"), read),
+                    series: .value(L10n.text("系列"), "read-area-\(point.segment)")
+                )
+                .foregroundStyle(InstrumentDesign.ColorRole.diskRead.opacity(0.12))
+                .interpolationMethod(.linear)
                 LineMark(
                     x: .value(L10n.text("时间"), point.timestamp),
                     y: .value(L10n.text("读取"), read),
                     series: .value(L10n.text("系列"), "read-\(point.segment)")
                 )
-                .foregroundStyle(Color.teal)
-                .lineStyle(StrokeStyle(lineWidth: 2))
+                .foregroundStyle(InstrumentDesign.ColorRole.diskRead)
+                .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
                 .interpolationMethod(.linear)
-            }
+                }
 
-            if let write = point.writeBytesPerSecond {
+                if let write = point.writeBytesPerSecond {
+                AreaMark(
+                    x: .value(L10n.text("时间"), point.timestamp),
+                    yStart: .value(L10n.text("写入"), 0),
+                    yEnd: .value(L10n.text("写入"), write),
+                    series: .value(
+                        L10n.text("系列"),
+                        "write-area-\(point.segment)"
+                    )
+                )
+                .foregroundStyle(InstrumentDesign.ColorRole.diskWrite.opacity(0.12))
+                .interpolationMethod(.linear)
                 LineMark(
                     x: .value(L10n.text("时间"), point.timestamp),
                     y: .value(L10n.text("写入"), write),
-                    series: .value(L10n.text("系列"), "write-\(point.segment)")
+                    series: .value(
+                        L10n.text("系列"),
+                        "write-\(point.segment)"
+                    )
                 )
-                .foregroundStyle(Color.orange)
-                .lineStyle(StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                .foregroundStyle(InstrumentDesign.ColorRole.diskWrite)
+                .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
                 .interpolationMethod(.linear)
+                }
+
+                if selectedTimestamp == point.timestamp {
+                    RuleMark(x: .value(L10n.text("选中时间"), point.timestamp))
+                        .foregroundStyle(.secondary.opacity(0.55))
+                        .lineStyle(StrokeStyle(lineWidth: 1))
+                    if let read = point.readBytesPerSecond {
+                        PointMark(x: .value(L10n.text("时间"), point.timestamp), y: .value(L10n.text("读取"), read))
+                            .foregroundStyle(InstrumentDesign.ColorRole.diskRead)
+                    }
+                    if let write = point.writeBytesPerSecond {
+                        PointMark(x: .value(L10n.text("时间"), point.timestamp), y: .value(L10n.text("写入"), write))
+                            .foregroundStyle(
+                                isWarning(write)
+                                    ? InstrumentDesign.ColorRole.warning
+                                    : InstrumentDesign.ColorRole.diskWrite
+                            )
+                    }
+                }
             }
 
-            if selectedTimestamp == point.timestamp {
-                RuleMark(x: .value(L10n.text("选中时间"), point.timestamp))
-                    .foregroundStyle(.secondary.opacity(0.55))
-                    .lineStyle(StrokeStyle(lineWidth: 1))
-                if let read = point.readBytesPerSecond {
-                    PointMark(x: .value(L10n.text("时间"), point.timestamp), y: .value(L10n.text("读取"), read))
-                        .foregroundStyle(Color.teal)
+            if let warningThreshold {
+                ForEach(warningSegments) { segment in
+                    ForEach(segment.points) { point in
+                        AreaMark(
+                            x: .value(L10n.text("时间"), point.timestamp),
+                            yStart: .value(L10n.text("警告阈值"), warningThreshold),
+                            yEnd: .value(L10n.text("写入"), point.value),
+                            series: .value(L10n.text("系列"), "warning-area-\(segment.id)")
+                        )
+                        .foregroundStyle(InstrumentDesign.ColorRole.warning.opacity(0.10))
+                        .interpolationMethod(.linear)
+                        LineMark(
+                            x: .value(L10n.text("时间"), point.timestamp),
+                            y: .value(L10n.text("写入"), point.value),
+                            series: .value(L10n.text("系列"), "warning-\(segment.id)")
+                        )
+                        .foregroundStyle(InstrumentDesign.ColorRole.warning)
+                        .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
+                        .interpolationMethod(.linear)
+                    }
                 }
-                if let write = point.writeBytesPerSecond {
-                    PointMark(x: .value(L10n.text("时间"), point.timestamp), y: .value(L10n.text("写入"), write))
-                        .foregroundStyle(Color.orange)
-                }
+
+                RuleMark(y: .value(L10n.text("警告阈值"), warningThreshold))
+                    .foregroundStyle(InstrumentDesign.ColorRole.warning.opacity(0.58))
+                    .lineStyle(StrokeStyle(lineWidth: 0.75, dash: [5, 4]))
+                    .annotation(position: .top, alignment: .trailing) {
+                        Text(ByteRateFormatter.rate(warningThreshold))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
             }
         }
         .chartLegend(.hidden)
         .chartYAxis {
             AxisMarks(position: .leading) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
-                    .foregroundStyle(.quaternary)
+                    .foregroundStyle(Color.secondary.opacity(0.10))
                 AxisValueLabel {
                     if let rate = value.as(Double.self) {
                         Text(ByteRateFormatter.rate(rate))
@@ -64,16 +398,28 @@ struct MonitorChart: View {
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 5)) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
-                    .foregroundStyle(.quaternary)
+                    .foregroundStyle(Color.secondary.opacity(0.10))
                 AxisValueLabel(format: .dateTime.hour().minute().second())
                     .font(.caption2)
             }
         }
+        .chartXScale(domain: timeline.domain)
         .chartPlotStyle { plotArea in
-            plotArea.background(Color.secondary.opacity(0.035))
+            plotArea.background(Color.primary.opacity(0.012))
         }
         .chartHoverSelection($hoverDate, location: $hoverLocation)
         .frame(height: height)
+        .onChange(of: TimelineUpdateKey(
+            timestamps: points.map(\.timestamp),
+            windowDuration: windowDuration
+        )) { _, _ in
+            timeline.update(
+                with: points,
+                reduceMotion: reduceMotion,
+                windowDuration: windowDuration
+            )
+        }
+        .onDisappear { timeline.cancelTransition() }
         .accessibilityLabel(L10n.text("磁盘吞吐趋势"))
         .accessibilityValue(accessibilitySummary)
         .overlay {
@@ -91,8 +437,8 @@ struct MonitorChart: View {
                     location: hoverLocation,
                     date: point.timestamp,
                     rows: [
-                        (L10n.text("读取"), rateOrUnavailable(point.readBytesPerSecond), .teal),
-                        (L10n.text("写入"), rateOrUnavailable(point.writeBytesPerSecond), .orange)
+                        (L10n.text("读取"), rateOrUnavailable(point.readBytesPerSecond), InstrumentDesign.ColorRole.diskRead),
+                        (L10n.text("写入"), rateOrUnavailable(point.writeBytesPerSecond), InstrumentDesign.ColorRole.diskWrite)
                     ]
                 )
             }
@@ -111,6 +457,11 @@ struct MonitorChart: View {
         )
     }
 
+    private func isWarning(_ value: Double) -> Bool {
+        guard let warningThreshold else { return false }
+        return value > warningThreshold
+    }
+
     private var selectedPoint: ThroughputPoint? {
         nearestPoint(points, to: hoverDate, timestamp: \.timestamp)
     }
@@ -119,28 +470,83 @@ struct MonitorChart: View {
 struct SystemCPUChart: View {
     let points: [SystemResourcePoint]
     var height: CGFloat = 210
+    let windowDuration: TimeInterval
+    @State private var timeline: StreamingChartBuffer<SystemResourcePoint>
     @State private var hoverDate: Date?
     @State private var hoverLocation: CGPoint?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(
+        points: [SystemResourcePoint],
+        height: CGFloat = 210,
+        windowDuration: TimeInterval = SampleRange.minute.seconds
+    ) {
+        self.points = points
+        self.height = height
+        self.windowDuration = windowDuration
+        _timeline = State(initialValue: StreamingChartBuffer(
+            points: points,
+            timestamp: \.timestamp,
+            windowDuration: windowDuration
+        ))
+    }
 
     var body: some View {
         let selectedTimestamp = selectedPoint?.timestamp
-        Chart(points) { point in
+        let chartPoints = timeline.renderedPoints
+        Chart(chartPoints) { point in
             if let cpu = point.cpuPercent {
+                AreaMark(
+                    x: .value(L10n.text("时间"), point.timestamp),
+                    yStart: .value("CPU", 0),
+                    yEnd: .value("CPU", cpu),
+                    series: .value(
+                        L10n.text("系列"),
+                        point.cpuSegment * 2 + (cpu > 80 ? 1 : 0)
+                    )
+                )
+                .foregroundStyle(
+                    (cpu > 80
+                        ? InstrumentDesign.ColorRole.warning
+                        : InstrumentDesign.ColorRole.cpu).opacity(0.12)
+                )
+                .interpolationMethod(.linear)
                 LineMark(
                     x: .value(L10n.text("时间"), point.timestamp),
                     y: .value("CPU", cpu),
-                    series: .value(L10n.text("系列"), "cpu-\(point.cpuSegment)")
+                    series: .value(
+                        L10n.text("系列"),
+                        point.cpuSegment * 2 + (cpu > 80 ? 1 : 0)
+                    )
                 )
-                .foregroundStyle(Color.blue)
-                .lineStyle(StrokeStyle(lineWidth: 2))
+                .foregroundStyle(
+                    cpu > 80
+                        ? InstrumentDesign.ColorRole.warning
+                        : InstrumentDesign.ColorRole.cpu
+                )
+                .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
                 .interpolationMethod(.linear)
+            }
+            if point.timestamp == chartPoints.first?.timestamp {
+                RuleMark(y: .value(L10n.text("警告阈值"), 80))
+                    .foregroundStyle(InstrumentDesign.ColorRole.warning.opacity(0.72))
+                    .lineStyle(StrokeStyle(lineWidth: 0.8, dash: [5, 4]))
+                    .annotation(position: .top, alignment: .trailing) {
+                        Text(L10n.text("警告 80%"))
+                            .font(.caption2)
+                            .foregroundStyle(InstrumentDesign.ColorRole.warning)
+                    }
             }
             if selectedTimestamp == point.timestamp {
                 RuleMark(x: .value(L10n.text("选中时间"), point.timestamp))
                     .foregroundStyle(.secondary.opacity(0.55))
                 if let cpu = point.cpuPercent {
                     PointMark(x: .value(L10n.text("时间"), point.timestamp), y: .value("CPU", cpu))
-                        .foregroundStyle(Color.blue)
+                        .foregroundStyle(
+                            cpu > 80
+                                ? InstrumentDesign.ColorRole.warning
+                                : InstrumentDesign.ColorRole.cpu
+                        )
                 }
             }
         }
@@ -159,9 +565,21 @@ struct SystemCPUChart: View {
             }
         }
         .resourceTimeAxis()
+        .chartXScale(domain: timeline.domain)
         .chartPlotStyle { $0.background(Color.secondary.opacity(0.035)) }
         .chartHoverSelection($hoverDate, location: $hoverLocation)
         .frame(height: height)
+        .onChange(of: TimelineUpdateKey(
+            timestamps: points.map(\.timestamp),
+            windowDuration: windowDuration
+        )) { _, _ in
+            timeline.update(
+                with: points,
+                reduceMotion: reduceMotion,
+                windowDuration: windowDuration
+            )
+        }
+        .onDisappear { timeline.cancelTransition() }
         .accessibilityLabel(L10n.text("系统 CPU 趋势"))
         .overlay { emptyState(points.count, title: L10n.text("正在收集 CPU 样本")) }
         .overlay {
@@ -183,31 +601,65 @@ struct SystemCPUChart: View {
 struct SystemNetworkChart: View {
     let points: [SystemResourcePoint]
     var height: CGFloat = 210
+    let windowDuration: TimeInterval
+    @State private var timeline: StreamingChartBuffer<SystemResourcePoint>
     @State private var hoverDate: Date?
     @State private var hoverLocation: CGPoint?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(
+        points: [SystemResourcePoint],
+        height: CGFloat = 210,
+        windowDuration: TimeInterval = SampleRange.minute.seconds
+    ) {
+        self.points = points
+        self.height = height
+        self.windowDuration = windowDuration
+        _timeline = State(initialValue: StreamingChartBuffer(
+            points: points,
+            timestamp: \.timestamp,
+            windowDuration: windowDuration
+        ))
+    }
 
     var body: some View {
         let selectedTimestamp = selectedPoint?.timestamp
-        Chart(points) { point in
+        Chart(timeline.renderedPoints) { point in
             if let receive = point.networkReceiveBytesPerSecond {
+                AreaMark(
+                    x: .value(L10n.text("时间"), point.timestamp),
+                    yStart: .value(L10n.text("下载"), 0),
+                    yEnd: .value(L10n.text("下载"), receive),
+                    series: .value(L10n.text("系列"), "download-area-\(point.networkSegment)")
+                )
+                .foregroundStyle(InstrumentDesign.ColorRole.read.opacity(0.12))
+                .interpolationMethod(.linear)
                 LineMark(
                     x: .value(L10n.text("时间"), point.timestamp),
                     y: .value(L10n.text("下载"), receive),
                     series: .value(L10n.text("系列"), "download-\(point.networkSegment)")
                 )
-                .foregroundStyle(Color.green)
-                .lineStyle(StrokeStyle(lineWidth: 2))
+                .foregroundStyle(InstrumentDesign.ColorRole.read)
+                .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
                 .interpolationMethod(.linear)
             }
 
             if let send = point.networkSendBytesPerSecond {
+                AreaMark(
+                    x: .value(L10n.text("时间"), point.timestamp),
+                    yStart: .value(L10n.text("上传"), 0),
+                    yEnd: .value(L10n.text("上传"), send),
+                    series: .value(L10n.text("系列"), "upload-area-\(point.networkSegment)")
+                )
+                .foregroundStyle(InstrumentDesign.ColorRole.upload.opacity(0.10))
+                .interpolationMethod(.linear)
                 LineMark(
                     x: .value(L10n.text("时间"), point.timestamp),
                     y: .value(L10n.text("上传"), send),
                     series: .value(L10n.text("系列"), "upload-\(point.networkSegment)")
                 )
-                .foregroundStyle(Color.indigo)
-                .lineStyle(StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                .foregroundStyle(InstrumentDesign.ColorRole.upload)
+                .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
                 .interpolationMethod(.linear)
             }
 
@@ -216,20 +668,32 @@ struct SystemNetworkChart: View {
                     .foregroundStyle(.secondary.opacity(0.55))
                 if let receive = point.networkReceiveBytesPerSecond {
                     PointMark(x: .value(L10n.text("时间"), point.timestamp), y: .value(L10n.text("下载"), receive))
-                        .foregroundStyle(Color.green)
+                        .foregroundStyle(InstrumentDesign.ColorRole.read)
                 }
                 if let send = point.networkSendBytesPerSecond {
                     PointMark(x: .value(L10n.text("时间"), point.timestamp), y: .value(L10n.text("上传"), send))
-                        .foregroundStyle(Color.indigo)
+                        .foregroundStyle(InstrumentDesign.ColorRole.upload)
                 }
             }
         }
         .chartLegend(.hidden)
         .resourceRateAxis()
         .resourceTimeAxis()
+        .chartXScale(domain: timeline.domain)
         .chartPlotStyle { $0.background(Color.secondary.opacity(0.035)) }
         .chartHoverSelection($hoverDate, location: $hoverLocation)
         .frame(height: height)
+        .onChange(of: TimelineUpdateKey(
+            timestamps: points.map(\.timestamp),
+            windowDuration: windowDuration
+        )) { _, _ in
+            timeline.update(
+                with: points,
+                reduceMotion: reduceMotion,
+                windowDuration: windowDuration
+            )
+        }
+        .onDisappear { timeline.cancelTransition() }
         .accessibilityLabel(L10n.text("系统网络趋势"))
         .overlay { emptyState(points.count, title: L10n.text("正在收集网络样本")) }
         .overlay {
@@ -238,8 +702,8 @@ struct SystemNetworkChart: View {
                     location: hoverLocation,
                     date: point.timestamp,
                     rows: [
-                        (L10n.text("下载"), rateOrUnavailable(point.networkReceiveBytesPerSecond), .green),
-                        (L10n.text("上传"), rateOrUnavailable(point.networkSendBytesPerSecond), .indigo)
+                        (L10n.text("下载"), rateOrUnavailable(point.networkReceiveBytesPerSecond), InstrumentDesign.ColorRole.read),
+                        (L10n.text("上传"), rateOrUnavailable(point.networkSendBytesPerSecond), InstrumentDesign.ColorRole.upload)
                     ]
                 )
             }
@@ -251,10 +715,147 @@ struct SystemNetworkChart: View {
     }
 }
 
+private struct MemoryChartPoint: Identifiable {
+    let timestamp: Date
+    let usedBytes: Double
+    let segment: Int
+
+    var id: Date { timestamp }
+}
+
+struct SystemMemoryChart: View {
+    let points: [SystemResourcePoint]
+    var height: CGFloat = 210
+    let windowDuration: TimeInterval
+    @State private var timeline: StreamingChartBuffer<SystemResourcePoint>
+    @State private var hoverDate: Date?
+    @State private var hoverLocation: CGPoint?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(
+        points: [SystemResourcePoint],
+        height: CGFloat = 210,
+        windowDuration: TimeInterval = SampleRange.minute.seconds
+    ) {
+        self.points = points
+        self.height = height
+        self.windowDuration = windowDuration
+        _timeline = State(initialValue: StreamingChartBuffer(
+            points: points,
+            timestamp: \.timestamp,
+            windowDuration: windowDuration
+        ))
+    }
+
+    var body: some View {
+        let selectedTimestamp = selectedPoint?.timestamp
+        let timeLabel = L10n.text("时间")
+        let usedLabel = L10n.text("已用内存")
+        let chartPoints = memoryChartPoints(from: timeline.renderedPoints)
+        let baseline = memoryBaseline(for: chartPoints)
+        Chart(chartPoints) { point in
+            AreaMark(
+                x: .value(timeLabel, point.timestamp),
+                yStart: .value(usedLabel, baseline),
+                yEnd: .value(usedLabel, point.usedBytes)
+            )
+            .foregroundStyle(InstrumentDesign.ColorRole.memory.opacity(0.11))
+            LineMark(
+                x: .value(timeLabel, point.timestamp),
+                y: .value(usedLabel, point.usedBytes)
+            )
+            .foregroundStyle(InstrumentDesign.ColorRole.memory)
+            .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
+            if selectedTimestamp == point.timestamp {
+                RuleMark(x: .value(L10n.text("选中时间"), point.timestamp))
+                    .foregroundStyle(.secondary.opacity(0.55))
+            }
+        }
+        .chartLegend(.hidden)
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { _ in
+                AxisGridLine().foregroundStyle(.quaternary)
+                AxisValueLabel()
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .resourceTimeAxis()
+        .chartXScale(domain: timeline.domain)
+        .chartPlotStyle { $0.background(Color.secondary.opacity(0.035)) }
+        .chartHoverSelection($hoverDate, location: $hoverLocation)
+        .frame(height: height)
+        .onChange(of: TimelineUpdateKey(
+            timestamps: points.map(\.timestamp),
+            windowDuration: windowDuration
+        )) { _, _ in
+            timeline.update(
+                with: points,
+                reduceMotion: reduceMotion,
+                windowDuration: windowDuration
+            )
+        }
+        .onDisappear { timeline.cancelTransition() }
+        .accessibilityLabel(L10n.text("系统内存趋势"))
+        .accessibilityValue(accessibilitySummary)
+        .overlay { emptyState(points.count, title: L10n.text("正在收集内存样本")) }
+        .overlay {
+            if let point = selectedPoint, let hoverLocation {
+                FollowingChartTooltip(
+                    location: hoverLocation,
+                    date: point.timestamp,
+                    rows: tooltipRows(for: point)
+                )
+            }
+        }
+    }
+
+    private var selectedPoint: SystemResourcePoint? {
+        nearestPoint(points, to: hoverDate, timestamp: \.timestamp)
+    }
+
+    private func memoryChartPoints(from points: [SystemResourcePoint]) -> [MemoryChartPoint] {
+        points.compactMap { point in
+            guard let used = point.memoryUsedBytes else { return nil }
+            return MemoryChartPoint(
+                timestamp: point.timestamp,
+                usedBytes: Double(used),
+                segment: point.memorySegment
+            )
+        }
+    }
+
+    private func memoryBaseline(for points: [MemoryChartPoint]) -> Double {
+        guard let minimum = points.map(\.usedBytes).min() else { return 0 }
+        return max(0, minimum * 0.985)
+    }
+
+    private var accessibilitySummary: String {
+        guard let point = points.last, let used = point.memoryUsedBytes else {
+            return L10n.text("内存采样缺口")
+        }
+        return L10n.format("当前已用 %@", ByteRateFormatter.approximateBytes(Double(used)))
+    }
+
+    private func tooltipRows(for point: SystemResourcePoint) -> [ChartTooltip.Row] {
+        let used = point.memoryUsedBytes.map {
+            ByteRateFormatter.approximateBytes(Double($0))
+        } ?? L10n.text("采样缺口")
+        let compressed = point.memoryCompressedBytes.map {
+            ByteRateFormatter.approximateBytes(Double($0))
+        } ?? L10n.text("采样缺口")
+        return [
+            (L10n.text("已用"), used, InstrumentDesign.ColorRole.memory),
+            (L10n.text("压缩"), compressed, Color.secondary)
+        ]
+    }
+}
+
 enum ProcessChartKind: String, CaseIterable, Identifiable {
-    case disk = "磁盘 I/O"
     case cpu = "CPU"
+    case disk = "磁盘 I/O"
     case network = "网络"
+    case memory = "内存"
 
     var id: String { rawValue }
     var title: String { L10n.text(rawValue) }
@@ -264,8 +865,28 @@ struct ProcessMetricChart: View {
     let points: [ProcessMetricPoint]
     let kind: ProcessChartKind
     var height: CGFloat = 150
+    let windowDuration: TimeInterval
+    @State private var timeline: StreamingChartBuffer<ProcessMetricPoint>
     @State private var hoverDate: Date?
     @State private var hoverLocation: CGPoint?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(
+        points: [ProcessMetricPoint],
+        kind: ProcessChartKind,
+        height: CGFloat = 150,
+        windowDuration: TimeInterval = SampleRange.minute.seconds
+    ) {
+        self.points = points
+        self.kind = kind
+        self.height = height
+        self.windowDuration = windowDuration
+        _timeline = State(initialValue: StreamingChartBuffer(
+            points: points,
+            timestamp: \.timestamp,
+            windowDuration: windowDuration
+        ))
+    }
 
     var body: some View {
         let selectedTimestamp = selectedPoint?.timestamp
@@ -276,65 +897,160 @@ struct ProcessMetricChart: View {
         let writeLabel = L10n.text("写入")
         let downloadLabel = L10n.text("下载")
         let uploadLabel = L10n.text("上传")
-        Chart(points) { point in
-            switch kind {
+        let chartPoints = timeline.renderedPoints
+        let memoryBaseline = processMemoryBaseline(for: chartPoints)
+        let cpuWarningSegments = warningThroughputSegments(
+            samples: chartPoints.map {
+                WarningThroughputSample(
+                    timestamp: $0.timestamp,
+                    value: $0.cpuPercent,
+                    segment: 0
+                )
+            },
+            threshold: 80
+        )
+        Chart {
+            ForEach(chartPoints) { point in
+                switch kind {
             case .disk:
                 if let read = point.readBytesPerSecond {
+                    AreaMark(
+                        x: .value(timeLabel, point.timestamp),
+                        yStart: .value(readLabel, 0),
+                        yEnd: .value(readLabel, read),
+                        series: .value(seriesLabel, "read-area")
+                    )
+                    .foregroundStyle(InstrumentDesign.ColorRole.diskRead.opacity(0.12))
                     LineMark(
                         x: .value(timeLabel, point.timestamp),
                         y: .value(readLabel, read),
                         series: .value(seriesLabel, "read")
                     )
-                    .foregroundStyle(Color.teal)
-                    .lineStyle(StrokeStyle(lineWidth: 2))
+                    .foregroundStyle(InstrumentDesign.ColorRole.diskRead)
+                    .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
                     .interpolationMethod(.linear)
                 }
                 if let write = point.writeBytesPerSecond {
+                    AreaMark(
+                        x: .value(timeLabel, point.timestamp),
+                        yStart: .value(writeLabel, 0),
+                        yEnd: .value(writeLabel, write),
+                        series: .value(seriesLabel, "write-area")
+                    )
+                    .foregroundStyle(InstrumentDesign.ColorRole.diskWrite.opacity(0.12))
                     LineMark(
                         x: .value(timeLabel, point.timestamp),
                         y: .value(writeLabel, write),
                         series: .value(seriesLabel, "write")
                     )
-                    .foregroundStyle(Color.orange)
-                    .lineStyle(StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    .foregroundStyle(InstrumentDesign.ColorRole.diskWrite)
+                    .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
                     .interpolationMethod(.linear)
                 }
             case .cpu:
                 if let cpu = point.cpuPercent {
+                    AreaMark(
+                        x: .value(timeLabel, point.timestamp),
+                        yStart: .value("CPU", 0),
+                        yEnd: .value("CPU", cpu)
+                    )
+                    .foregroundStyle(InstrumentDesign.ColorRole.cpu.opacity(0.12))
                     LineMark(
                         x: .value(timeLabel, point.timestamp),
                         y: .value("CPU", cpu)
                     )
-                    .foregroundStyle(Color.blue)
-                    .lineStyle(StrokeStyle(lineWidth: 2))
+                    .foregroundStyle(InstrumentDesign.ColorRole.cpu)
+                    .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
                     .interpolationMethod(.linear)
                 }
             case .network:
                 if let receive = point.networkReceiveBytesPerSecond {
+                    AreaMark(
+                        x: .value(timeLabel, point.timestamp),
+                        yStart: .value(downloadLabel, 0),
+                        yEnd: .value(downloadLabel, receive),
+                        series: .value(seriesLabel, "download-area-\(point.networkSegment)")
+                    )
+                    .foregroundStyle(InstrumentDesign.ColorRole.read.opacity(0.12))
                     LineMark(
                         x: .value(timeLabel, point.timestamp),
                         y: .value(downloadLabel, receive),
                         series: .value(seriesLabel, "download-\(point.networkSegment)")
                     )
-                    .foregroundStyle(Color.green)
-                    .lineStyle(StrokeStyle(lineWidth: 2))
+                    .foregroundStyle(InstrumentDesign.ColorRole.read)
+                    .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
                     .interpolationMethod(.linear)
                 }
                 if let send = point.networkSendBytesPerSecond {
+                    AreaMark(
+                        x: .value(timeLabel, point.timestamp),
+                        yStart: .value(uploadLabel, 0),
+                        yEnd: .value(uploadLabel, send),
+                        series: .value(seriesLabel, "upload-area-\(point.networkSegment)")
+                    )
+                    .foregroundStyle(InstrumentDesign.ColorRole.upload.opacity(0.10))
                     LineMark(
                         x: .value(timeLabel, point.timestamp),
                         y: .value(uploadLabel, send),
                         series: .value(seriesLabel, "upload-\(point.networkSegment)")
                     )
-                    .foregroundStyle(Color.indigo)
-                    .lineStyle(StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    .foregroundStyle(InstrumentDesign.ColorRole.upload)
+                    .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
                     .interpolationMethod(.linear)
+                }
+            case .memory:
+                AreaMark(
+                    x: .value(timeLabel, point.timestamp),
+                    yStart: .value(L10n.text("驻留内存"), memoryBaseline),
+                    yEnd: .value(L10n.text("驻留内存"), Double(point.memoryBytes))
+                )
+                .foregroundStyle(InstrumentDesign.ColorRole.memory.opacity(0.11))
+                LineMark(
+                    x: .value(timeLabel, point.timestamp),
+                    y: .value(L10n.text("驻留内存"), Double(point.memoryBytes)),
+                    series: .value(seriesLabel, "memory")
+                )
+                .foregroundStyle(InstrumentDesign.ColorRole.memory)
+                .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
+                .interpolationMethod(.linear)
+            }
+
+                if selectedTimestamp == point.timestamp {
+                    RuleMark(x: .value(selectedTimeLabel, point.timestamp))
+                        .foregroundStyle(.secondary.opacity(0.55))
                 }
             }
 
-            if selectedTimestamp == point.timestamp {
-                RuleMark(x: .value(selectedTimeLabel, point.timestamp))
-                    .foregroundStyle(.secondary.opacity(0.55))
+            if kind == .cpu {
+                ForEach(cpuWarningSegments) { segment in
+                    ForEach(segment.points) { point in
+                        AreaMark(
+                            x: .value(timeLabel, point.timestamp),
+                            yStart: .value(L10n.text("警告阈值"), 80),
+                            yEnd: .value("CPU", point.value),
+                            series: .value(seriesLabel, "process-cpu-warning-area-\(segment.id)")
+                        )
+                        .foregroundStyle(InstrumentDesign.ColorRole.warning.opacity(0.10))
+                        .interpolationMethod(.linear)
+                        LineMark(
+                            x: .value(timeLabel, point.timestamp),
+                            y: .value("CPU", point.value),
+                            series: .value(seriesLabel, "process-cpu-warning-\(segment.id)")
+                        )
+                        .foregroundStyle(InstrumentDesign.ColorRole.warning)
+                        .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
+                        .interpolationMethod(.linear)
+                    }
+                }
+
+                RuleMark(y: .value(L10n.text("警告阈值"), 80))
+                    .foregroundStyle(InstrumentDesign.ColorRole.warning.opacity(0.58))
+                    .lineStyle(StrokeStyle(lineWidth: 0.75, dash: [5, 4]))
+                    .annotation(position: .top, alignment: .trailing) {
+                        Text(L10n.text("警告 80%"))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
             }
         }
         .chartLegend(.hidden)
@@ -343,7 +1059,11 @@ struct ProcessMetricChart: View {
                 AxisGridLine().foregroundStyle(.quaternary)
                 AxisValueLabel {
                     if let number = value.as(Double.self) {
-                        Text(kind == .cpu ? PercentFormatter.cpu(number) : ByteRateFormatter.rate(number))
+                        Text(kind == .cpu
+                            ? PercentFormatter.cpu(number)
+                            : kind == .memory
+                                ? ByteRateFormatter.approximateBytes(number)
+                                : ByteRateFormatter.rate(number))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -351,10 +1071,23 @@ struct ProcessMetricChart: View {
             }
         }
         .resourceTimeAxis()
+        .chartXScale(domain: timeline.domain)
         .chartPlotStyle { $0.background(Color.secondary.opacity(0.035)) }
         .chartHoverSelection($hoverDate, location: $hoverLocation)
         .frame(height: height)
+        .onChange(of: TimelineUpdateKey(
+            timestamps: points.map(\.timestamp),
+            windowDuration: windowDuration
+        )) { _, _ in
+            timeline.update(
+                with: points,
+                reduceMotion: reduceMotion,
+                windowDuration: windowDuration
+            )
+        }
+        .onDisappear { timeline.cancelTransition() }
         .accessibilityLabel(L10n.format("应用%@趋势", kind.title))
+        .accessibilityValue(accessibilitySummary)
         .overlay { emptyState(points.count, title: L10n.text("正在收集应用样本")) }
         .overlay {
             if let point = selectedPoint, let hoverLocation {
@@ -371,12 +1104,24 @@ struct ProcessMetricChart: View {
         nearestPoint(points, to: hoverDate, timestamp: \.timestamp)
     }
 
+    private var accessibilitySummary: String {
+        guard let point = points.last else { return L10n.text("正在收集应用样本") }
+        return tooltipRows(for: point)
+            .map { "\($0.label) \($0.value)" }
+            .joined(separator: L10n.text("，"))
+    }
+
+    private func processMemoryBaseline(for points: [ProcessMetricPoint]) -> Double {
+        guard let minimum = points.map({ Double($0.memoryBytes) }).min() else { return 0 }
+        return max(0, minimum * 0.985)
+    }
+
     private func tooltipRows(for point: ProcessMetricPoint) -> [ChartTooltip.Row] {
         switch kind {
         case .disk:
             [
-                (L10n.text("读取"), rateOrUnavailable(point.readBytesPerSecond), .teal),
-                (L10n.text("写入"), rateOrUnavailable(point.writeBytesPerSecond), .orange)
+                (L10n.text("读取"), rateOrUnavailable(point.readBytesPerSecond), InstrumentDesign.ColorRole.diskRead),
+                (L10n.text("写入"), rateOrUnavailable(point.writeBytesPerSecond), InstrumentDesign.ColorRole.diskWrite)
             ]
         case .cpu:
             [("CPU", point.cpuPercent.map(PercentFormatter.cpu) ?? L10n.text("不可用"), .blue)]
@@ -384,6 +1129,14 @@ struct ProcessMetricChart: View {
             [
                 (L10n.text("下载"), rateOrUnavailable(point.networkReceiveBytesPerSecond), .green),
                 (L10n.text("上传"), rateOrUnavailable(point.networkSendBytesPerSecond), .indigo)
+            ]
+        case .memory:
+            [
+                (
+                    L10n.text("驻留内存"),
+                    ByteRateFormatter.approximateBytes(Double(point.memoryBytes)),
+                    InstrumentDesign.ColorRole.memory
+                )
             ]
         }
     }

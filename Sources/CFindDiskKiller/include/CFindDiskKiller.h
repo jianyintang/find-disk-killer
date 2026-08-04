@@ -17,6 +17,7 @@ typedef struct {
     uint64_t cpu_time_ns;
     uint64_t bytes_read;
     uint64_t bytes_written;
+    uint64_t resident_memory_bytes;
     char name[DM_PROCESS_NAME_MAX];
     char path[DM_PROCESS_PATH_MAX];
 } DMProcessIO;
@@ -38,7 +39,21 @@ typedef struct {
     uint64_t cpu_system_ticks;
     uint64_t cpu_nice_ticks;
     uint64_t cpu_idle_ticks;
+    uint64_t memory_total_bytes;
+    uint64_t memory_used_bytes;
+    uint64_t memory_cached_bytes;
+    uint64_t memory_compressed_bytes;
+    uint64_t memory_available_bytes;
+    uint8_t memory_stats_available;
 } DMSystemStats;
+
+typedef struct {
+    uint32_t index;
+    uint64_t user_ticks;
+    uint64_t system_ticks;
+    uint64_t nice_ticks;
+    uint64_t idle_ticks;
+} DMCPUCoreStats;
 
 typedef struct {
     uint32_t interface_index;
@@ -67,8 +82,10 @@ typedef struct {
 typedef struct DMFSEventWatcher DMFSEventWatcher;
 
 int dm_collect_process_io(DMProcessIO *buffer, int capacity);
+int dm_collect_process_path(int32_t pid, char *buffer, int capacity);
 int dm_collect_disk_io(DMDiskIO *buffer, int capacity);
 int dm_collect_system_stats(DMSystemStats *stats);
+int dm_collect_cpu_core_stats(DMCPUCoreStats *buffer, int capacity);
 int dm_collect_network_interfaces(DMNetworkInterface *buffer, int capacity);
 int dm_disk_protocol_is_virtual(const char *protocol_name);
 int dm_collect_open_files(

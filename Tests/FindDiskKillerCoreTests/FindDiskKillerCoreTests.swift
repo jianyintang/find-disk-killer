@@ -780,6 +780,56 @@ private func volumeTraceFixtureDate(hour: Int, minute: Int, second: Int) throws 
 }
 
 @MainActor
+@Test func perCoreCPUUsageUsesStableCoreCountersAndDeltaBaselines() {
+    let store = MonitorStore()
+    let date = Date(timeIntervalSinceReferenceDate: 1_250)
+
+    store.ingest(SystemSnapshot(
+        date: date,
+        uptime: 1,
+        processes: [],
+        disks: [],
+        volumes: [],
+        cpuUserTicks: 70,
+        cpuSystemTicks: 0,
+        cpuNiceTicks: 0,
+        cpuIdleTicks: 130,
+        cpuCores: [
+            RawCPUCoreCounter(index: 0, userTicks: 20, systemTicks: 0, niceTicks: 0, idleTicks: 80),
+            RawCPUCoreCounter(index: 1, userTicks: 50, systemTicks: 0, niceTicks: 0, idleTicks: 50)
+        ],
+        networkInterfaces: [],
+        cpuStatsAvailable: true,
+        networkInterfacesAvailable: false,
+        processNetworkAvailable: false
+    ))
+    #expect(store.cpuCoreUsages.isEmpty)
+
+    store.ingest(SystemSnapshot(
+        date: date.addingTimeInterval(1),
+        uptime: 2,
+        processes: [],
+        disks: [],
+        volumes: [],
+        cpuUserTicks: 130,
+        cpuSystemTicks: 0,
+        cpuNiceTicks: 0,
+        cpuIdleTicks: 270,
+        cpuCores: [
+            RawCPUCoreCounter(index: 0, userTicks: 70, systemTicks: 0, niceTicks: 0, idleTicks: 130),
+            RawCPUCoreCounter(index: 1, userTicks: 60, systemTicks: 0, niceTicks: 0, idleTicks: 140)
+        ],
+        networkInterfaces: [],
+        cpuStatsAvailable: true,
+        networkInterfacesAvailable: false,
+        processNetworkAvailable: false
+    ))
+
+    #expect(store.cpuCoreUsages.map(\.index) == [0, 1])
+    #expect(store.cpuCoreUsages.map(\.percent) == [50, 10])
+}
+
+@MainActor
 @Test func processCurrentRatesClipSamplesAtFiveSecondBoundary() async {
     let store = MonitorStore()
     let baseDate = Date(timeIntervalSinceReferenceDate: 1_500)
@@ -1429,7 +1479,75 @@ private func volumeTraceFixtureDate(hour: Int, minute: Int, second: Int) throws 
 
 @Test func samplerIncludesCallingProcess() async {
     let snapshot = await SystemSampler.shared.collect()
-    #expect(snapshot.processes.contains { $0.pid == getpid() })
+    let currentProcess = snapshot.processes.first { $0.pid == getpid() }
+    #expect(currentProcess != nil)
+    #expect((currentProcess?.residentMemoryBytes ?? 0) > 0)
+    #expect((snapshot.memory?.totalBytes ?? 0) > 0)
+    #expect((snapshot.memory?.usedBytes ?? 0) > 0)
+}
+
+@MainActor
+@Test func monitorStorePublishesMeasuredSystemAndProcessGroupMemory() async {
+    let store = MonitorStore()
+    let memory = SystemMemorySnapshot(
+        totalBytes: 32_000,
+        usedBytes: 18_000,
+        cachedBytes: 6_000,
+        compressedBytes: 2_000,
+        availableBytes: 8_000
+    )
+
+    for index in 0..<2 {
+        store.ingest(SystemSnapshot(
+            date: Date(timeIntervalSinceReferenceDate: Double(4_000 + index)),
+            uptime: Double(index + 1),
+            processes: [
+                RawProcessCounter(
+                    pid: 101,
+                    startAbstime: 1,
+                    name: "MemoryFixture",
+                    path: "/Applications/MemoryFixture.app/Contents/MacOS/MemoryFixture",
+                    cpuTimeNanoseconds: UInt64(index) * 1_000,
+                    bytesRead: UInt64(index),
+                    bytesWritten: UInt64(index),
+                    networkBytesReceived: nil,
+                    networkBytesSent: nil,
+                    residentMemoryBytes: 4_000
+                ),
+                RawProcessCounter(
+                    pid: 102,
+                    startAbstime: 2,
+                    name: "MemoryFixture Helper",
+                    path: "/Applications/MemoryFixture.app/Contents/Frameworks/MemoryFixture Helper",
+                    cpuTimeNanoseconds: UInt64(index) * 1_000,
+                    bytesRead: UInt64(index),
+                    bytesWritten: UInt64(index),
+                    networkBytesReceived: nil,
+                    networkBytesSent: nil,
+                    residentMemoryBytes: 2_000
+                )
+            ],
+            disks: [],
+            volumes: [],
+            cpuUserTicks: UInt64(index + 1),
+            cpuSystemTicks: 0,
+            cpuNiceTicks: 0,
+            cpuIdleTicks: UInt64(index + 1),
+            networkInterfaces: [],
+            cpuStatsAvailable: true,
+            networkInterfacesAvailable: false,
+            processNetworkAvailable: false,
+            memory: memory
+        ))
+    }
+
+    await store.waitForPendingProcessSummary()
+    #expect(store.isSystemMemoryAvailable)
+    #expect(store.currentMemoryUsedBytes == 18_000)
+    #expect(store.systemPoints.last?.memoryCompressedBytes == 2_000)
+    #expect(store.processes.first?.memberCount == 2)
+    #expect(store.processes.first?.currentMemoryBytes == 6_000)
+    #expect(store.processes.first?.metrics.last?.memoryBytes == 6_000)
 }
 
 @Test func samplerPublishesMountedVolumeMetadataOnItsFirstCollection() async {

@@ -270,6 +270,11 @@ enum L10n {
     // shipped locale receives a native translation. Non-Chinese interfaces
     // must never fall back to the Simplified Chinese lookup key itself.
     private static let recentEnglishFallbacks: [String: String] = [
+        "写入峰值 %@": "Peak write %@",
+        "区间总写入 %@": "Total write %@",
+        "总计": "Total",
+        "磁盘读取当前 %@，写入当前 %@": "Disk read now %@, write now %@",
+        "进程组": "Process Group",
         "%@ 以前的应用明细已精简": "Application details before %@ have been compacted",
         "%@ 本次有 %llu 条事件未能完整处理，列表可能遗漏。": "%@ %llu events could not be fully processed, so some entries may be missing.",
         "%@ 次事件": "%@ events",

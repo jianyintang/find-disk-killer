@@ -11,6 +11,53 @@ public struct RawProcessCounter: Sendable {
     public let bytesWritten: UInt64
     public let networkBytesReceived: UInt64?
     public let networkBytesSent: UInt64?
+    public let residentMemoryBytes: UInt64
+
+    public init(
+        pid: Int32,
+        startAbstime: UInt64,
+        name: String,
+        path: String,
+        cpuTimeNanoseconds: UInt64,
+        bytesRead: UInt64,
+        bytesWritten: UInt64,
+        networkBytesReceived: UInt64?,
+        networkBytesSent: UInt64?,
+        residentMemoryBytes: UInt64 = 0
+    ) {
+        self.pid = pid
+        self.startAbstime = startAbstime
+        self.name = name
+        self.path = path
+        self.cpuTimeNanoseconds = cpuTimeNanoseconds
+        self.bytesRead = bytesRead
+        self.bytesWritten = bytesWritten
+        self.networkBytesReceived = networkBytesReceived
+        self.networkBytesSent = networkBytesSent
+        self.residentMemoryBytes = residentMemoryBytes
+    }
+}
+
+public struct SystemMemorySnapshot: Sendable {
+    public let totalBytes: UInt64
+    public let usedBytes: UInt64
+    public let cachedBytes: UInt64
+    public let compressedBytes: UInt64
+    public let availableBytes: UInt64
+
+    public init(
+        totalBytes: UInt64,
+        usedBytes: UInt64,
+        cachedBytes: UInt64,
+        compressedBytes: UInt64,
+        availableBytes: UInt64
+    ) {
+        self.totalBytes = totalBytes
+        self.usedBytes = usedBytes
+        self.cachedBytes = cachedBytes
+        self.compressedBytes = compressedBytes
+        self.availableBytes = availableBytes
+    }
 }
 
 public struct RawDiskCounter: Sendable {
@@ -32,6 +79,28 @@ public struct RawNetworkInterfaceCounter: Sendable {
     public let bytesSent: UInt64
 }
 
+public struct RawCPUCoreCounter: Sendable {
+    public let index: UInt32
+    public let userTicks: UInt64
+    public let systemTicks: UInt64
+    public let niceTicks: UInt64
+    public let idleTicks: UInt64
+
+    public init(
+        index: UInt32,
+        userTicks: UInt64,
+        systemTicks: UInt64,
+        niceTicks: UInt64,
+        idleTicks: UInt64
+    ) {
+        self.index = index
+        self.userTicks = userTicks
+        self.systemTicks = systemTicks
+        self.niceTicks = niceTicks
+        self.idleTicks = idleTicks
+    }
+}
+
 public struct SystemSnapshot: Sendable {
     public let date: Date
     public let uptime: TimeInterval
@@ -42,10 +111,46 @@ public struct SystemSnapshot: Sendable {
     public let cpuSystemTicks: UInt64
     public let cpuNiceTicks: UInt64
     public let cpuIdleTicks: UInt64
+    public let cpuCores: [RawCPUCoreCounter]
     public let networkInterfaces: [RawNetworkInterfaceCounter]
     public let cpuStatsAvailable: Bool
     public let networkInterfacesAvailable: Bool
     public let processNetworkAvailable: Bool
+    public let memory: SystemMemorySnapshot?
+
+    public init(
+        date: Date,
+        uptime: TimeInterval,
+        processes: [RawProcessCounter],
+        disks: [RawDiskCounter],
+        volumes: [VolumeInfo],
+        cpuUserTicks: UInt64,
+        cpuSystemTicks: UInt64,
+        cpuNiceTicks: UInt64,
+        cpuIdleTicks: UInt64,
+        cpuCores: [RawCPUCoreCounter] = [],
+        networkInterfaces: [RawNetworkInterfaceCounter],
+        cpuStatsAvailable: Bool,
+        networkInterfacesAvailable: Bool,
+        processNetworkAvailable: Bool,
+        memory: SystemMemorySnapshot? = nil
+    ) {
+        self.date = date
+        self.uptime = uptime
+        self.processes = processes
+        self.disks = disks
+        self.volumes = volumes
+        self.cpuUserTicks = cpuUserTicks
+        self.cpuSystemTicks = cpuSystemTicks
+        self.cpuNiceTicks = cpuNiceTicks
+        self.cpuIdleTicks = cpuIdleTicks
+        self.cpuCores = cpuCores
+        self.networkInterfaces = networkInterfaces
+        self.cpuStatsAvailable = cpuStatsAvailable
+        self.networkInterfacesAvailable = networkInterfacesAvailable
+        self.processNetworkAvailable = processNetworkAvailable
+        self.memory = memory
+    }
 }
 
 struct ProcessNetworkCounter: Equatable, Sendable {
@@ -80,6 +185,11 @@ struct ProcessNetworkSample: Sendable {
 private struct ProcessNetworkIdentity: Hashable, Sendable {
     let pid: Int32
     let startAbstime: UInt64
+}
+
+private struct ProcessDescriptor: Sendable {
+    let name: String
+    let path: String
 }
 
 private struct ProcessNetworkObservation: Sendable {
@@ -165,6 +275,7 @@ public actor SystemSampler {
     private var previousProcessNetworkObservation: ProcessNetworkObservation?
     private var publishedProcessNetworkCounters: [ProcessNetworkIdentity: PublishedProcessNetworkCounter] = [:]
     private var cachedProcessCounters: [ProcessNetworkIdentity: RawProcessCounter] = [:]
+    private var processDescriptors: [ProcessNetworkIdentity: ProcessDescriptor] = [:]
     private var isProcessNetworkSourceAvailable = false
 
     public init() {
@@ -217,7 +328,7 @@ public actor SystemSampler {
                 finishVolumeRefresh(volumes)
             }
         }
-        let processes = processCounterProvider()
+        let processes = resolveProcessDescriptors(processCounterProvider())
         let processNetwork = currentProcessNetworkState(at: uptime, processes: processes)
         let stats = collectSystemStats()
         let interfaces = collectNetworkInterfaces()
@@ -231,10 +342,12 @@ public actor SystemSampler {
             cpuSystemTicks: stats.cpuSystemTicks,
             cpuNiceTicks: stats.cpuNiceTicks,
             cpuIdleTicks: stats.cpuIdleTicks,
+            cpuCores: collectCPUCoreStats(),
             networkInterfaces: interfaces.counters,
             cpuStatsAvailable: stats.isAvailable,
             networkInterfacesAvailable: interfaces.isAvailable,
-            processNetworkAvailable: processNetwork.sample.isAvailable
+            processNetworkAvailable: processNetwork.sample.isAvailable,
+            memory: stats.memory
         )
     }
 
@@ -249,14 +362,71 @@ public actor SystemSampler {
                 pid: sample.pid,
                 startAbstime: sample.start_abstime,
                 name: decodeCString(&sample.name),
-                path: decodeCString(&sample.path),
+                path: "",
                 cpuTimeNanoseconds: sample.cpu_time_ns,
                 bytesRead: sample.bytes_read,
                 bytesWritten: sample.bytes_written,
                 networkBytesReceived: nil,
-                networkBytesSent: nil
+                networkBytesSent: nil,
+                residentMemoryBytes: sample.resident_memory_bytes
             )
         }
+    }
+
+    private func resolveProcessDescriptors(
+        _ counters: [RawProcessCounter]
+    ) -> [RawProcessCounter] {
+        var liveIdentities: Set<ProcessNetworkIdentity> = []
+        let resolved = counters.map { counter in
+            let identity = ProcessNetworkIdentity(
+                pid: counter.pid,
+                startAbstime: counter.startAbstime
+            )
+            liveIdentities.insert(identity)
+            let descriptor: ProcessDescriptor
+            if !counter.path.isEmpty {
+                descriptor = ProcessDescriptor(name: counter.name, path: counter.path)
+                processDescriptors[identity] = descriptor
+            } else if let cached = processDescriptors[identity] {
+                descriptor = cached
+            } else {
+                let path = Self.collectProcessPath(counter.pid)
+                let name = counter.name.isEmpty
+                    ? Self.processFallbackName(path: path, pid: counter.pid)
+                    : counter.name
+                descriptor = ProcessDescriptor(name: name, path: path)
+                processDescriptors[identity] = descriptor
+            }
+            return RawProcessCounter(
+                pid: counter.pid,
+                startAbstime: counter.startAbstime,
+                name: descriptor.name,
+                path: descriptor.path,
+                cpuTimeNanoseconds: counter.cpuTimeNanoseconds,
+                bytesRead: counter.bytesRead,
+                bytesWritten: counter.bytesWritten,
+                networkBytesReceived: counter.networkBytesReceived,
+                networkBytesSent: counter.networkBytesSent,
+                residentMemoryBytes: counter.residentMemoryBytes
+            )
+        }
+        processDescriptors = processDescriptors.filter { liveIdentities.contains($0.key) }
+        return resolved
+    }
+
+    nonisolated private static func collectProcessPath(_ pid: Int32) -> String {
+        var buffer = Array(repeating: CChar(0), count: Int(DM_PROCESS_PATH_MAX))
+        let count = buffer.withUnsafeMutableBufferPointer {
+            dm_collect_process_path(pid, $0.baseAddress, Int32($0.count))
+        }
+        guard count > 0 else { return "" }
+        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
+    nonisolated private static func processFallbackName(path: String, pid: Int32) -> String {
+        guard !path.isEmpty else { return "PID \(pid)" }
+        return URL(fileURLWithPath: path).lastPathComponent
     }
 
     private func attachProcessNetwork(
@@ -273,7 +443,8 @@ public actor SystemSampler {
                 bytesRead: process.bytesRead,
                 bytesWritten: process.bytesWritten,
                 networkBytesReceived: state.sample.totals?[process.pid]?.received,
-                networkBytesSent: state.sample.totals?[process.pid]?.sent
+                networkBytesSent: state.sample.totals?[process.pid]?.sent,
+                residentMemoryBytes: process.residentMemoryBytes
             )
         }
         return current + state.retiredProcesses
@@ -284,6 +455,7 @@ public actor SystemSampler {
         cpuSystemTicks: UInt64,
         cpuNiceTicks: UInt64,
         cpuIdleTicks: UInt64,
+        memory: SystemMemorySnapshot?,
         isAvailable: Bool
     ) {
         var stats = DMSystemStats()
@@ -293,6 +465,15 @@ public actor SystemSampler {
             stats.cpu_system_ticks,
             stats.cpu_nice_ticks,
             stats.cpu_idle_ticks,
+            stats.memory_stats_available != 0
+                ? SystemMemorySnapshot(
+                    totalBytes: stats.memory_total_bytes,
+                    usedBytes: stats.memory_used_bytes,
+                    cachedBytes: stats.memory_cached_bytes,
+                    compressedBytes: stats.memory_compressed_bytes,
+                    availableBytes: stats.memory_available_bytes
+                )
+                : nil,
             isAvailable
         )
     }
@@ -317,14 +498,29 @@ public actor SystemSampler {
         return (counters, true)
     }
 
+    private func collectCPUCoreStats() -> [RawCPUCoreCounter] {
+        let capacity = 256
+        var buffer = Array(repeating: DMCPUCoreStats(), count: capacity)
+        let count = Int(dm_collect_cpu_core_stats(&buffer, Int32(capacity)))
+        guard count > 0 else { return [] }
+        return buffer.prefix(count).map { core in
+            RawCPUCoreCounter(
+                index: core.index,
+                userTicks: core.user_ticks,
+                systemTicks: core.system_ticks,
+                niceTicks: core.nice_ticks,
+                idleTicks: core.idle_ticks
+            )
+        }
+    }
+
     nonisolated private static func collectProcessNetworkTotals() -> ProcessNetworkSample {
-        let interval = minimumProcessNetworkRefreshInterval
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
         process.arguments = [
-            "-e", "alarm 13; exec @ARGV",
-            "/usr/bin/nettop", "-P", "-d", "-L", "2", "-s", String(Int(interval)),
+            "-e", "alarm 3; exec @ARGV",
+            "/usr/bin/nettop", "-P", "-L", "1",
             "-n", "-x", "-t", "external", "-J", "bytes_in,bytes_out"
         ]
         process.standardOutput = output
@@ -341,9 +537,9 @@ public actor SystemSampler {
         guard process.terminationReason == .exit,
               process.terminationStatus == 0,
               let text = String(data: data, encoding: .utf8),
-              let totals = ProcessNetworkParser.parse(text, minimumSampleCount: 2)
+              let totals = ProcessNetworkParser.parse(text, minimumSampleCount: 1)
         else { return .unavailable }
-        return .interval(totals, duration: interval)
+        return .available(totals)
     }
 
     private func currentProcessNetworkState(
@@ -365,7 +561,23 @@ public actor SystemSampler {
             }
         }
         if let completedProcessNetworkRefresh {
-            applyProcessNetworkRefresh(completedProcessNetworkRefresh, at: uptime)
+            // Resolve ownership against the next normal process scan instead of
+            // running another full scan when nettop exits. A disappeared PID is
+            // still safe to retain as a retired session; only a reused PID is
+            // ambiguous and must be discarded.
+            let resolvedIdentities = completedProcessNetworkRefresh.identitiesByPID.filter {
+                pid, identity in
+                guard let current = identitiesByPID[pid] else { return true }
+                return current == identity
+            }
+            applyProcessNetworkRefresh(
+                CompletedProcessNetworkRefresh(
+                    sample: completedProcessNetworkRefresh.sample,
+                    sampledAt: completedProcessNetworkRefresh.sampledAt,
+                    identitiesByPID: resolvedIdentities
+                ),
+                at: uptime
+            )
             self.completedProcessNetworkRefresh = nil
         }
 
@@ -410,7 +622,8 @@ public actor SystemSampler {
                 bytesRead: process.bytesRead,
                 bytesWritten: process.bytesWritten,
                 networkBytesReceived: counter.received,
-                networkBytesSent: counter.sent
+                networkBytesSent: counter.sent,
+                residentMemoryBytes: 0
             )
         }
 
@@ -553,25 +766,10 @@ public actor SystemSampler {
         guard generation == processNetworkRefreshGeneration,
               processNetworkRefreshTask != nil
         else { return }
-        let completedIdentities = processCounterProvider().reduce(into: identitiesByPID) {
-            resolved, process in
-            let identity = ProcessNetworkIdentity(
-                pid: process.pid,
-                startAbstime: process.startAbstime
-            )
-            if let identityAtStart = identitiesByPID[process.pid],
-               identityAtStart != identity {
-                // The PID changed owners during the network window. Dropping the ambiguous
-                // row is safer than attributing another process's traffic to the new owner.
-                resolved.removeValue(forKey: process.pid)
-            } else {
-                resolved[process.pid] = identity
-            }
-        }
         completedProcessNetworkRefresh = CompletedProcessNetworkRefresh(
             sample: sample,
             sampledAt: sampledAt,
-            identitiesByPID: completedIdentities
+            identitiesByPID: identitiesByPID
         )
         processNetworkRefreshTask = nil
     }

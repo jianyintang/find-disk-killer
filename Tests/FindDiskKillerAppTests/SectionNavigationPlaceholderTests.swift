@@ -17,6 +17,15 @@ import Testing
     #expect(AppSection.disks.navigationPlaceholderKind == .resources)
 }
 
+@Test func overviewSkeletonUsesTheLoadedOverviewLayoutContract() {
+    #expect(OverviewLayoutContract.metricColumnCount == 3)
+    #expect(OverviewLayoutContract.metricTileCount == 6)
+    #expect(OverviewLayoutContract.applicationRowLimit == 12)
+    #expect(OverviewLayoutContract.contentSpacing == 12)
+    #expect(OverviewLayoutContract.metricSpacing == 10)
+    #expect(OverviewLayoutContract.resourceControlWidth == 320)
+}
+
 @Test func agentStorageOwnsItsOnlyToolbarActivityControl() {
     #expect(!AppSection.agentStorage.showsMonitoringToolbar)
     #expect(AppSection.overview.showsMonitoringToolbar)

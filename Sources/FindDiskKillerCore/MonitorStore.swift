@@ -20,7 +20,10 @@ public final class MonitorStore {
     public private(set) var activeApplicationCount = 0
     public private(set) var isDiskAvailable = false
     public private(set) var isSystemCPUAvailable = false
+    public private(set) var cpuCoreUsages: [CPUCoreUsage] = []
     public private(set) var isSystemNetworkAvailable = false
+    public private(set) var isSystemMemoryAvailable = false
+    public private(set) var systemMemory: SystemMemorySnapshot?
     public private(set) var isProcessNetworkAvailable = false
     public private(set) var isProcessWriteAttributionAvailable = false
     public private(set) var selectedCoverage: Double = 0
@@ -38,7 +41,7 @@ public final class MonitorStore {
     public static let samplingIntervalRange: ClosedRange<TimeInterval> = 1...60
     public private(set) var samplingInterval = defaultSamplingInterval
 
-    private static let elevatedDeviceWriteRate = 20_000_000.0
+    public static let elevatedDeviceWriteRate = 20_000_000.0
     private static let elevatedProcessWriteRate = 5_000_000.0
 
     public var currentReadRate: Double {
@@ -67,6 +70,9 @@ public final class MonitorStore {
     }
     public var currentNetworkSendRate: Double {
         recentSystemAverage(\.networkSendBytesPerSecond)
+    }
+    public var currentMemoryUsedBytes: UInt64 {
+        systemMemory?.usedBytes ?? 0
     }
     public var topWriter: ProcessActivity? {
         processes
@@ -159,6 +165,7 @@ public final class MonitorStore {
         var path: String
         var appBundlePath: String?
         var bundleIdentifier: String?
+        var historyIdentity: String
         var pids: Set<Int32>
         var sessions: Set<ProcessSession>
         var brand: ProcessBrand?
@@ -174,6 +181,7 @@ public final class MonitorStore {
         let cpuTimeNanoseconds: UInt64
         let networkBytesReceived: UInt64
         let networkBytesSent: UInt64
+        let memoryBytes: UInt64
         let networkAvailable: Bool
         let unavailableMetrics: HistoryApplicationMetricSet
     }
@@ -208,6 +216,7 @@ public final class MonitorStore {
         var cpu = 0.0
         var networkReceived = 0.0
         var networkSent = 0.0
+        var memory: UInt64 = 0
         var networkAvailable = false
     }
 
@@ -216,6 +225,7 @@ public final class MonitorStore {
     private var recentDiskSamples: [UInt64: [DiskWindowSample]] = [:]
     private var priorUptime: TimeInterval?
     private var priorSystemTotals: SystemTotals?
+    private var priorCPUCoreTotals: [UInt32: SystemTotals] = [:]
     private var priorNetworkInterfaces: [UInt32: NetworkInterfaceTotals] = [:]
     private var diskSegment = 0
     private var diskWasAvailable = false
@@ -223,6 +233,8 @@ public final class MonitorStore {
     private var cpuWasAvailable = false
     private var networkSegment = 0
     private var networkWasAvailable = false
+    private var memorySegment = 0
+    private var memoryWasAvailable = false
     private var groupHistory: [String: [ProcessRateSample]] = [:]
     private var processWriteTotals: [ProcessWriteTotalSample] = []
     private var systemLayerHistory: [SystemLayerSample] = []
@@ -325,13 +337,18 @@ public final class MonitorStore {
         systemLayerHistory.removeAll(keepingCapacity: true)
         priorUptime = nil
         priorSystemTotals = nil
+        priorCPUCoreTotals.removeAll(keepingCapacity: true)
+        cpuCoreUsages.removeAll(keepingCapacity: true)
         priorNetworkInterfaces.removeAll(keepingCapacity: true)
         diskWasAvailable = false
         cpuWasAvailable = false
         networkWasAvailable = false
+        memoryWasAvailable = false
         isDiskAvailable = false
         isSystemCPUAvailable = false
         isSystemNetworkAvailable = false
+        isSystemMemoryAvailable = false
+        systemMemory = nil
         isProcessNetworkAvailable = false
         isProcessWriteAttributionAvailable = false
         systemLayerActivity = nil
@@ -364,7 +381,11 @@ public final class MonitorStore {
         activeApplicationCount = 0
         isDiskAvailable = false
         isSystemCPUAvailable = false
+        cpuCoreUsages.removeAll(keepingCapacity: true)
+        priorCPUCoreTotals.removeAll(keepingCapacity: true)
         isSystemNetworkAvailable = false
+        isSystemMemoryAvailable = false
+        systemMemory = nil
         isProcessNetworkAvailable = false
         isProcessWriteAttributionAvailable = false
         startedAt = isCollecting ? Date() : nil
@@ -448,7 +469,11 @@ public final class MonitorStore {
     private func ingestSystem(
         _ snapshot: SystemSnapshot,
         duration: TimeInterval
-    ) -> (cpuPercent: Double?, networkReceive: UInt64, networkSend: UInt64) {
+    ) -> (
+        cpuPercent: Double?,
+        networkReceive: UInt64,
+        networkSend: UInt64
+    ) {
         let current = SystemTotals(
             cpuUser: snapshot.cpuUserTicks,
             cpuSystem: snapshot.cpuSystemTicks,
@@ -477,6 +502,34 @@ public final class MonitorStore {
             cpuSegment += 1
         }
         cpuWasAvailable = isSystemCPUAvailable
+
+        let currentCoreTotals = Dictionary(uniqueKeysWithValues: snapshot.cpuCores.map { core in
+            (
+                core.index,
+                SystemTotals(
+                    cpuUser: core.userTicks,
+                    cpuSystem: core.systemTicks,
+                    cpuNice: core.niceTicks,
+                    cpuIdle: core.idleTicks
+                )
+            )
+        })
+        cpuCoreUsages = snapshot.cpuCores.sorted { $0.index < $1.index }.compactMap { core in
+            guard let currentCore = currentCoreTotals[core.index],
+                  let priorCore = priorCPUCoreTotals[core.index]
+            else { return nil }
+            let activeTicks = safeDelta(currentCore.cpuUser, priorCore.cpuUser)
+                + safeDelta(currentCore.cpuSystem, priorCore.cpuSystem)
+                + safeDelta(currentCore.cpuNice, priorCore.cpuNice)
+            let idleTicks = safeDelta(currentCore.cpuIdle, priorCore.cpuIdle)
+            let totalTicks = activeTicks + idleTicks
+            guard totalTicks > 0 else { return nil }
+            return CPUCoreUsage(
+                index: core.index,
+                percent: min(100, max(0, Double(activeTicks) / Double(totalTicks) * 100))
+            )
+        }
+        priorCPUCoreTotals = currentCoreTotals
 
         var receiveRate: Double?
         var sendRate: Double?
@@ -510,6 +563,13 @@ public final class MonitorStore {
         }
         networkWasAvailable = isSystemNetworkAvailable
 
+        systemMemory = snapshot.memory
+        isSystemMemoryAvailable = snapshot.memory != nil
+        if isSystemMemoryAvailable, !memoryWasAvailable {
+            memorySegment += 1
+        }
+        memoryWasAvailable = isSystemMemoryAvailable
+
         systemPoints.append(SystemResourcePoint(
             timestamp: snapshot.date,
             sampleDuration: duration,
@@ -517,7 +577,10 @@ public final class MonitorStore {
             cpuSegment: cpuSegment,
             networkReceiveBytesPerSecond: receiveRate,
             networkSendBytesPerSecond: sendRate,
-            networkSegment: networkSegment
+            networkSegment: networkSegment,
+            memoryUsedBytes: snapshot.memory?.usedBytes,
+            memoryCompressedBytes: snapshot.memory?.compressedBytes,
+            memorySegment: memorySegment
         ))
         if systemPoints.count > 3_600 {
             systemPoints.removeFirst(systemPoints.count - 3_600)
@@ -635,6 +698,7 @@ public final class MonitorStore {
             cpu: UInt64,
             networkReceived: UInt64,
             networkSent: UInt64,
+            memory: UInt64,
             networkAvailable: Bool,
             unavailableMetrics: HistoryApplicationMetricSet
         )] = [:]
@@ -658,6 +722,8 @@ public final class MonitorStore {
                 name: counter.name,
                 executablePath: counter.path
             )
+            let bundleIdentifier = classification.appBundlePath
+                .flatMap { Bundle(path: $0)?.bundleIdentifier }
             livePIDsByGroup[classification.groupID, default: []].insert(counter.pid)
             liveSessionsByGroup[classification.groupID, default: []].insert(ProcessSession(
                 pid: counter.pid,
@@ -667,8 +733,15 @@ public final class MonitorStore {
                 name: classification.displayName,
                 path: counter.path,
                 appBundlePath: classification.appBundlePath,
-                bundleIdentifier: classification.appBundlePath
-                    .flatMap { Bundle(path: $0)?.bundleIdentifier },
+                bundleIdentifier: bundleIdentifier,
+                historyIdentity: historyIdentityProvider.applicationIdentity(
+                    bundleIdentifier: bundleIdentifier,
+                    fallbackIdentity: bundleIdentifier == nil
+                        ? HistoryApplicationIdentity.stableFallback(
+                            processName: classification.displayName
+                        )
+                        : classification.groupID
+                ),
                 pids: [],
                 sessions: [],
                 brand: classification.brand,
@@ -700,6 +773,7 @@ public final class MonitorStore {
             let networkAvailable = receivedDeltaValue != nil && sentDeltaValue != nil
             let receivedDelta = receivedDeltaValue ?? 0
             let sentDelta = sentDeltaValue ?? 0
+            let residentMemory = counter.residentMemoryBytes
             var unavailableMetrics: HistoryApplicationMetricSet = []
             if readDeltaValue == nil { unavailableMetrics.insert(.read) }
             if writeDeltaValue == nil { unavailableMetrics.insert(.write) }
@@ -722,11 +796,12 @@ public final class MonitorStore {
             }
             let hasActivity = readDelta > 0 || writeDelta > 0 || cpuDelta > 0
                 || receivedDelta > 0 || sentDelta > 0
+                || residentMemory > 0
                 || !unavailableMetrics.isEmpty
             guard hasActivity || groupHistory[classification.groupID] != nil else { continue }
 
             var existing = groupedDeltas[classification.groupID]
-                ?? (0, 0, 0, 0, 0, false, [])
+                ?? (0, 0, 0, 0, 0, 0, false, [])
             existing.unavailableMetrics.formUnion(unavailableMetrics)
             existing.read = Self.addProcessMetric(
                 existing.read, readDelta, metric: .read,
@@ -748,6 +823,7 @@ public final class MonitorStore {
                 existing.networkSent, sentDelta, metric: .networkSend,
                 unavailable: &existing.unavailableMetrics
             )
+            existing.memory = Self.addingClamped(existing.memory, residentMemory)
             existing.networkAvailable = (
                 // nettop omits helpers with no network observations. An app-level sample is
                 // usable when any grouped member has a valid counter delta; a source-wide
@@ -777,6 +853,7 @@ public final class MonitorStore {
                 cpuTimeNanoseconds: delta.cpu,
                 networkBytesReceived: delta.networkReceived,
                 networkBytesSent: delta.networkSent,
+                memoryBytes: delta.memory,
                 networkAvailable: delta.networkAvailable
                     && !delta.unavailableMetrics.contains(.networkReceive)
                     && !delta.unavailableMetrics.contains(.networkSend),
@@ -803,12 +880,7 @@ public final class MonitorStore {
             groupID, delta -> HistoryApplicationSample? in
             guard let metadata = groupMetadata[groupID] else { return nil }
             return HistoryApplicationSample(
-                identity: historyIdentityProvider.applicationIdentity(
-                    bundleIdentifier: metadata.bundleIdentifier,
-                    fallbackIdentity: metadata.bundleIdentifier == nil
-                        ? HistoryApplicationIdentity.stableFallback(processName: metadata.name)
-                        : groupID
-                ),
+                identity: metadata.historyIdentity,
                 name: metadata.name,
                 readBytes: delta.read,
                 writeBytes: delta.written,
@@ -1019,6 +1091,7 @@ public final class MonitorStore {
             var peakWriteRate = 0.0
             var cpuTotal = 0.0
             var peakCPU = 0.0
+            var peakMemory: UInt64 = 0
             var sampleCount = 0
             var metricNetworkSegment = 0
             var metricNetworkWasAvailable = false
@@ -1054,6 +1127,7 @@ public final class MonitorStore {
                     peakCPU = max(peakCPU, cpu)
                     sampleCount += 1
                 }
+                peakMemory = max(peakMemory, sample.memoryBytes)
                 if !sample.unavailableMetrics.contains(.networkReceive) {
                     totalReceived = Self.addingClamped(
                         totalReceived, sample.networkBytesReceived
@@ -1084,7 +1158,8 @@ public final class MonitorStore {
                         networkSendBytesPerSecond: sample.networkAvailable
                             ? Double(sample.networkBytesSent) / duration
                             : nil,
-                        networkSegment: metricNetworkSegment
+                        networkSegment: metricNetworkSegment,
+                        memoryBytes: sample.memoryBytes
                     ))
                 }
             }
@@ -1114,6 +1189,7 @@ public final class MonitorStore {
                 ) {
                     Double($0.networkBytesSent) / max(0.1, $0.duration)
                 },
+                memory: history.last?.memoryBytes ?? 0,
                 networkAvailable: history.last?.networkAvailable == true
                     && processNetworkAvailable
             )
@@ -1134,6 +1210,7 @@ public final class MonitorStore {
                 currentCPUPercent: currentRate.cpu,
                 currentNetworkReceiveBytesPerSecond: currentRate.networkReceived,
                 currentNetworkSendBytesPerSecond: currentRate.networkSent,
+                currentMemoryBytes: currentRate.memory,
                 totalReadBytes: totalRead,
                 totalWriteBytes: totalWritten,
                 totalNetworkReceivedBytes: totalReceived,
@@ -1142,6 +1219,7 @@ public final class MonitorStore {
                 peakWriteBytesPerSecond: peakWriteRate,
                 averageCPUPercent: sampleCount > 0 ? cpuTotal / Double(sampleCount) : 0,
                 peakCPUPercent: peakCPU,
+                peakMemoryBytes: peakMemory,
                 averageNetworkReceiveBytesPerSecond: networkObservedDuration > 0
                     ? Double(networkReceived) / networkObservedDuration
                     : 0,

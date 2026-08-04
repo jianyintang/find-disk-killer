@@ -1,6 +1,83 @@
+import Foundation
 import Testing
 import FindDiskKillerCore
 @testable import FindDiskKillerApp
+
+private func warningSample(_ offset: TimeInterval, _ value: Double?, segment: Int = 0) -> WarningThroughputSample {
+    WarningThroughputSample(
+        timestamp: Date(timeIntervalSinceReferenceDate: offset),
+        value: value,
+        segment: segment
+    )
+}
+
+@Test func warningOverlayConnectsThresholdCrossings() {
+    let segments = warningThroughputSegments(
+        samples: [
+            warningSample(0, 10),
+            warningSample(1, 30),
+            warningSample(2, 40),
+            warningSample(3, 10)
+        ],
+        threshold: 20
+    )
+
+    #expect(segments.count == 1)
+    #expect(segments[0].points.map(\.value) == [20, 30, 40, 20])
+    #expect(segments[0].points.map(\.timestamp) == [
+        Date(timeIntervalSinceReferenceDate: 0.5),
+        Date(timeIntervalSinceReferenceDate: 1),
+        Date(timeIntervalSinceReferenceDate: 2),
+        Date(timeIntervalSinceReferenceDate: 2.6666666666666665)
+    ])
+}
+
+@Test func warningOverlayDoesNotBridgeSamplingGapsOrSegments() {
+    let segments = warningThroughputSegments(
+        samples: [
+            warningSample(0, 10),
+            warningSample(1, 30),
+            warningSample(2, nil),
+            warningSample(3, 35, segment: 1),
+            warningSample(4, 10, segment: 1)
+        ],
+        threshold: 20
+    )
+
+    #expect(segments.count == 2)
+    #expect(segments[0].points.map(\.value) == [20, 30])
+    #expect(segments[1].points.map(\.value) == [35, 20])
+}
+
+@Test func cpuCoreEnergyBarsUseTenSegmentsPerCore() {
+    #expect(InstrumentDesign.Energy.cpuSegments == 10)
+}
+
+@Test func networkMetricBucketsSpanTheSelectedTimeWindow() {
+    let end = Date(timeIntervalSinceReferenceDate: 1_000)
+    let samples = [
+        NetworkBarSample(timestamp: end.addingTimeInterval(-600), receive: 50, send: 5),
+        NetworkBarSample(timestamp: end.addingTimeInterval(-30), receive: 3, send: 8)
+    ]
+
+    let oneMinute = networkBarBuckets(
+        samples: samples,
+        endingAt: end,
+        windowDuration: SampleRange.minute.seconds,
+        bucketCount: 6
+    )
+    let fifteenMinutes = networkBarBuckets(
+        samples: samples,
+        endingAt: end,
+        windowDuration: SampleRange.fifteenMinutes.seconds,
+        bucketCount: 6
+    )
+
+    #expect(oneMinute.count == 6)
+    #expect(oneMinute.compactMap(\.receive).max() == 3)
+    #expect(fifteenMinutes.compactMap(\.receive).max() == 50)
+    #expect(fifteenMinutes.compactMap(\.send).max() == 8)
+}
 
 @Test func overviewDiskLayoutFitsOneInternalVolumeWithoutAnEmptyGap() {
     let layout = OverviewDiskLayout(volumeCount: 1)
@@ -8,6 +85,7 @@ import FindDiskKillerCore
     #expect(layout.rowHeight == OverviewDiskLayout.singleVolumeRowHeight)
     #expect(layout.volumeViewportHeight == OverviewDiskLayout.singleVolumeRowHeight)
     #expect(abs(layout.contentHeight
+        - OverviewDiskLayout.leadValueHeight
         - OverviewDiskLayout.singleVolumeRowHeight
         - OverviewDiskLayout.summaryHeight) < 0.001)
     #expect(!layout.isScrollable)
@@ -20,6 +98,7 @@ import FindDiskKillerCore
     #expect(abs(layout.volumeViewportHeight
         - 4 * OverviewDiskLayout.standardVolumeRowHeight) < 0.001)
     #expect(abs(layout.contentHeight
+        - OverviewDiskLayout.leadValueHeight
         - layout.volumeViewportHeight
         - OverviewDiskLayout.summaryHeight) < 0.001)
     #expect(!layout.isScrollable)

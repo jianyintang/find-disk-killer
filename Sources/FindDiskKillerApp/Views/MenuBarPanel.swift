@@ -31,7 +31,7 @@ struct MenuBarPanel: View {
                         ? ByteRateFormatter.rate(store.currentReadRate)
                         : "采样缺口",
                     symbol: "eye",
-                    color: .teal
+                    color: InstrumentDesign.ColorRole.diskRead
                 )
                 MetricValue(
                     title: "写入",
@@ -39,7 +39,7 @@ struct MenuBarPanel: View {
                         ? ByteRateFormatter.rate(store.currentWriteRate)
                         : "采样缺口",
                     symbol: "pencil.line",
-                    color: .orange
+                    color: InstrumentDesign.ColorRole.diskWrite
                 )
             }
             .padding(14)

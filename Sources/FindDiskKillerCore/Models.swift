@@ -47,8 +47,23 @@ public struct SystemResourcePoint: Identifiable, Sendable {
     public let networkReceiveBytesPerSecond: Double?
     public let networkSendBytesPerSecond: Double?
     public let networkSegment: Int
+    public let memoryUsedBytes: UInt64?
+    public let memoryCompressedBytes: UInt64?
+    public let memorySegment: Int
 
     public var id: Date { timestamp }
+}
+
+public struct CPUCoreUsage: Identifiable, Equatable, Sendable {
+    public let index: UInt32
+    public let percent: Double
+
+    public var id: UInt32 { index }
+
+    public init(index: UInt32, percent: Double) {
+        self.index = index
+        self.percent = percent
+    }
 }
 
 public struct ProcessMetricPoint: Identifiable, Sendable {
@@ -59,6 +74,7 @@ public struct ProcessMetricPoint: Identifiable, Sendable {
     public let networkReceiveBytesPerSecond: Double?
     public let networkSendBytesPerSecond: Double?
     public let networkSegment: Int
+    public let memoryBytes: UInt64
 
     public var id: Date { timestamp }
 }
@@ -135,6 +151,7 @@ public struct ProcessActivity: Identifiable, Sendable {
     public let currentCPUPercent: Double
     public let currentNetworkReceiveBytesPerSecond: Double
     public let currentNetworkSendBytesPerSecond: Double
+    public let currentMemoryBytes: UInt64
     public let totalReadBytes: UInt64
     public let totalWriteBytes: UInt64
     public let totalNetworkReceivedBytes: UInt64
@@ -143,6 +160,7 @@ public struct ProcessActivity: Identifiable, Sendable {
     public let peakWriteBytesPerSecond: Double
     public let averageCPUPercent: Double
     public let peakCPUPercent: Double
+    public let peakMemoryBytes: UInt64
     public let averageNetworkReceiveBytesPerSecond: Double
     public let averageNetworkSendBytesPerSecond: Double
     public let isNetworkAvailable: Bool

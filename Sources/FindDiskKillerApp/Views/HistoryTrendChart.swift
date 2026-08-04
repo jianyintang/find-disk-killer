@@ -36,7 +36,10 @@ enum HistoryTrendMetric: String, CaseIterable, Identifiable {
 
     var styleRange: [Color] {
         switch self {
-        case .disk: [.blue, .green]
+        case .disk: [
+            InstrumentDesign.ColorRole.diskWrite,
+            InstrumentDesign.ColorRole.diskRead
+        ]
         case .cpu: [.orange]
         case .network: [.teal, .indigo]
         }
@@ -296,7 +299,7 @@ struct HistoryTrendChart: View {
                             duration: point.diskObservedSeconds
                         ))
                         : L10n.text("不可用"),
-                    color: .blue
+                    color: InstrumentDesign.ColorRole.diskWrite
                 )
                 tooltipValue(
                     L10n.text("读取"),
@@ -306,7 +309,7 @@ struct HistoryTrendChart: View {
                             duration: point.diskObservedSeconds
                         ))
                         : L10n.text("不可用"),
-                    color: .green
+                    color: InstrumentDesign.ColorRole.diskRead
                 )
             case .cpu:
                 tooltipValue(

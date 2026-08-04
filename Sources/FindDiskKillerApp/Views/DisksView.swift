@@ -75,7 +75,7 @@ struct DisksView: View {
                             ? ByteRateFormatter.rate(store.currentReadRate)
                             : "采样缺口",
                         symbol: "eye",
-                        color: .teal
+                        color: InstrumentDesign.ColorRole.diskRead
                     )
                     Divider().frame(height: 38)
                     MetricValue(
@@ -84,7 +84,7 @@ struct DisksView: View {
                             ? ByteRateFormatter.rate(store.currentWriteRate)
                             : "采样缺口",
                         symbol: "pencil.line",
-                        color: .orange
+                        color: InstrumentDesign.ColorRole.diskWrite
                     )
                     Divider().frame(height: 38)
                     MetricValue(
@@ -97,7 +97,12 @@ struct DisksView: View {
 
                 VStack(alignment: .leading, spacing: 10) {
                     SectionHeading("物理设备总吞吐", subtitle: "虚拟磁盘不计入总量")
-                    MonitorChart(points: chartPoints, height: 220)
+                    MonitorChart(
+                        points: chartPoints,
+                        height: 220,
+                        warningThreshold: MonitorStore.elevatedDeviceWriteRate,
+                        windowDuration: store.selectedRange.seconds
+                    )
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -576,7 +581,7 @@ private struct DiskHealthDetail: View {
                 title: L10n.text("累计主机写入"),
                 value: ByteRateFormatter.approximateBytes(bytes),
                 symbol: "pencil.line",
-                color: .orange
+                color: InstrumentDesign.ColorRole.diskWrite
             ))
         }
         if let used = snapshot.percentageUsed {
@@ -863,8 +868,16 @@ private struct DiskRow: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            rateBlock(L10n.text("读取"), disk.readBytesPerSecond, color: .teal)
-            rateBlock(L10n.text("写入"), disk.writeBytesPerSecond, color: .orange)
+            rateBlock(
+                L10n.text("读取"),
+                disk.readBytesPerSecond,
+                color: InstrumentDesign.ColorRole.diskRead
+            )
+            rateBlock(
+                L10n.text("写入"),
+                disk.writeBytesPerSecond,
+                color: InstrumentDesign.ColorRole.diskWrite
+            )
             VStack(alignment: .trailing, spacing: 2) {
                 Text(L10n.format(
                     "%d 次/秒",
@@ -944,8 +957,16 @@ private struct VolumeRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                rateBlock(L10n.text("读取"), readRate, color: .teal)
-                rateBlock(L10n.text("写入"), writeRate, color: .orange)
+                rateBlock(
+                    L10n.text("读取"),
+                    readRate,
+                    color: InstrumentDesign.ColorRole.diskRead
+                )
+                rateBlock(
+                    L10n.text("写入"),
+                    writeRate,
+                    color: InstrumentDesign.ColorRole.diskWrite
+                )
             }
             VStack(alignment: .trailing, spacing: 4) {
                 Text("\(ByteRateFormatter.bytes(UInt64(max(0, volume.totalCapacity - volume.availableCapacity)))) / \(ByteRateFormatter.bytes(UInt64(max(0, volume.totalCapacity))))")
@@ -1569,8 +1590,8 @@ private struct VolumeAccessEventTable: View {
     private func color(for category: VolumeAccessTraceOperationCategory) -> Color {
         switch category {
         case .metadata: .indigo
-        case .read: .teal
-        case .write: .orange
+        case .read: InstrumentDesign.ColorRole.diskRead
+        case .write: InstrumentDesign.ColorRole.diskWrite
         }
     }
 }

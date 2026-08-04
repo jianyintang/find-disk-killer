@@ -56,6 +56,7 @@ struct RootView: View {
     @State private var loadedSection: AppSection
     @State private var sectionSnapshots: [AppSection: SectionPreviewSnapshot] = [:]
     @State private var processSearchText = ""
+    @State private var isWindowLiveResizing = false
 
     init(
         store: MonitorStore,
@@ -81,25 +82,52 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: sidebarSelection) {
-                Section {
-                    ForEach(AppSection.allCases) { section in
-                        Label(section.title, systemImage: section.symbol)
-                            .tag(SidebarDestination.monitoring(section))
+            ZStack {
+                InstrumentDesign.Palette.sidebarTint
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .opacity(0.72)
+
+                List {
+                    Section {
+                        ForEach(AppSection.allCases) { section in
+                            sidebarRow(
+                                title: section.title,
+                                symbol: section.symbol,
+                                destination: .monitoring(section)
+                            )
+                        }
+                    }
+
+                    Section {
+                        sidebarRow(
+                            title: L10n.text("设置"),
+                            symbol: "gearshape",
+                            destination: .settings
+                        )
+                        sidebarRow(
+                            title: L10n.text("关于"),
+                            symbol: "info.circle",
+                            destination: .about
+                        )
                     }
                 }
-
-                Section {
-                    Label(L10n.text("设置"), systemImage: "gearshape")
-                        .tag(SidebarDestination.settings)
-                    Label(L10n.text("关于"), systemImage: "info.circle")
-                        .tag(SidebarDestination.about)
+                .navigationTitle("")
+                .listStyle(.sidebar)
+                .tint(Color.secondary.opacity(0.74))
+                .accentColor(Color.secondary.opacity(0.74))
+                .scrollContentBackground(.hidden)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    sidebarBrand
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    sidebarStatus
                 }
             }
-            .navigationTitle("FindDiskKiller")
-            .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 240)
+            .navigationSplitViewColumnWidth(min: 220, ideal: 232, max: 260)
         } detail: {
             ZStack {
+                InstrumentCanvas()
                 detail
                     .opacity(isShowingAuxiliaryPage ? 0 : 1)
                     .allowsHitTesting(!isShowingAuxiliaryPage)
@@ -107,7 +135,7 @@ struct RootView: View {
 
                 auxiliaryDetail
             }
-                .navigationTitle(detailTitle)
+                .navigationTitle(requestedSection == .overview && !isShowingAuxiliaryPage ? "" : detailTitle)
                 .toolbar {
                     if isShowingAuxiliaryPage || requestedSection.showsMonitoringToolbar {
                         StatusToolbar(store: store)
@@ -117,6 +145,102 @@ struct RootView: View {
                     await loadRequestedSection()
                 }
         }
+        .tint(InstrumentDesign.ColorRole.cpu)
+        .environment(\.isWindowLiveResizing, isWindowLiveResizing)
+        .transaction { transaction in
+            if isWindowLiveResizing { transaction.disablesAnimations = true }
+        }
+        .background {
+            ZStack {
+                InstrumentWindowConfigurator()
+                WindowLiveResizeObserver { isResizing in
+                    updateWindowLiveResizeState(isResizing)
+                }
+            }
+        }
+    }
+
+    private func updateWindowLiveResizeState(_ isResizing: Bool) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            isWindowLiveResizing = isResizing
+        }
+    }
+
+    private var sidebarBrand: some View {
+        HStack {
+            Text("FindDiskKiller")
+                .font(.system(size: 20, weight: .semibold))
+            Spacer()
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 48)
+        .padding(.bottom, 12)
+    }
+
+    private var sidebarStatus: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(store.isCollecting
+                    ? InstrumentDesign.ColorRole.healthy.opacity(0.82)
+                    : Color.secondary.opacity(0.48))
+                .frame(width: 8, height: 8)
+                .padding(.top, 5)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.text("现在"))
+                    .font(.system(size: 13, weight: .medium))
+                Text(L10n.text("实时监控"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) {
+            Divider().opacity(0.45)
+        }
+    }
+
+    private func sidebarRow(
+        title: String,
+        symbol: String,
+        destination: SidebarDestination
+    ) -> some View {
+        Button {
+            selectSidebarDestination(destination)
+        } label: {
+            Label(title, systemImage: symbol)
+                .symbolRenderingMode(.hierarchical)
+                .font(.system(size: 14, weight: .regular))
+                .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+                .padding(.horizontal, 10)
+                .background(
+                    navigation.destination == destination
+                        ? Color.primary.opacity(0.11)
+                        : Color.clear,
+                    in: RoundedRectangle(cornerRadius: InstrumentDesign.Radius.control)
+                )
+                .overlay {
+                    if navigation.destination == destination {
+                        RoundedRectangle(cornerRadius: InstrumentDesign.Radius.control)
+                            .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 2, leading: 10, bottom: 2, trailing: 10))
+    }
+
+    private func selectSidebarDestination(_ destination: SidebarDestination) {
+        navigation.select(destination)
+        guard case .monitoring(let section) = destination,
+              section != requestedSection else { return }
+        requestedSection = section
     }
 
     private var detailTitle: String {
@@ -162,7 +286,12 @@ struct RootView: View {
         } else {
             SectionNavigationPlaceholder(
                 section: requestedSection,
-                snapshot: sectionSnapshots[requestedSection]
+                snapshot: sectionSnapshots[requestedSection],
+                liveVolumeCount: store.volumes.filter(\.isLocal).count,
+                cpuCoreCount: max(
+                    store.cpuCoreUsages.count,
+                    ProcessInfo.processInfo.processorCount
+                )
             )
         }
     }
@@ -196,19 +325,6 @@ struct RootView: View {
                 navigation.showSettings(.dataAndPrivacy)
             }
         }
-    }
-
-    private var sidebarSelection: Binding<SidebarDestination?> {
-        Binding(
-            get: { navigation.destination },
-            set: { destination in
-                guard let destination else { return }
-                navigation.select(destination)
-                guard case .monitoring(let section) = destination,
-                      section != requestedSection else { return }
-                requestedSection = section
-            }
-        )
     }
 
     private func loadRequestedSection() async {
@@ -257,6 +373,50 @@ struct RootView: View {
     }
 }
 
+private struct InstrumentWindowConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.configureWhenAttached(to: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.configure(window: nsView.window)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    @MainActor
+    final class Coordinator {
+        private weak var configuredWindow: NSWindow?
+        private var isWaitingForAttachment = false
+
+        func configureWhenAttached(to view: NSView) {
+            configure(window: view.window)
+            guard configuredWindow == nil, !isWaitingForAttachment else { return }
+            isWaitingForAttachment = true
+            DispatchQueue.main.async { [weak self, weak view] in
+                guard let self else { return }
+                self.isWaitingForAttachment = false
+                self.configure(window: view?.window)
+            }
+        }
+
+        func configure(window: NSWindow?) {
+            guard let window, configuredWindow !== window else { return }
+            configuredWindow = window
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.styleMask.insert(.fullSizeContentView)
+            window.toolbarStyle = .unifiedCompact
+        }
+    }
+}
+
 private struct SectionPreviewSnapshot: Sendable {
     let capturedAt: Date
     let processes: [ProcessPreviewRow]
@@ -279,9 +439,10 @@ private struct SectionPreviewSnapshot: Sendable {
     nonisolated private static func build(_ input: SectionPreviewInput) -> Self {
         let processes: [ProcessPreviewRow]
         if input.section == .processes || input.section == .overview {
+            let limit = input.section == .overview ? 12 : 6
             processes = input.processes
                 .sorted { $0.currentCPUPercent > $1.currentCPUPercent }
-                .prefix(6)
+                .prefix(limit)
                 .map(ProcessPreviewRow.init)
         } else {
             processes = []
@@ -289,7 +450,7 @@ private struct SectionPreviewSnapshot: Sendable {
 
         let volumes: [VolumePreviewRow]
         if input.section == .disks || input.section == .overview {
-            volumes = input.volumes.prefix(4).map { volume in
+            volumes = input.volumes.filter(\.isLocal).prefix(5).map { volume in
                 let disks = input.disks.filter {
                     $0.isPhysical && volume.physicalDiskBSDNames.contains($0.bsdName)
                 }
@@ -402,6 +563,8 @@ private struct VolumePreviewRow: Identifiable, Sendable {
 private struct SectionNavigationPlaceholder: View {
     let section: AppSection
     let snapshot: SectionPreviewSnapshot?
+    let liveVolumeCount: Int
+    let cpuCoreCount: Int
     @State private var processTableWidth: CGFloat = 0
 
     var body: some View {
@@ -443,117 +606,239 @@ private struct SectionNavigationPlaceholder: View {
     }
 
     private var overviewPlaceholder: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 24) {
-                HStack(alignment: .center, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(L10n.text("应用资源行为正常"))
-                            .font(.title2.weight(.semibold))
-                        Text(L10n.text("后台持续观察应用的磁盘、CPU 与网络活动"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Picker(
-                        L10n.text("时间范围"),
-                        selection: Binding.constant(SampleRange.minute)
-                    ) {
-                        ForEach(SampleRange.allCases) { range in
-                            Text(range.localizedTitle).tag(range)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 250)
-                    Button {} label: {
-                        Image(systemName: "pause.fill")
-                    }
+        ZStack {
+            InstrumentCanvas()
+            ScrollView {
+                LazyVStack(
+                    alignment: .leading,
+                    spacing: OverviewLayoutContract.contentSpacing
+                ) {
+                    overviewHeaderPlaceholder
+                    overviewMetricGridPlaceholder
+                    overviewDiskActivityPlaceholder
+                    overviewApplicationSectionPlaceholder
                 }
-
-                HStack(spacing: 14) {
-                    overviewMetric("CPU · 最近 5 秒", "00.0%", "cpu", .blue)
-                    Divider().frame(height: 42)
-                    overviewMetric("磁盘写入 · 最近 5 秒", "0.00 MB/s", "pencil.line", .orange)
-                    Divider().frame(height: 42)
-                    overviewMetric("网络 · 最近 5 秒", "0.00 MB/s", "network", .green)
-                    Divider().frame(height: 42)
-                    overviewMetric("可见应用", "000", "square.stack.3d.up", .purple)
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    SectionHeading(
-                        L10n.text("磁盘实时"),
-                        subtitle: L10n.text("最近 5 秒的设备读写，按挂载卷名称展示")
-                    )
-                    LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: 280), spacing: 20)],
-                        alignment: .leading,
-                        spacing: 0
-                    ) {
-                        ForEach(previewVolumes) { volume in
-                            overviewVolumeRow(volume)
-                        }
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 10) {
-                    SectionHeading(
-                        L10n.text("资源趋势"),
-                        subtitle: L10n.text("物理设备吞吐，读取实线、写入虚线")
-                    ) {
-                        Picker(
-                            L10n.text("资源"),
-                            selection: Binding.constant("disk")
-                        ) {
-                            Text(L10n.text("磁盘 I/O")).tag("disk")
-                            Text("CPU").tag("cpu")
-                            Text(L10n.text("网络")).tag("network")
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .frame(width: 250)
-                    }
-                    overviewChartPlaceholder
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.text("正在活动的应用"))
-                                .font(.headline)
-                            Text(L10n.text("一个应用的磁盘、CPU 与网络行为汇总在同一处"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Text(L10n.text("点击表头排序 · 显示前 12 个"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.bottom, 8)
-
-                    overviewApplicationTable
-                }
+                .padding(.horizontal, InstrumentDesign.Spacing.page)
+                .padding(.top, OverviewLayoutContract.pageTopPadding)
+                .padding(.bottom, OverviewLayoutContract.pageBottomPadding)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 20)
-            .padding(.bottom, 28)
-            .redacted(reason: .placeholder)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(overviewLoadingAccessibilityLabel)
     }
 
-    private func overviewMetric(
+    private var overviewHeaderPlaceholder: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 18) {
+                overviewDiagnosticPlaceholder
+                Spacer(minLength: 12)
+                overviewRangePlaceholder
+                overviewLivePlaceholder
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                overviewDiagnosticPlaceholder
+                HStack(spacing: 12) {
+                    overviewRangePlaceholder
+                    Spacer(minLength: 4)
+                    overviewLivePlaceholder
+                }
+            }
+        }
+        .frame(minHeight: 62)
+    }
+
+    private var overviewDiagnosticPlaceholder: some View {
+        HStack(alignment: .center, spacing: 26) {
+            Text(L10n.text("诊断"))
+                .font(.system(size: 26, weight: .semibold))
+                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(snapshot == nil ? L10n.text("正在建立采样") : L10n.text("应用资源行为正常"))
+                    .font(.system(size: 15, weight: .medium))
+                    .lineLimit(1)
+                statusLabel
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+            }
+        }
+        .frame(width: InstrumentDesign.Layout.diagnosticIdentityWidth, alignment: .leading)
+    }
+
+    private var overviewRangePlaceholder: some View {
+        GlassSegmentedControl("时间范围", selection: Binding.constant(SampleRange.minute)) {
+            ForEach(SampleRange.allCases) { range in
+                Text(range.localizedTitle).tag(range)
+            }
+        }
+        .frame(width: 224)
+    }
+
+    private var overviewLivePlaceholder: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(InstrumentDesign.ColorRole.healthy.opacity(0.9))
+                    .frame(width: 7, height: 7)
+                Text(L10n.text("现在"))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            Button {} label: {
+                Image(systemName: "pause.fill")
+            }
+            .buttonStyle(AppIconButtonStyle(size: 32))
+        }
+    }
+
+    private var overviewMetricGridPlaceholder: some View {
+        LazyVGrid(
+            columns: Array(
+                repeating: GridItem(
+                    .flexible(minimum: 0),
+                    spacing: OverviewLayoutContract.metricSpacing
+                ),
+                count: OverviewLayoutContract.metricColumnCount
+            ),
+            spacing: OverviewLayoutContract.metricSpacing
+        ) {
+            overviewSkeletonMetric("CPU · 最近 5 秒", symbol: "cpu", accent: InstrumentDesign.ColorRole.cpu) {
+                CPUCoreEnergyBars(cores: skeletonCPUCores)
+            }
+            overviewSkeletonMetric("磁盘写入 · 最近 5 秒", symbol: "internaldrive", accent: InstrumentDesign.ColorRole.diskWrite) {
+                DiskIOSparkline(
+                    read: Array(repeating: 0, count: 12),
+                    write: Array(repeating: 0, count: 12),
+                    capacity: 20
+                )
+            }
+            overviewSkeletonMetric("网络 · 最近 5 秒", symbol: "wifi", accent: InstrumentDesign.ColorRole.read) {
+                BidirectionalNetworkBars(
+                    receive: Array(repeating: 0, count: 18),
+                    send: Array(repeating: 0, count: 18),
+                    capacity: 18
+                )
+            }
+            overviewSkeletonMetric("内存", symbol: "memorychip", accent: InstrumentDesign.ColorRole.memory) {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        skeletonLegend("已用")
+                        skeletonLegend("缓存")
+                        skeletonLegend("可用")
+                    }
+                    MemoryDonut(used: 1, total: 3)
+                        .frame(width: 42, height: 42)
+                }
+            }
+            overviewSkeletonMetric("卷容量", symbol: "externaldrive.connected.to.line.below", accent: InstrumentDesign.ColorRole.healthy) {
+                VStack(alignment: .leading, spacing: 6) {
+                    SegmentedEnergyMeter(
+                        fraction: 0.5,
+                        color: InstrumentDesign.ColorRole.healthy,
+                        threshold: 0.9
+                    )
+                    .frame(height: 14)
+                    skeletonMetricRow()
+                    skeletonMetricRow()
+                }
+            }
+            overviewSkeletonMetric("可见应用", symbol: "square.stack.3d.up", accent: InstrumentDesign.ColorRole.memory) {
+                VStack(alignment: .leading, spacing: 8) {
+                    SegmentedEnergyMeter(
+                        fraction: 0.5,
+                        color: InstrumentDesign.ColorRole.memory,
+                        segments: 8
+                    )
+                    .frame(height: 13)
+                    Text(L10n.text("应用"))
+                        .font(.caption.monospacedDigit())
+                        .redacted(reason: .placeholder)
+                }
+            }
+        }
+    }
+
+    private func overviewSkeletonMetric<Visualization: View>(
         _ title: String,
-        _ value: String,
-        _ symbol: String,
-        _ color: Color
+        symbol: String,
+        accent: Color,
+        @ViewBuilder visualization: @escaping () -> Visualization
     ) -> some View {
-        MetricValue(title: title, value: value, symbol: symbol, color: color)
+        GlassMetricTile(
+            title: title,
+            symbol: symbol,
+            accent: accent,
+            accessibilitySummary: title
+        ) {
+            DataValue(value: "00.0", unit: "MB/s")
+                .redacted(reason: .placeholder)
+        } visualization: {
+            visualization()
+                .saturation(0)
+                .opacity(0.52)
+        }
+    }
+
+    private var overviewDiskActivityPlaceholder: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SectionHeading("磁盘活动", subtitle: "最近 5 秒的设备读写，按挂载卷名称展示") {
+                GlassSegmentedControl("资源", selection: Binding.constant("disk")) {
+                    Text(L10n.text("磁盘 I/O")).tag("disk")
+                    Text("CPU").tag("cpu")
+                    Text(L10n.text("网络")).tag("network")
+                    Text(L10n.text("内存")).tag("memory")
+                }
+                .frame(width: OverviewLayoutContract.resourceControlWidth)
+            }
+
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 18) {
+                    overviewVolumeColumnPlaceholder
+                        .frame(minWidth: 270, idealWidth: 310, maxWidth: 340)
+                    Divider()
+                    overviewChartPlaceholder(height: overviewSkeletonDiskLayout.contentHeight)
+                        .frame(minWidth: 430, maxWidth: .infinity)
+                }
+
+                VStack(alignment: .leading, spacing: 14) {
+                    overviewVolumeColumnPlaceholder
+                    Divider()
+                    overviewChartPlaceholder(height: overviewSkeletonDiskLayout.contentHeight)
+                }
+            }
+        }
+        .overviewPanel()
+    }
+
+    private var overviewVolumeColumnPlaceholder: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 3) {
+                DataValue(value: "0.00", unit: "MB/s", size: 44)
+                    .redacted(reason: .placeholder)
+                Text(L10n.text("当前写入"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(height: OverviewDiskLayout.leadValueHeight, alignment: .topLeading)
+
+            ScrollView(.vertical) {
+                LazyVStack(spacing: 0) {
+                    ForEach(previewVolumes) { volume in
+                        overviewVolumeRow(volume)
+                            .frame(height: overviewSkeletonDiskLayout.rowHeight)
+                            .redacted(reason: snapshot == nil ? .placeholder : [])
+                    }
+                }
+            }
+            .scrollDisabled(true)
+            .frame(height: overviewSkeletonDiskLayout.volumeViewportHeight, alignment: .top)
+
+            overviewDiskSummaryPlaceholder
+                .frame(height: OverviewDiskLayout.summaryHeight, alignment: .top)
+        }
+        .frame(height: overviewSkeletonDiskLayout.contentHeight, alignment: .top)
     }
 
     private func overviewVolumeRow(_ volume: VolumePreviewRow) -> some View {
@@ -574,9 +859,9 @@ private struct SectionNavigationPlaceholder: View {
             Spacer(minLength: 8)
             HStack(spacing: 10) {
                 Text(ByteRateFormatter.rate(volume.readRate))
-                    .foregroundStyle(.teal)
+                    .foregroundStyle(InstrumentDesign.ColorRole.diskRead)
                 Text(ByteRateFormatter.rate(volume.writeRate))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(InstrumentDesign.ColorRole.diskWrite)
             }
             .font(.caption.monospaced().weight(.medium))
         }
@@ -584,7 +869,43 @@ private struct SectionNavigationPlaceholder: View {
         .overlay(alignment: .bottom) { Divider() }
     }
 
-    private var overviewChartPlaceholder: some View {
+    private var overviewDiskSummaryPlaceholder: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Divider()
+            Label(L10n.text("物理设备总吞吐"), systemImage: "internaldrive")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                skeletonSummaryValue("读取", color: InstrumentDesign.ColorRole.diskRead)
+                skeletonSummaryValue("写入", color: InstrumentDesign.ColorRole.diskWrite)
+                skeletonSummaryValue("写入峰值", color: .secondary)
+            }
+            HStack(spacing: 12) {
+                Text(L10n.text("读取"))
+                Text(L10n.text("写入"))
+                Spacer(minLength: 8)
+                EvidenceLabel(text: "虚拟磁盘不计入总量", symbol: "checkmark.shield")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.top, 2)
+    }
+
+    private func skeletonSummaryValue(_ title: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(L10n.text(title))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text("0.00 MB/s")
+                .font(.system(.caption, design: .monospaced, weight: .semibold))
+                .foregroundStyle(color)
+                .redacted(reason: .placeholder)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func overviewChartPlaceholder(height: CGFloat) -> some View {
         ZStack(alignment: .topLeading) {
             VStack(spacing: 0) {
                 ForEach(0..<5, id: \.self) { _ in
@@ -600,7 +921,69 @@ private struct SectionNavigationPlaceholder: View {
             .padding(.leading, 64)
             .padding(.top, 4)
         }
-        .frame(height: 176)
+        .frame(height: height)
+    }
+
+    private var overviewApplicationSectionPlaceholder: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.text("正在活动的应用"))
+                        .font(.headline)
+                    Text(L10n.text("应用与系统层的磁盘、CPU 与网络活动汇总在同一处"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(L10n.text("点击表头排序 · 显示前 12 个"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.bottom, 8)
+
+            overviewApplicationTable
+        }
+        .overviewPanel(horizontalPadding: 16, verticalPadding: 14)
+    }
+
+    private var overviewSkeletonDiskLayout: OverviewDiskLayout {
+        OverviewDiskLayout(volumeCount: previewVolumes.count)
+    }
+
+    private var skeletonCPUCores: [CPUCoreUsage] {
+        (0..<max(cpuCoreCount, 1)).map {
+            CPUCoreUsage(index: UInt32($0), percent: 0)
+        }
+    }
+
+    private func skeletonLegend(_ title: String) -> some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(Color.secondary.opacity(0.3))
+                .frame(width: 7, height: 7)
+            Text(L10n.text(title))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            Text("00.0 GB")
+                .monospacedDigit()
+                .redacted(reason: .placeholder)
+        }
+        .font(.caption2)
+    }
+
+    private func skeletonMetricRow() -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color.secondary.opacity(0.3))
+                .frame(width: 6, height: 6)
+            Text(L10n.text("个卷"))
+            Spacer(minLength: 6)
+            Text("00.0%")
+                .monospacedDigit()
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .redacted(reason: .placeholder)
     }
 
     private var overviewApplicationTable: some View {
@@ -784,23 +1167,36 @@ private struct SectionNavigationPlaceholder: View {
 
     private var previewProcesses: [ProcessPreviewRow] {
         guard let processes = snapshot?.processes, !processes.isEmpty else {
-            return (0..<6).map(ProcessPreviewRow.placeholder)
+            let count = section == .overview
+                ? OverviewLayoutContract.applicationRowLimit
+                : 6
+            return (0..<count).map(ProcessPreviewRow.placeholder)
         }
         return processes
     }
 
     private var previewVolumes: [VolumePreviewRow] {
         guard let volumes = snapshot?.volumes, !volumes.isEmpty else {
-            return (0..<4).map {
+            return (0..<liveVolumeCount).map {
                 VolumePreviewRow(
                     id: "placeholder-\($0)",
-                    name: "Mounted volume",
+                    name: L10n.text("磁盘"),
                     readRate: 0,
                     writeRate: 0
                 )
             }
         }
         return volumes
+    }
+
+    private var overviewLoadingAccessibilityLabel: String {
+        guard let snapshot else {
+            return L10n.format("正在准备%@…", section.title)
+        }
+        return L10n.format(
+            "正在刷新 · 上次结果 %@",
+            L10n.date(snapshot.capturedAt, date: .omitted, time: .standard)
+        )
     }
 
     private var previewTableHeader: some View {

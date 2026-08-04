@@ -407,18 +407,9 @@ int dm_collect_process_io(DMProcessIO *buffer, int capacity) {
         );
         sample.bytes_read = usage.ri_diskio_bytesread;
         sample.bytes_written = usage.ri_diskio_byteswritten;
+        sample.resident_memory_bytes = usage.ri_phys_footprint;
 
         proc_name(pid, sample.name, (uint32_t)sizeof(sample.name));
-        proc_pidpath(pid, sample.path, (uint32_t)sizeof(sample.path));
-        if (sample.name[0] == '\0' && sample.path[0] != '\0') {
-            const char *last_component = strrchr(sample.path, '/');
-            snprintf(
-                sample.name,
-                sizeof(sample.name),
-                "%s",
-                last_component == NULL ? sample.path : last_component + 1
-            );
-        }
         if (sample.name[0] == '\0') {
             snprintf(sample.name, sizeof(sample.name), "PID %d", pid);
         }
@@ -428,6 +419,20 @@ int dm_collect_process_io(DMProcessIO *buffer, int capacity) {
 
     free(pids);
     return output_count;
+}
+
+int dm_collect_process_path(int32_t pid, char *buffer, int capacity) {
+    if (pid <= 0 || buffer == NULL || capacity <= 1) {
+        return 0;
+    }
+    buffer[0] = '\0';
+    int count = proc_pidpath(pid, buffer, (uint32_t)capacity);
+    if (count <= 0) {
+        buffer[0] = '\0';
+        return 0;
+    }
+    buffer[capacity - 1] = '\0';
+    return count;
 }
 
 static uint64_t dm_elapsed_nanoseconds(struct timespec started) {
@@ -778,7 +783,96 @@ int dm_collect_system_stats(DMSystemStats *stats) {
         stats->cpu_idle_ticks = cpu.cpu_ticks[CPU_STATE_IDLE];
     }
 
+    vm_statistics64_data_t memory = {0};
+    mach_msg_type_number_t memory_count = HOST_VM_INFO64_COUNT;
+    kern_return_t memory_status = host_statistics64(
+        mach_host_self(),
+        HOST_VM_INFO64,
+        (host_info64_t)&memory,
+        &memory_count
+    );
+    vm_size_t page_size = 0;
+    kern_return_t page_status = host_page_size(mach_host_self(), &page_size);
+    uint64_t total_memory = 0;
+    size_t total_memory_size = sizeof(total_memory);
+    int total_status = sysctlbyname(
+        "hw.memsize",
+        &total_memory,
+        &total_memory_size,
+        NULL,
+        0
+    );
+    if (memory_status == KERN_SUCCESS
+        && page_status == KERN_SUCCESS
+        && total_status == 0
+        && page_size > 0
+        && total_memory > 0) {
+        uint64_t page_bytes = (uint64_t)page_size;
+        uint64_t available_pages = memory.free_count + memory.speculative_count;
+        uint64_t cached_pages = memory.inactive_count;
+        uint64_t available_bytes = available_pages * page_bytes;
+        if (available_bytes > total_memory) {
+            available_bytes = total_memory;
+        }
+        uint64_t cached_bytes = cached_pages * page_bytes;
+        uint64_t remaining_bytes = total_memory - available_bytes;
+        if (cached_bytes > remaining_bytes) {
+            cached_bytes = remaining_bytes;
+        }
+        uint64_t used_bytes = total_memory - available_bytes - cached_bytes;
+        uint64_t compressed_bytes = memory.compressor_page_count * page_bytes;
+        if (compressed_bytes > used_bytes) {
+            compressed_bytes = used_bytes;
+        }
+        stats->memory_total_bytes = total_memory;
+        stats->memory_available_bytes = available_bytes;
+        stats->memory_cached_bytes = cached_bytes;
+        stats->memory_compressed_bytes = compressed_bytes;
+        stats->memory_used_bytes = used_bytes;
+        stats->memory_stats_available = 1;
+    }
+
     return cpu_status == KERN_SUCCESS;
+}
+
+int dm_collect_cpu_core_stats(DMCPUCoreStats *buffer, int capacity) {
+    if (buffer == NULL || capacity <= 0) {
+        return -1;
+    }
+
+    natural_t processor_count = 0;
+    processor_info_array_t processor_info = NULL;
+    mach_msg_type_number_t processor_info_count = 0;
+    kern_return_t status = host_processor_info(
+        mach_host_self(),
+        PROCESSOR_CPU_LOAD_INFO,
+        &processor_count,
+        &processor_info,
+        &processor_info_count
+    );
+    if (status != KERN_SUCCESS || processor_info == NULL) {
+        return -1;
+    }
+
+    int output_count = (int)processor_count;
+    if (output_count > capacity) {
+        output_count = capacity;
+    }
+    processor_cpu_load_info_t load = (processor_cpu_load_info_t)processor_info;
+    for (int index = 0; index < output_count; index++) {
+        buffer[index].index = (uint32_t)index;
+        buffer[index].user_ticks = load[index].cpu_ticks[CPU_STATE_USER];
+        buffer[index].system_ticks = load[index].cpu_ticks[CPU_STATE_SYSTEM];
+        buffer[index].nice_ticks = load[index].cpu_ticks[CPU_STATE_NICE];
+        buffer[index].idle_ticks = load[index].cpu_ticks[CPU_STATE_IDLE];
+    }
+
+    vm_deallocate(
+        mach_task_self(),
+        (vm_address_t)processor_info,
+        (vm_size_t)processor_info_count * sizeof(integer_t)
+    );
+    return output_count;
 }
 
 int dm_collect_network_interfaces(DMNetworkInterface *output, int capacity) {

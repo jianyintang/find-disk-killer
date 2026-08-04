@@ -212,7 +212,7 @@ struct HistoryReportView: View {
                 ? ByteRateFormatter.bytes(report.summary.diskWriteBytes)
                 : L10n.text("不可用"),
             symbol: "arrow.down.to.line",
-            color: .blue
+            color: InstrumentDesign.ColorRole.diskWrite
         )
     }
 
@@ -223,7 +223,7 @@ struct HistoryReportView: View {
                 ? ByteRateFormatter.bytes(report.summary.diskReadBytes)
                 : L10n.text("不可用"),
             symbol: "arrow.up.from.line",
-            color: .green
+            color: InstrumentDesign.ColorRole.diskRead
         )
     }
 
