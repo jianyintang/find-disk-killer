@@ -3408,7 +3408,7 @@ private struct AgentStorageProviderOverviewRow: View {
                     lineWidth: 1
                 )
         }
-        .shadow(
+        .visualEffectShadow(
             color: .black.opacity(isHovering && isInstalled ? 0.08 : 0.035),
             radius: isHovering && isInstalled ? 10 : 4,
             y: 2
@@ -4201,12 +4201,12 @@ private struct AgentStorageProjectionProgress: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 10)
         .frame(height: 30)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .visualEffectMaterialBackground(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
         .overlay {
             RoundedRectangle(cornerRadius: 6)
                 .stroke(.separator.opacity(0.55), lineWidth: 1)
         }
-        .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
+        .visualEffectShadow(color: .black.opacity(0.08), radius: 6, y: 2)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(L10n.format("正在准备%@…", scope.title))
     }
@@ -4608,7 +4608,7 @@ private struct AgentStorageAnalysisInvitation: View {
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(.white.opacity(0.18), lineWidth: 1)
                     }
-                    .shadow(
+                    .visualEffectShadow(
                         color: Color.accentColor.opacity(isStartHovered ? 0.30 : 0.20),
                         radius: isStartHovered ? 12 : 7,
                         y: isStartHovered ? 5 : 3
@@ -5672,7 +5672,7 @@ private struct AgentStorageTransientDetail: View {
                 .fill(Color(nsColor: .separatorColor))
                 .frame(width: 1)
         }
-        .shadow(color: .black.opacity(0.16), radius: 14, x: -4, y: 0)
+        .visualEffectShadow(color: .black.opacity(0.16), radius: 14, x: -4, y: 0)
         .onExitCommand(perform: close)
     }
 }

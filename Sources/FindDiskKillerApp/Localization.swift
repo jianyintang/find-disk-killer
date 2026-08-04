@@ -113,6 +113,7 @@ enum L10n {
         return recentEnglishFallbacks[key]
             ?? historyEnglishFallbacks[key]
             ?? storageMapEnglishFallbacks[key]
+            ?? visualEffectsEnglishFallbacks[key]
             ?? localized
     }
 
@@ -372,6 +373,17 @@ enum L10n {
         "重新扫描已识别的应用、工具和数据位置": "Rescan recognized apps, tools, and data locations",
         "首次": "First",
         "首次观察": "First Observed"
+    ]
+
+    private static let visualEffectsEnglishFallbacks: [String: String] = [
+        "视觉效果": "Visual Effects",
+        "效果等级": "Effect Level",
+        "低": "Low",
+        "平衡": "Balanced",
+        "完整": "Full",
+        "关闭材质与动效，降低日常显示资源占用": "Disable materials, shadows, and motion, and simplify live charts",
+        "保留卡片玻璃和曲线平滑移动": "Keep card glass and smooth chart movement",
+        "保留完整玻璃层次和全部界面动效": "Keep the full glass hierarchy and interface motion"
     ]
 
     // New history surfaces fall back to English until each existing localization

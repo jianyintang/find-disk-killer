@@ -16,27 +16,17 @@ struct ProcessesView: View {
                 searchText: $searchText
             )
 
-            ProcessTable(
-                processes: filteredProcesses,
+            LiveProcessesTable(
+                store: store,
+                searchText: searchText,
                 selectedProcessID: selection,
-                scrollAxes: [.horizontal, .vertical],
                 hoverCoordinator: processHoverCoordinator,
-                onSelect: presentProcess,
-                isLoading: store.lastUpdatedAt == nil && searchText.isEmpty,
-                emptyStateTitle: searchText.isEmpty ? nil : L10n.text("未找到匹配的应用"),
-                emptyStateSymbol: searchText.isEmpty ? "waveform.path.ecg" : "magnifyingglass"
+                onSelect: presentProcess
             )
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .glassSurface(padding: 0)
             .padding(.top, InstrumentDesign.Spacing.related)
             .padding(.horizontal, InstrumentDesign.Spacing.page)
             .padding(.bottom, InstrumentDesign.Spacing.page)
         }
-        .background(InstrumentCanvas())
-    }
-
-    private var filteredProcesses: [ProcessActivity] {
-        Self.filter(store.processes, query: searchText)
     }
 
     static func filter(_ processes: [ProcessActivity], query: String) -> [ProcessActivity] {
@@ -135,5 +125,28 @@ struct ProcessesPageHeader: View {
             RoundedRectangle(cornerRadius: 7)
                 .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
         }
+    }
+}
+
+private struct LiveProcessesTable: View {
+    let store: MonitorStore
+    let searchText: String
+    let selectedProcessID: ProcessActivity.ID?
+    let hoverCoordinator: ProcessHoverCoordinator
+    let onSelect: (ProcessActivity) -> Void
+
+    var body: some View {
+        ProcessTable(
+            processes: ProcessesView.filter(store.processes, query: searchText),
+            selectedProcessID: selectedProcessID,
+            scrollAxes: [.horizontal, .vertical],
+            hoverCoordinator: hoverCoordinator,
+            onSelect: onSelect,
+            isLoading: store.lastUpdatedAt == nil && searchText.isEmpty,
+            emptyStateTitle: searchText.isEmpty ? nil : L10n.text("未找到匹配的应用"),
+            emptyStateSymbol: searchText.isEmpty ? "waveform.path.ecg" : "magnifyingglass"
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .glassSurface(padding: 0)
     }
 }

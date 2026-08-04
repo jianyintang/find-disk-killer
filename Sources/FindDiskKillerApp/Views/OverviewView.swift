@@ -191,19 +191,16 @@ struct OverviewView: View {
     @State private var processHoverCoordinator = ProcessHoverCoordinator()
 
     var body: some View {
-        ZStack {
-            InstrumentCanvas()
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: OverviewLayoutContract.contentSpacing) {
-                    overviewHeader
-                    metricStrip
-                    diskActivitySection
-                    applicationSection
-                }
-                .padding(.horizontal, InstrumentDesign.Spacing.page)
-                .padding(.top, OverviewLayoutContract.pageTopPadding)
-                .padding(.bottom, OverviewLayoutContract.pageBottomPadding)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: OverviewLayoutContract.contentSpacing) {
+                overviewHeader
+                metricStrip
+                diskActivitySection
+                applicationSection
             }
+            .padding(.horizontal, InstrumentDesign.Spacing.page)
+            .padding(.top, OverviewLayoutContract.pageTopPadding)
+            .padding(.bottom, OverviewLayoutContract.pageBottomPadding)
         }
     }
 
@@ -1690,7 +1687,14 @@ struct ProcessTable: View {
         sortKey: ProcessSortKey,
         ascending: Bool
     ) -> [ActiveAppRow] {
-        let sorted = rows.sorted { lhs, rhs in
+        let keyedRows = rows.map { row in
+            (
+                row: row,
+                displayName: row.displayName,
+                metric: row.metric(for: sortKey)
+            )
+        }
+        let sorted = keyedRows.sorted { lhs, rhs in
             if sortKey == .name {
                 let comparison = lhs.displayName.localizedStandardCompare(rhs.displayName)
                 if comparison != .orderedSame {
@@ -1698,10 +1702,10 @@ struct ProcessTable: View {
                         ? comparison == .orderedAscending
                         : comparison == .orderedDescending
                 }
-                return lhs.id < rhs.id
+                return lhs.row.id < rhs.row.id
             }
 
-            switch (lhs.metric(for: sortKey), rhs.metric(for: sortKey)) {
+            switch (lhs.metric, rhs.metric) {
             case let (left?, right?) where left != right:
                 return ascending ? left < right : left > right
             case (_?, nil):
@@ -1711,9 +1715,10 @@ struct ProcessTable: View {
             default:
                 let comparison = lhs.displayName.localizedStandardCompare(rhs.displayName)
                 if comparison != .orderedSame { return comparison == .orderedAscending }
-                return lhs.id < rhs.id
+                return lhs.row.id < rhs.row.id
             }
         }
+        .map(\.row)
 
         guard let limit, limit >= 0, sorted.count > limit else { return sorted }
         guard limit > 0, let systemLayer = sorted.first(where: \.isSystemLayer) else {
@@ -2128,7 +2133,7 @@ struct ProcessDetailSheet: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 16)
-        .background(.ultraThinMaterial)
+        .visualEffectMaterialBackground(.ultraThinMaterial)
     }
 
     private var overviewContent: some View {

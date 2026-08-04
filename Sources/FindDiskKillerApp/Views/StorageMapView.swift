@@ -157,6 +157,7 @@ struct StorageMapView: View {
         .focusedValue(\.agentStorageBackAction, route == .overview ? nil : {
             route = .overview
         })
+        .background(InstrumentCanvas())
     }
 
     private var overview: some View {
@@ -2085,7 +2086,7 @@ private struct StorageMapSummaryBand: View {
         .help(L10n.text("查看可安全清理的缓存"))
         .accessibilityIdentifier("storage-map-safe-cleanup")
         .onHover { isSafeCleanupHovering = $0 }
-        .shadow(
+        .visualEffectShadow(
             color: Color.teal.opacity(isSafeCleanupHovering ? 0.28 : 0.14),
             radius: isSafeCleanupHovering ? 14 : 9,
             y: 0
@@ -2157,7 +2158,7 @@ private struct StorageMapSummaryBand: View {
                             ),
                             lineWidth: 1.6
                         )
-                        .shadow(color: Color.orange.opacity(0.16), radius: 3)
+                        .visualEffectShadow(color: Color.orange.opacity(0.16), radius: 3)
                         .allowsHitTesting(false)
                 }
             }
@@ -2170,7 +2171,7 @@ private struct StorageMapSummaryBand: View {
         .accessibilityHint(L10n.text(isAnalysisRunning ? "中止当前空间扫描" : "重新扫描已识别的应用、工具和数据位置"))
         .disabled(model.phase == .detecting || model.phase == .stopping || model.candidates.isEmpty)
         .onHover { isAnalysisHovering = $0 }
-        .shadow(
+        .visualEffectShadow(
             color: (isAnalysisRunning ? Color.orange : Color.accentColor)
                 .opacity(isAnalysisHovering ? 0.22 : 0.08),
             radius: isAnalysisHovering ? 12 : 6,

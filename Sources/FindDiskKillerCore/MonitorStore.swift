@@ -132,6 +132,13 @@ public final class MonitorStore {
         let networkSent: UInt64?
     }
 
+    private struct CachedProcessClassification {
+        let name: String
+        let path: String
+        let classification: ProcessClassifier.Classification
+        let bundleIdentifier: String?
+    }
+
     private struct SystemTotals {
         let cpuUser: UInt64
         let cpuSystem: UInt64
@@ -221,6 +228,7 @@ public final class MonitorStore {
     }
 
     private var priorProcesses: [ProcessKey: ProcessTotals] = [:]
+    private var processClassifications: [ProcessKey: CachedProcessClassification] = [:]
     private var priorDisks: [UInt64: DiskTotals] = [:]
     private var recentDiskSamples: [UInt64: [DiskWindowSample]] = [:]
     private var priorUptime: TimeInterval?
@@ -331,6 +339,7 @@ public final class MonitorStore {
 
     public func resetCounterBaselines() {
         priorProcesses.removeAll(keepingCapacity: true)
+        processClassifications.removeAll(keepingCapacity: true)
         priorDisks.removeAll(keepingCapacity: true)
         recentDiskSamples.removeAll(keepingCapacity: true)
         processWriteTotals.removeAll(keepingCapacity: true)
@@ -403,11 +412,16 @@ public final class MonitorStore {
         let duration = max(0.1, snapshot.uptime - (priorUptime ?? snapshot.uptime))
         priorUptime = snapshot.uptime
         lastUpdatedAt = snapshot.date
-        if !snapshot.volumes.isEmpty || volumes.isEmpty {
+        if (!snapshot.volumes.isEmpty || volumes.isEmpty), volumes != snapshot.volumes {
             volumes = snapshot.volumes
         }
-        visibleProcessCount = snapshot.processes.count
-        isProcessNetworkAvailable = snapshot.processNetworkAvailable
+        let processCount = snapshot.processes.count
+        if visibleProcessCount != processCount {
+            visibleProcessCount = processCount
+        }
+        if isProcessNetworkAvailable != snapshot.processNetworkAvailable {
+            isProcessNetworkAvailable = snapshot.processNetworkAvailable
+        }
 
         let diskHistory = ingestDisks(snapshot.disks, at: snapshot.date, duration: duration)
         let systemHistory = ingestSystem(snapshot, duration: duration)
@@ -718,12 +732,28 @@ public final class MonitorStore {
             let prior = priorProcesses[key]
             priorProcesses[key] = current
 
-            let classification = ProcessClassifier.classify(
-                name: counter.name,
-                executablePath: counter.path
-            )
-            let bundleIdentifier = classification.appBundlePath
-                .flatMap { Bundle(path: $0)?.bundleIdentifier }
+            let cachedClassification = processClassifications[key]
+            let resolvedClassification: CachedProcessClassification
+            if let cachedClassification,
+               cachedClassification.name == counter.name,
+               cachedClassification.path == counter.path {
+                resolvedClassification = cachedClassification
+            } else {
+                let classification = ProcessClassifier.classify(
+                    name: counter.name,
+                    executablePath: counter.path
+                )
+                resolvedClassification = CachedProcessClassification(
+                    name: counter.name,
+                    path: counter.path,
+                    classification: classification,
+                    bundleIdentifier: classification.appBundlePath
+                        .flatMap { Bundle(path: $0)?.bundleIdentifier }
+                )
+                processClassifications[key] = resolvedClassification
+            }
+            let classification = resolvedClassification.classification
+            let bundleIdentifier = resolvedClassification.bundleIdentifier
             livePIDsByGroup[classification.groupID, default: []].insert(counter.pid)
             liveSessionsByGroup[classification.groupID, default: []].insert(ProcessSession(
                 pid: counter.pid,
@@ -838,6 +868,7 @@ public final class MonitorStore {
         }
 
         priorProcesses = priorProcesses.filter { liveKeys.contains($0.key) }
+        processClassifications = processClassifications.filter { liveKeys.contains($0.key) }
         for groupID in groupMetadata.keys {
             groupMetadata[groupID]?.pids = livePIDsByGroup[groupID] ?? []
             groupMetadata[groupID]?.sessions = liveSessionsByGroup[groupID] ?? []

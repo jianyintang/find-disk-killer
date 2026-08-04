@@ -61,7 +61,7 @@ struct FileAccessTraceView: View {
                 }
                 .padding(.horizontal, 18)
                 .frame(height: 42)
-                .background(.ultraThinMaterial)
+                .visualEffectMaterialBackground(.ultraThinMaterial)
                 Divider()
             }
 
@@ -727,7 +727,7 @@ private struct TraceChartTooltip: View {
                 RoundedRectangle(cornerRadius: 6)
                     .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
             }
-            .shadow(color: .black.opacity(0.16), radius: 8, y: 3)
+            .visualEffectShadow(color: .black.opacity(0.16), radius: 8, y: 3)
             .position(x: x, y: y)
         }
         .allowsHitTesting(false)

@@ -67,6 +67,7 @@ struct FindDiskKillerApp: App {
     @State private var runtime = AppRuntime.shared
     @AppStorage("showRateInMenuBar") private var showRateInMenuBar = true
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.system.rawValue
+    @AppStorage("visualEffectLevel") private var visualEffectLevelRaw = VisualEffectLevel.balanced.rawValue
 
     var body: some Scene {
         Window("FindDiskKiller", id: "main") {
@@ -85,6 +86,7 @@ struct FindDiskKillerApp: App {
                     minHeight: MainWindowMetrics.minimumHeight
                 )
                 .environment(\.locale, Locale(identifier: selectedLanguage.localeIdentifier))
+                .environment(\.visualEffectLevel, visualEffectLevel)
                 .id(appLanguage)
         }
         .defaultSize(width: MainWindowMetrics.defaultWidth, height: MainWindowMetrics.defaultHeight)
@@ -109,6 +111,7 @@ struct FindDiskKillerApp: App {
                     traceActivityRegistry: runtime.traceActivityRegistry
                 )
                 .environment(\.locale, Locale(identifier: selectedLanguage.localeIdentifier))
+                .environment(\.visualEffectLevel, visualEffectLevel)
                 .id(appLanguage)
             } else {
                 ContentUnavailableView(
@@ -124,6 +127,7 @@ struct FindDiskKillerApp: App {
             MenuBarPanel(store: runtime.store)
                 .frame(width: 340)
                 .environment(\.locale, Locale(identifier: selectedLanguage.localeIdentifier))
+                .environment(\.visualEffectLevel, visualEffectLevel)
                 .id(appLanguage)
         } label: {
             if showRateInMenuBar {
@@ -143,6 +147,10 @@ struct FindDiskKillerApp: App {
 
     private var selectedLanguage: AppLanguage {
         AppLanguage(rawValue: appLanguage) ?? .system
+    }
+
+    private var visualEffectLevel: VisualEffectLevel {
+        VisualEffectLevel(rawValue: visualEffectLevelRaw) ?? .balanced
     }
 
     private var menuBarSymbol: String {
@@ -215,6 +223,7 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
     private let reopenMainWindow: @MainActor (NSApplication) -> Bool
     private var observesWorkspaceLifecycle = false
     private var isWaitingForTerminationFlush = false
+    private var instanceLockFileDescriptor: Int32 = -1
 #if DEBUG
     private var debugMainWindow: NSWindow?
 #endif
@@ -230,6 +239,12 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
         self.runtime = runtime
         self.reopenMainWindow = reopenMainWindow ?? Self.restoreMainWindow
         super.init()
+    }
+
+    deinit {
+        guard instanceLockFileDescriptor >= 0 else { return }
+        lockf(instanceLockFileDescriptor, F_ULOCK, 0)
+        Darwin.close(instanceLockFileDescriptor)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -270,6 +285,14 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        guard acquireInstanceLock() else {
+            // Validation builds may use an explicit lock namespace so two visual
+            // variants can be compared without changing normal single-instance behavior.
+            if instanceLockNamespace == nil {
+                Self.activateExistingInstance()
+            }
+            Self.exitCommandLineOperation(with: EXIT_SUCCESS)
+        }
         runtime.launch()
         observeWorkspaceLifecycle()
         let forcesMainWindow = CommandLine.arguments.contains("--show-main-window")
@@ -306,6 +329,63 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
     private static func exitCommandLineOperation(with status: Int32) -> Never {
         fflush(stdout)
         exit(status)
+    }
+
+    private func acquireInstanceLock() -> Bool {
+        guard instanceLockFileDescriptor < 0 else { return true }
+        guard let cacheDirectory = FileManager.default.urls(
+            for: .cachesDirectory,
+            in: .userDomainMask
+        ).first else {
+            return true
+        }
+
+        let lockDirectory = cacheDirectory.appendingPathComponent(
+            instanceLockNamespace.map {
+                "com.jianyintang.FindDiskKiller.\($0)"
+            } ?? "com.jianyintang.FindDiskKiller",
+            isDirectory: true
+        )
+        do {
+            try FileManager.default.createDirectory(
+                at: lockDirectory,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            return true
+        }
+
+        let lockURL = lockDirectory.appendingPathComponent("instance.lock")
+        let descriptor = lockURL.withUnsafeFileSystemRepresentation { path -> Int32 in
+            guard let path else { return -1 }
+            return Darwin.open(
+                path,
+                O_CREAT | O_RDWR | O_CLOEXEC,
+                S_IRUSR | S_IWUSR
+            )
+        }
+        guard descriptor >= 0 else { return true }
+        guard lockf(descriptor, F_TLOCK, 0) == 0 else {
+            Darwin.close(descriptor)
+            return false
+        }
+        instanceLockFileDescriptor = descriptor
+        return true
+    }
+
+    private var instanceLockNamespace: String? {
+        guard let value = ProcessInfo.processInfo.environment[
+            "FINDDISKKILLER_VALIDATION_INSTANCE"
+        ] else { return nil }
+        let sanitized = value.filter { $0.isNumber || $0.isLetter || $0 == "-" || $0 == "_" }
+        return sanitized.isEmpty ? nil : sanitized
+    }
+
+    private static func activateExistingInstance() {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return }
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+            .first { $0.processIdentifier != getpid() }?
+            .activate(options: [.activateAllWindows])
     }
 
     func applicationShouldHandleReopen(

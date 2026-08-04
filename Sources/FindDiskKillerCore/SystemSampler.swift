@@ -352,24 +352,31 @@ public actor SystemSampler {
     }
 
     nonisolated private static func collectProcesses() -> [RawProcessCounter] {
-        let capacity = 8_192
-        var buffer = Array(repeating: DMProcessIO(), count: capacity)
-        let count = Int(dm_collect_process_io(&buffer, Int32(capacity)))
-
-        return buffer.prefix(max(0, count)).map { raw in
-            var sample = raw
-            return RawProcessCounter(
-                pid: sample.pid,
-                startAbstime: sample.start_abstime,
-                name: decodeCString(&sample.name),
-                path: "",
-                cpuTimeNanoseconds: sample.cpu_time_ns,
-                bytesRead: sample.bytes_read,
-                bytesWritten: sample.bytes_written,
-                networkBytesReceived: nil,
-                networkBytesSent: nil,
-                residentMemoryBytes: sample.resident_memory_bytes
-            )
+        // DMProcessIO reserves a 4 KB path buffer. Keep the common allocation
+        // small and grow only when the C collector reports a full buffer.
+        let maximumCapacity = 16_384
+        var capacity = 1_024
+        while true {
+            var buffer = Array(repeating: DMProcessIO(), count: capacity)
+            let count = Int(dm_collect_process_io(&buffer, Int32(capacity)))
+            if count < capacity || capacity >= maximumCapacity {
+                return buffer.prefix(max(0, count)).map { raw in
+                    var sample = raw
+                    return RawProcessCounter(
+                        pid: sample.pid,
+                        startAbstime: sample.start_abstime,
+                        name: decodeCString(&sample.name),
+                        path: "",
+                        cpuTimeNanoseconds: sample.cpu_time_ns,
+                        bytesRead: sample.bytes_read,
+                        bytesWritten: sample.bytes_written,
+                        networkBytesReceived: nil,
+                        networkBytesSent: nil,
+                        residentMemoryBytes: sample.resident_memory_bytes
+                    )
+                }
+            }
+            capacity *= 2
         }
     }
 

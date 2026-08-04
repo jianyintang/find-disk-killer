@@ -57,6 +57,7 @@ struct RootView: View {
     @State private var sectionSnapshots: [AppSection: SectionPreviewSnapshot] = [:]
     @State private var processSearchText = ""
     @State private var isWindowLiveResizing = false
+    @Environment(\.visualEffectLevel) private var visualEffectLevel
 
     init(
         store: MonitorStore,
@@ -84,9 +85,11 @@ struct RootView: View {
         NavigationSplitView {
             ZStack {
                 InstrumentDesign.Palette.sidebarTint
-                Rectangle()
-                    .fill(.ultraThinMaterial)
-                    .opacity(0.72)
+                if visualEffectLevel.usesSurfaceMaterial {
+                    Rectangle()
+                        .fill(.ultraThinMaterial)
+                        .opacity(0.72)
+                }
 
                 List {
                     Section {
@@ -148,11 +151,13 @@ struct RootView: View {
         .tint(InstrumentDesign.ColorRole.cpu)
         .environment(\.isWindowLiveResizing, isWindowLiveResizing)
         .transaction { transaction in
-            if isWindowLiveResizing { transaction.disablesAnimations = true }
+            if isWindowLiveResizing || visualEffectLevel.disablesMotion {
+                transaction.disablesAnimations = true
+            }
         }
         .background {
             ZStack {
-                InstrumentWindowConfigurator()
+                InstrumentWindowConfigurator(visualEffectLevel: visualEffectLevel)
                 WindowLiveResizeObserver { isResizing in
                     updateWindowLiveResizeState(isResizing)
                 }
@@ -199,7 +204,13 @@ struct RootView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 16)
-        .background(.ultraThinMaterial)
+        .background {
+            if visualEffectLevel.usesSurfaceMaterial {
+                Color.clear.background(.ultraThinMaterial)
+            } else {
+                InstrumentDesign.Palette.canvasRaised
+            }
+        }
         .overlay(alignment: .top) {
             Divider().opacity(0.45)
         }
@@ -368,14 +379,16 @@ struct RootView: View {
 }
 
 private struct InstrumentWindowConfigurator: NSViewRepresentable {
+    let visualEffectLevel: VisualEffectLevel
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
-        context.coordinator.configureWhenAttached(to: view)
+        context.coordinator.configureWhenAttached(to: view, visualEffectLevel: visualEffectLevel)
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        context.coordinator.configure(window: nsView.window)
+        context.coordinator.configure(window: nsView.window, visualEffectLevel: visualEffectLevel)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -385,28 +398,35 @@ private struct InstrumentWindowConfigurator: NSViewRepresentable {
     @MainActor
     final class Coordinator {
         private weak var configuredWindow: NSWindow?
+        private var configuredVisualEffectLevel: VisualEffectLevel?
         private var isWaitingForAttachment = false
 
-        func configureWhenAttached(to view: NSView) {
-            configure(window: view.window)
+        func configureWhenAttached(to view: NSView, visualEffectLevel: VisualEffectLevel) {
+            configure(window: view.window, visualEffectLevel: visualEffectLevel)
             guard configuredWindow == nil, !isWaitingForAttachment else { return }
             isWaitingForAttachment = true
-            DispatchQueue.main.async { [weak self, weak view] in
+            DispatchQueue.main.async { [weak self, weak view, visualEffectLevel] in
                 guard let self else { return }
                 self.isWaitingForAttachment = false
-                self.configure(window: view?.window)
+                self.configure(window: view?.window, visualEffectLevel: visualEffectLevel)
             }
         }
 
-        func configure(window: NSWindow?) {
-            guard let window, configuredWindow !== window else { return }
+        func configure(window: NSWindow?, visualEffectLevel: VisualEffectLevel) {
+            guard let window else { return }
+            guard configuredWindow !== window
+                    || configuredVisualEffectLevel != visualEffectLevel else { return }
             configuredWindow = window
+            configuredVisualEffectLevel = visualEffectLevel
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
-            window.isOpaque = false
-            window.backgroundColor = .clear
+            window.isOpaque = !visualEffectLevel.usesCanvasMaterial
+            window.backgroundColor = visualEffectLevel.usesCanvasMaterial
+                ? .clear
+                : .windowBackgroundColor
             window.styleMask.insert(.fullSizeContentView)
             window.toolbarStyle = .unifiedCompact
+            window.contentView?.needsDisplay = true
         }
     }
 }

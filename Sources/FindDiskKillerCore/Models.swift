@@ -91,7 +91,7 @@ public struct DiskActivity: Identifiable, Sendable {
     public let isPhysical: Bool
 }
 
-public struct VolumeInfo: Identifiable, Sendable {
+public struct VolumeInfo: Identifiable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let mountPath: String
