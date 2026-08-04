@@ -572,10 +572,20 @@ public actor SystemSampler {
             // running another full scan when nettop exits. A disappeared PID is
             // still safe to retain as a retired session; only a reused PID is
             // ambiguous and must be discarded.
-            let resolvedIdentities = completedProcessNetworkRefresh.identitiesByPID.filter {
-                pid, identity in
-                guard let current = identitiesByPID[pid] else { return true }
-                return current == identity
+            // A process may start after nettop begins its interval. Bind a PID
+            // that was absent from the initial scan to its current identity,
+            // while rejecting a PID that changed owners during the window.
+            var resolvedIdentities = completedProcessNetworkRefresh.identitiesByPID
+            if let totals = completedProcessNetworkRefresh.sample.totals {
+                for pid in totals.keys {
+                    if let original = completedProcessNetworkRefresh.identitiesByPID[pid] {
+                        if let current = identitiesByPID[pid], current != original {
+                            resolvedIdentities.removeValue(forKey: pid)
+                        }
+                    } else if let current = identitiesByPID[pid] {
+                        resolvedIdentities[pid] = current
+                    }
+                }
             }
             applyProcessNetworkRefresh(
                 CompletedProcessNetworkRefresh(
