@@ -253,6 +253,7 @@ struct MonitorChart: View {
     @State private var hoverDate: Date?
     @State private var hoverLocation: CGPoint?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.visualEffectLevel) private var visualEffectLevel
 
     init(
         points: [ThroughputPoint],
@@ -287,14 +288,16 @@ struct MonitorChart: View {
         Chart {
             ForEach(chartPoints) { point in
                 if let read = point.readBytesPerSecond {
-                AreaMark(
-                    x: .value(L10n.text("时间"), point.timestamp),
-                    yStart: .value(L10n.text("读取"), 0),
-                    yEnd: .value(L10n.text("读取"), read),
-                    series: .value(L10n.text("系列"), "read-area-\(point.segment)")
-                )
-                .foregroundStyle(InstrumentDesign.ColorRole.diskRead.opacity(0.12))
-                .interpolationMethod(.linear)
+                if visualEffectLevel.usesChartFills {
+                    AreaMark(
+                        x: .value(L10n.text("时间"), point.timestamp),
+                        yStart: .value(L10n.text("读取"), 0),
+                        yEnd: .value(L10n.text("读取"), read),
+                        series: .value(L10n.text("系列"), "read-area-\(point.segment)")
+                    )
+                    .foregroundStyle(InstrumentDesign.ColorRole.diskRead.opacity(0.12))
+                    .interpolationMethod(.linear)
+                }
                 LineMark(
                     x: .value(L10n.text("时间"), point.timestamp),
                     y: .value(L10n.text("读取"), read),
@@ -306,17 +309,19 @@ struct MonitorChart: View {
                 }
 
                 if let write = point.writeBytesPerSecond {
-                AreaMark(
-                    x: .value(L10n.text("时间"), point.timestamp),
-                    yStart: .value(L10n.text("写入"), 0),
-                    yEnd: .value(L10n.text("写入"), write),
-                    series: .value(
-                        L10n.text("系列"),
-                        "write-area-\(point.segment)"
+                if visualEffectLevel.usesChartFills {
+                    AreaMark(
+                        x: .value(L10n.text("时间"), point.timestamp),
+                        yStart: .value(L10n.text("写入"), 0),
+                        yEnd: .value(L10n.text("写入"), write),
+                        series: .value(
+                            L10n.text("系列"),
+                            "write-area-\(point.segment)"
+                        )
                     )
-                )
-                .foregroundStyle(InstrumentDesign.ColorRole.diskWrite.opacity(0.12))
-                .interpolationMethod(.linear)
+                    .foregroundStyle(InstrumentDesign.ColorRole.diskWrite.opacity(0.12))
+                    .interpolationMethod(.linear)
+                }
                 LineMark(
                     x: .value(L10n.text("时间"), point.timestamp),
                     y: .value(L10n.text("写入"), write),
@@ -352,14 +357,16 @@ struct MonitorChart: View {
             if let warningThreshold {
                 ForEach(warningSegments) { segment in
                     ForEach(segment.points) { point in
-                        AreaMark(
-                            x: .value(L10n.text("时间"), point.timestamp),
-                            yStart: .value(L10n.text("警告阈值"), warningThreshold),
-                            yEnd: .value(L10n.text("写入"), point.value),
-                            series: .value(L10n.text("系列"), "warning-area-\(segment.id)")
-                        )
-                        .foregroundStyle(InstrumentDesign.ColorRole.warning.opacity(0.10))
-                        .interpolationMethod(.linear)
+                        if visualEffectLevel.usesChartFills {
+                            AreaMark(
+                                x: .value(L10n.text("时间"), point.timestamp),
+                                yStart: .value(L10n.text("警告阈值"), warningThreshold),
+                                yEnd: .value(L10n.text("写入"), point.value),
+                                series: .value(L10n.text("系列"), "warning-area-\(segment.id)")
+                            )
+                            .foregroundStyle(InstrumentDesign.ColorRole.warning.opacity(0.10))
+                            .interpolationMethod(.linear)
+                        }
                         LineMark(
                             x: .value(L10n.text("时间"), point.timestamp),
                             y: .value(L10n.text("写入"), point.value),
@@ -415,7 +422,7 @@ struct MonitorChart: View {
         )) { _, _ in
             timeline.update(
                 with: points,
-                reduceMotion: reduceMotion,
+                reduceMotion: reduceMotion || visualEffectLevel.disablesMotion,
                 windowDuration: windowDuration
             )
         }
@@ -475,6 +482,7 @@ struct SystemCPUChart: View {
     @State private var hoverDate: Date?
     @State private var hoverLocation: CGPoint?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.visualEffectLevel) private var visualEffectLevel
 
     init(
         points: [SystemResourcePoint],
@@ -496,21 +504,23 @@ struct SystemCPUChart: View {
         let chartPoints = timeline.renderedPoints
         Chart(chartPoints) { point in
             if let cpu = point.cpuPercent {
-                AreaMark(
-                    x: .value(L10n.text("时间"), point.timestamp),
-                    yStart: .value("CPU", 0),
-                    yEnd: .value("CPU", cpu),
-                    series: .value(
-                        L10n.text("系列"),
-                        point.cpuSegment * 2 + (cpu > 80 ? 1 : 0)
+                if visualEffectLevel.usesChartFills {
+                    AreaMark(
+                        x: .value(L10n.text("时间"), point.timestamp),
+                        yStart: .value("CPU", 0),
+                        yEnd: .value("CPU", cpu),
+                        series: .value(
+                            L10n.text("系列"),
+                            point.cpuSegment * 2 + (cpu > 80 ? 1 : 0)
+                        )
                     )
-                )
-                .foregroundStyle(
-                    (cpu > 80
-                        ? InstrumentDesign.ColorRole.warning
-                        : InstrumentDesign.ColorRole.cpu).opacity(0.12)
-                )
-                .interpolationMethod(.linear)
+                    .foregroundStyle(
+                        (cpu > 80
+                            ? InstrumentDesign.ColorRole.warning
+                            : InstrumentDesign.ColorRole.cpu).opacity(0.12)
+                    )
+                    .interpolationMethod(.linear)
+                }
                 LineMark(
                     x: .value(L10n.text("时间"), point.timestamp),
                     y: .value("CPU", cpu),
@@ -575,7 +585,7 @@ struct SystemCPUChart: View {
         )) { _, _ in
             timeline.update(
                 with: points,
-                reduceMotion: reduceMotion,
+                reduceMotion: reduceMotion || visualEffectLevel.disablesMotion,
                 windowDuration: windowDuration
             )
         }
@@ -606,6 +616,7 @@ struct SystemNetworkChart: View {
     @State private var hoverDate: Date?
     @State private var hoverLocation: CGPoint?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.visualEffectLevel) private var visualEffectLevel
 
     init(
         points: [SystemResourcePoint],
@@ -626,14 +637,16 @@ struct SystemNetworkChart: View {
         let selectedTimestamp = selectedPoint?.timestamp
         Chart(timeline.renderedPoints) { point in
             if let receive = point.networkReceiveBytesPerSecond {
-                AreaMark(
-                    x: .value(L10n.text("时间"), point.timestamp),
-                    yStart: .value(L10n.text("下载"), 0),
-                    yEnd: .value(L10n.text("下载"), receive),
-                    series: .value(L10n.text("系列"), "download-area-\(point.networkSegment)")
-                )
-                .foregroundStyle(InstrumentDesign.ColorRole.read.opacity(0.12))
-                .interpolationMethod(.linear)
+                if visualEffectLevel.usesChartFills {
+                    AreaMark(
+                        x: .value(L10n.text("时间"), point.timestamp),
+                        yStart: .value(L10n.text("下载"), 0),
+                        yEnd: .value(L10n.text("下载"), receive),
+                        series: .value(L10n.text("系列"), "download-area-\(point.networkSegment)")
+                    )
+                    .foregroundStyle(InstrumentDesign.ColorRole.read.opacity(0.12))
+                    .interpolationMethod(.linear)
+                }
                 LineMark(
                     x: .value(L10n.text("时间"), point.timestamp),
                     y: .value(L10n.text("下载"), receive),
@@ -645,14 +658,16 @@ struct SystemNetworkChart: View {
             }
 
             if let send = point.networkSendBytesPerSecond {
-                AreaMark(
-                    x: .value(L10n.text("时间"), point.timestamp),
-                    yStart: .value(L10n.text("上传"), 0),
-                    yEnd: .value(L10n.text("上传"), send),
-                    series: .value(L10n.text("系列"), "upload-area-\(point.networkSegment)")
-                )
-                .foregroundStyle(InstrumentDesign.ColorRole.upload.opacity(0.10))
-                .interpolationMethod(.linear)
+                if visualEffectLevel.usesChartFills {
+                    AreaMark(
+                        x: .value(L10n.text("时间"), point.timestamp),
+                        yStart: .value(L10n.text("上传"), 0),
+                        yEnd: .value(L10n.text("上传"), send),
+                        series: .value(L10n.text("系列"), "upload-area-\(point.networkSegment)")
+                    )
+                    .foregroundStyle(InstrumentDesign.ColorRole.upload.opacity(0.10))
+                    .interpolationMethod(.linear)
+                }
                 LineMark(
                     x: .value(L10n.text("时间"), point.timestamp),
                     y: .value(L10n.text("上传"), send),
@@ -689,7 +704,7 @@ struct SystemNetworkChart: View {
         )) { _, _ in
             timeline.update(
                 with: points,
-                reduceMotion: reduceMotion,
+                reduceMotion: reduceMotion || visualEffectLevel.disablesMotion,
                 windowDuration: windowDuration
             )
         }
@@ -731,6 +746,7 @@ struct SystemMemoryChart: View {
     @State private var hoverDate: Date?
     @State private var hoverLocation: CGPoint?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.visualEffectLevel) private var visualEffectLevel
 
     init(
         points: [SystemResourcePoint],
@@ -754,12 +770,14 @@ struct SystemMemoryChart: View {
         let chartPoints = memoryChartPoints(from: timeline.renderedPoints)
         let baseline = memoryBaseline(for: chartPoints)
         Chart(chartPoints) { point in
-            AreaMark(
-                x: .value(timeLabel, point.timestamp),
-                yStart: .value(usedLabel, baseline),
-                yEnd: .value(usedLabel, point.usedBytes)
-            )
-            .foregroundStyle(InstrumentDesign.ColorRole.memory.opacity(0.11))
+            if visualEffectLevel.usesChartFills {
+                AreaMark(
+                    x: .value(timeLabel, point.timestamp),
+                    yStart: .value(usedLabel, baseline),
+                    yEnd: .value(usedLabel, point.usedBytes)
+                )
+                .foregroundStyle(InstrumentDesign.ColorRole.memory.opacity(0.11))
+            }
             LineMark(
                 x: .value(timeLabel, point.timestamp),
                 y: .value(usedLabel, point.usedBytes)
@@ -791,7 +809,7 @@ struct SystemMemoryChart: View {
         )) { _, _ in
             timeline.update(
                 with: points,
-                reduceMotion: reduceMotion,
+                reduceMotion: reduceMotion || visualEffectLevel.disablesMotion,
                 windowDuration: windowDuration
             )
         }
@@ -870,6 +888,7 @@ struct ProcessMetricChart: View {
     @State private var hoverDate: Date?
     @State private var hoverLocation: CGPoint?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.visualEffectLevel) private var visualEffectLevel
 
     init(
         points: [ProcessMetricPoint],
@@ -914,13 +933,15 @@ struct ProcessMetricChart: View {
                 switch kind {
             case .disk:
                 if let read = point.readBytesPerSecond {
-                    AreaMark(
-                        x: .value(timeLabel, point.timestamp),
-                        yStart: .value(readLabel, 0),
-                        yEnd: .value(readLabel, read),
-                        series: .value(seriesLabel, "read-area")
-                    )
-                    .foregroundStyle(InstrumentDesign.ColorRole.diskRead.opacity(0.12))
+                    if visualEffectLevel.usesChartFills {
+                        AreaMark(
+                            x: .value(timeLabel, point.timestamp),
+                            yStart: .value(readLabel, 0),
+                            yEnd: .value(readLabel, read),
+                            series: .value(seriesLabel, "read-area")
+                        )
+                        .foregroundStyle(InstrumentDesign.ColorRole.diskRead.opacity(0.12))
+                    }
                     LineMark(
                         x: .value(timeLabel, point.timestamp),
                         y: .value(readLabel, read),
@@ -931,13 +952,15 @@ struct ProcessMetricChart: View {
                     .interpolationMethod(.linear)
                 }
                 if let write = point.writeBytesPerSecond {
-                    AreaMark(
-                        x: .value(timeLabel, point.timestamp),
-                        yStart: .value(writeLabel, 0),
-                        yEnd: .value(writeLabel, write),
-                        series: .value(seriesLabel, "write-area")
-                    )
-                    .foregroundStyle(InstrumentDesign.ColorRole.diskWrite.opacity(0.12))
+                    if visualEffectLevel.usesChartFills {
+                        AreaMark(
+                            x: .value(timeLabel, point.timestamp),
+                            yStart: .value(writeLabel, 0),
+                            yEnd: .value(writeLabel, write),
+                            series: .value(seriesLabel, "write-area")
+                        )
+                        .foregroundStyle(InstrumentDesign.ColorRole.diskWrite.opacity(0.12))
+                    }
                     LineMark(
                         x: .value(timeLabel, point.timestamp),
                         y: .value(writeLabel, write),
@@ -949,12 +972,14 @@ struct ProcessMetricChart: View {
                 }
             case .cpu:
                 if let cpu = point.cpuPercent {
-                    AreaMark(
-                        x: .value(timeLabel, point.timestamp),
-                        yStart: .value("CPU", 0),
-                        yEnd: .value("CPU", cpu)
-                    )
-                    .foregroundStyle(InstrumentDesign.ColorRole.cpu.opacity(0.12))
+                    if visualEffectLevel.usesChartFills {
+                        AreaMark(
+                            x: .value(timeLabel, point.timestamp),
+                            yStart: .value("CPU", 0),
+                            yEnd: .value("CPU", cpu)
+                        )
+                        .foregroundStyle(InstrumentDesign.ColorRole.cpu.opacity(0.12))
+                    }
                     LineMark(
                         x: .value(timeLabel, point.timestamp),
                         y: .value("CPU", cpu)
@@ -965,13 +990,15 @@ struct ProcessMetricChart: View {
                 }
             case .network:
                 if let receive = point.networkReceiveBytesPerSecond {
-                    AreaMark(
-                        x: .value(timeLabel, point.timestamp),
-                        yStart: .value(downloadLabel, 0),
-                        yEnd: .value(downloadLabel, receive),
-                        series: .value(seriesLabel, "download-area-\(point.networkSegment)")
-                    )
-                    .foregroundStyle(InstrumentDesign.ColorRole.read.opacity(0.12))
+                    if visualEffectLevel.usesChartFills {
+                        AreaMark(
+                            x: .value(timeLabel, point.timestamp),
+                            yStart: .value(downloadLabel, 0),
+                            yEnd: .value(downloadLabel, receive),
+                            series: .value(seriesLabel, "download-area-\(point.networkSegment)")
+                        )
+                        .foregroundStyle(InstrumentDesign.ColorRole.read.opacity(0.12))
+                    }
                     LineMark(
                         x: .value(timeLabel, point.timestamp),
                         y: .value(downloadLabel, receive),
@@ -982,13 +1009,15 @@ struct ProcessMetricChart: View {
                     .interpolationMethod(.linear)
                 }
                 if let send = point.networkSendBytesPerSecond {
-                    AreaMark(
-                        x: .value(timeLabel, point.timestamp),
-                        yStart: .value(uploadLabel, 0),
-                        yEnd: .value(uploadLabel, send),
-                        series: .value(seriesLabel, "upload-area-\(point.networkSegment)")
-                    )
-                    .foregroundStyle(InstrumentDesign.ColorRole.upload.opacity(0.10))
+                    if visualEffectLevel.usesChartFills {
+                        AreaMark(
+                            x: .value(timeLabel, point.timestamp),
+                            yStart: .value(uploadLabel, 0),
+                            yEnd: .value(uploadLabel, send),
+                            series: .value(seriesLabel, "upload-area-\(point.networkSegment)")
+                        )
+                        .foregroundStyle(InstrumentDesign.ColorRole.upload.opacity(0.10))
+                    }
                     LineMark(
                         x: .value(timeLabel, point.timestamp),
                         y: .value(uploadLabel, send),
@@ -999,12 +1028,14 @@ struct ProcessMetricChart: View {
                     .interpolationMethod(.linear)
                 }
             case .memory:
-                AreaMark(
-                    x: .value(timeLabel, point.timestamp),
-                    yStart: .value(L10n.text("驻留内存"), memoryBaseline),
-                    yEnd: .value(L10n.text("驻留内存"), Double(point.memoryBytes))
-                )
-                .foregroundStyle(InstrumentDesign.ColorRole.memory.opacity(0.11))
+                if visualEffectLevel.usesChartFills {
+                    AreaMark(
+                        x: .value(timeLabel, point.timestamp),
+                        yStart: .value(L10n.text("驻留内存"), memoryBaseline),
+                        yEnd: .value(L10n.text("驻留内存"), Double(point.memoryBytes))
+                    )
+                    .foregroundStyle(InstrumentDesign.ColorRole.memory.opacity(0.11))
+                }
                 LineMark(
                     x: .value(timeLabel, point.timestamp),
                     y: .value(L10n.text("驻留内存"), Double(point.memoryBytes)),
@@ -1024,14 +1055,16 @@ struct ProcessMetricChart: View {
             if kind == .cpu {
                 ForEach(cpuWarningSegments) { segment in
                     ForEach(segment.points) { point in
-                        AreaMark(
-                            x: .value(timeLabel, point.timestamp),
-                            yStart: .value(L10n.text("警告阈值"), 80),
-                            yEnd: .value("CPU", point.value),
-                            series: .value(seriesLabel, "process-cpu-warning-area-\(segment.id)")
-                        )
-                        .foregroundStyle(InstrumentDesign.ColorRole.warning.opacity(0.10))
-                        .interpolationMethod(.linear)
+                        if visualEffectLevel.usesChartFills {
+                            AreaMark(
+                                x: .value(timeLabel, point.timestamp),
+                                yStart: .value(L10n.text("警告阈值"), 80),
+                                yEnd: .value("CPU", point.value),
+                                series: .value(seriesLabel, "process-cpu-warning-area-\(segment.id)")
+                            )
+                            .foregroundStyle(InstrumentDesign.ColorRole.warning.opacity(0.10))
+                            .interpolationMethod(.linear)
+                        }
                         LineMark(
                             x: .value(timeLabel, point.timestamp),
                             y: .value("CPU", point.value),
@@ -1081,7 +1114,7 @@ struct ProcessMetricChart: View {
         )) { _, _ in
             timeline.update(
                 with: points,
-                reduceMotion: reduceMotion,
+                reduceMotion: reduceMotion || visualEffectLevel.disablesMotion,
                 windowDuration: windowDuration
             )
         }
@@ -1226,12 +1259,12 @@ private struct ChartTooltip: View {
         .frame(width: 116, alignment: .leading)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .visualEffectMaterialBackground(.thickMaterial, in: RoundedRectangle(cornerRadius: 6))
         .overlay {
             RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(.separator.opacity(0.45), lineWidth: 0.5)
         }
-        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+        .visualEffectShadow(color: .black.opacity(0.12), radius: 8, y: 3)
     }
 }
 

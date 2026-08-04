@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		08EC8E6CD62A8E5E0A03E617 /* StorageMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A31940C062C714728E9ACF6 /* StorageMapView.swift */; };
 		0979572E0A5DF2D9EC840C36 /* AgentStorageQualityViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2848171CEE38313F3FC594EC /* AgentStorageQualityViews.swift */; };
+		0EC58EBC8A4E8023630787D3 /* ProcessDetailOverview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9079EFE2C4AFE05113320F7 /* ProcessDetailOverview.swift */; };
 		14074D8194BCFA4E7DC52B9B /* bun.svg in Resources */ = {isa = PBXBuildFile; fileRef = 7B9EA5A5B3717897152E994C /* bun.svg */; };
 		1421079DC284212459FB2DA2 /* chrome.svg in Resources */ = {isa = PBXBuildFile; fileRef = DC2FCEBE4534296A5E190E2E /* chrome.svg */; };
 		1499823B10B0CC6D47F29166 /* codex-openai.svg in Resources */ = {isa = PBXBuildFile; fileRef = 557B99818141A5F6C7641804 /* codex-openai.svg */; };
@@ -218,6 +219,7 @@
 		A2D149CD762D0BFD8DD8359E /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = de.lproj/Localizable.strings; sourceTree = "<group>"; };
 		A53F0E89B523716633119DE0 /* FindDiskKillerApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FindDiskKillerApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A8784670E78734B9A225A4E8 /* Localization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Localization.swift; sourceTree = "<group>"; };
+		A9079EFE2C4AFE05113320F7 /* ProcessDetailOverview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessDetailOverview.swift; sourceTree = "<group>"; };
 		A9EFE154D0FA5B35DA20055B /* StorageResourceCleanup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageResourceCleanup.swift; sourceTree = "<group>"; };
 		AE77A398DCA93D9D1D69BAF1 /* BrandLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandLinks.swift; sourceTree = "<group>"; };
 		B2AC3BDB45CF49DAF90CDD96 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/Localizable.strings; sourceTree = "<group>"; };
@@ -378,6 +380,7 @@
 				C10C6565E5CC5D4A39D52770 /* HistoryTrendChart.swift */,
 				5B5CA4BCE3E2500A9F4B1027 /* MenuBarPanel.swift */,
 				7B45AA78FCDDF1D3E2E56551 /* OverviewView.swift */,
+				A9079EFE2C4AFE05113320F7 /* ProcessDetailOverview.swift */,
 				457028605863AA4C13E784A4 /* ProcessesView.swift */,
 				397BF22044FB3F231AE3EF11 /* SettingsView.swift */,
 				66EE63E6F7899F3E16018B73 /* StorageMapFirstRunView.swift */,
@@ -676,6 +679,7 @@
 				D8E39C8B0F6523922443851B /* MenuBarPanel.swift in Sources */,
 				3A0561811B6D242B8FDAC73C /* MonitorChart.swift in Sources */,
 				25F5F0D9B0CF83F5DF35FAB8 /* OverviewView.swift in Sources */,
+				0EC58EBC8A4E8023630787D3 /* ProcessDetailOverview.swift in Sources */,
 				C58B53F593260693F3CBADD7 /* ProcessHoverCard.swift in Sources */,
 				E25BC097CC890DF89F578E08 /* ProcessIcon.swift in Sources */,
 				20DE10DF67C9B9AF86A4F08A /* ProcessKnowledge.swift in Sources */,

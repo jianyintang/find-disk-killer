@@ -876,6 +876,62 @@ private func volumeTraceFixtureDate(hour: Int, minute: Int, second: Int) throws 
 }
 
 @MainActor
+@Test func processClassificationCacheInvalidatesWhenAProcessExecs() async throws {
+    let store = MonitorStore()
+    let baseDate = Date(timeIntervalSinceReferenceDate: 1_650)
+
+    func snapshot(
+        at index: Int,
+        path: String,
+        cpu: UInt64
+    ) -> SystemSnapshot {
+        SystemSnapshot(
+            date: baseDate.addingTimeInterval(Double(index)),
+            uptime: Double(index + 1),
+            processes: [RawProcessCounter(
+                pid: 77,
+                startAbstime: 17,
+                name: "fixture",
+                path: path,
+                cpuTimeNanoseconds: cpu,
+                bytesRead: 0,
+                bytesWritten: UInt64(index) * 100,
+                networkBytesReceived: nil,
+                networkBytesSent: nil
+            )],
+            disks: [],
+            volumes: [],
+            cpuUserTicks: 0,
+            cpuSystemTicks: 0,
+            cpuNiceTicks: 0,
+            cpuIdleTicks: 0,
+            networkInterfaces: [],
+            cpuStatsAvailable: false,
+            networkInterfacesAvailable: false,
+            processNetworkAvailable: false
+        )
+    }
+
+    store.ingest(snapshot(
+        at: 0,
+        path: "/Applications/FirstFixture.app/Contents/MacOS/fixture",
+        cpu: 0
+    ))
+    await store.waitForPendingProcessSummary()
+
+    store.ingest(snapshot(
+        at: 1,
+        path: "/Applications/SecondFixture.app/Contents/MacOS/fixture",
+        cpu: 1_000_000_000
+    ))
+    await store.waitForPendingProcessSummary()
+
+    let process = try #require(store.processes.first)
+    #expect(process.name == "SecondFixture")
+    #expect(process.executablePath == "/Applications/SecondFixture.app/Contents/MacOS/fixture")
+}
+
+@MainActor
 @Test func groupedApplicationPublishesNetworkFromObservedMemberProcesses() async throws {
     let store = MonitorStore()
     let baseDate = Date(timeIntervalSinceReferenceDate: 1_750)

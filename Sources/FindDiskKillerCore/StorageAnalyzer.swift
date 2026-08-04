@@ -405,7 +405,7 @@ public actor StorageAnalyzer {
             sourceID: root.sourceID,
             rootID: root.id,
             rootPath: rootURL.path,
-            relativePath: "",
+            simulatorObjectIdentifier: nil,
             category: classification.category,
             risk: classification.risk,
             isProtected: classification.isProtected,
@@ -625,7 +625,11 @@ public actor StorageAnalyzer {
             sourceID: root.sourceID,
             rootID: root.id,
             rootPath: measuredRootPath,
-            relativePath: relativePath,
+            simulatorObjectIdentifier: simulatorObjectIdentifier(
+                sourceID: root.sourceID,
+                rootID: root.id,
+                relativePath: relativePath
+            ),
             category: classification.category,
             risk: classification.risk,
             isProtected: classification.isProtected,
@@ -651,6 +655,18 @@ public actor StorageAnalyzer {
         return measuredKind
     }
 
+    private nonisolated static func simulatorObjectIdentifier(
+        sourceID: StorageSourceID,
+        rootID: String,
+        relativePath: String
+    ) -> String? {
+        guard sourceID == .simulators,
+              rootID.hasSuffix(".devices") || rootID.contains("runtime") else {
+            return nil
+        }
+        return relativePath.split(separator: "/").first.map(String.init)
+    }
+
     private func reconcile(
         candidates: [StorageSourceCandidate],
         ledger: [StoragePhysicalIdentity: StorageLedgerEntry],
@@ -661,6 +677,8 @@ public actor StorageAnalyzer {
         var aggregates: [StorageComponentKey: StorageComponentAccumulator] = [:]
         var simulatorObjects: [SimulatorObjectKey: StorageObjectAccumulator] = [:]
         var volumeUsage: [String: [StorageSourceID: UInt64]] = [:]
+        var volumeIDByRootPath: [String: String] = [:]
+        var rootPathsWithoutVolume = Set<String>()
         var conflictBytes: UInt64 = 0
 
         for entry in ledger.values {
@@ -668,9 +686,24 @@ public actor StorageAnalyzer {
                 conflictBytes = conflictBytes.addingClamped(entry.allocatedBytes)
                 continue
             }
-            if let volume = VolumePathResolver.bestMatch(for: claim.rootPath, in: mountedVolumes) {
-                volumeUsage[volume.id, default: [:]][claim.sourceID, default: 0] =
-                    volumeUsage[volume.id, default: [:]][claim.sourceID, default: 0]
+            let volumeID: String?
+            if let cached = volumeIDByRootPath[claim.rootPath] {
+                volumeID = cached
+            } else if rootPathsWithoutVolume.contains(claim.rootPath) {
+                volumeID = nil
+            } else if let resolved = VolumePathResolver.bestMatch(
+                for: claim.rootPath,
+                in: mountedVolumes
+            )?.id {
+                volumeIDByRootPath[claim.rootPath] = resolved
+                volumeID = resolved
+            } else {
+                rootPathsWithoutVolume.insert(claim.rootPath)
+                volumeID = nil
+            }
+            if let volumeID {
+                volumeUsage[volumeID, default: [:]][claim.sourceID, default: 0] =
+                    volumeUsage[volumeID, default: [:]][claim.sourceID, default: 0]
                         .addingClamped(entry.allocatedBytes)
             }
             let key = StorageComponentKey(
@@ -696,7 +729,7 @@ public actor StorageAnalyzer {
 
             if claim.sourceID == .simulators,
                claim.rootID.hasSuffix(".devices") || claim.rootID.contains("runtime"),
-               let objectIdentifier = claim.relativePath.split(separator: "/").first.map(String.init) {
+               let objectIdentifier = claim.simulatorObjectIdentifier {
                 let objectKey = SimulatorObjectKey(
                     rootID: claim.rootID,
                     identifier: objectIdentifier
@@ -1529,8 +1562,7 @@ private final class StorageScanProgressAccumulator: @unchecked Sendable {
         completed: Bool,
         volumeBytes: [String: UInt64]
     ) {
-        let update: StorageScanProgress
-        let shouldEmit: Bool
+        var update: StorageScanProgress?
         lock.lock()
         let previous = latestBySource[sourceID]
         if completed {
@@ -1588,33 +1620,36 @@ private final class StorageScanProgressAccumulator: @unchecked Sendable {
             )
         }
         if completed { completedSources.insert(sourceID) }
-        let totals = latestBySource.values.reduce(into: (entries: 0, bytes: UInt64(0))) { result, value in
-            result.entries += value.entries
-            result.bytes = result.bytes.addingClamped(value.bytes)
-        }
-        update = StorageScanProgress(
-            phase: .measuring,
-            sourceID: sourceID,
-            completedSourceCount: completedSources.count,
-            totalSourceCount: totalSourceCount,
-            processedEntryCount: totals.entries,
-            processedBytes: totals.bytes,
-            sourceProcessedEntryCount: latestBySource[sourceID]?.entries ?? entries,
-            sourceProcessedBytes: latestBySource[sourceID]?.bytes ?? bytes,
-            currentWork: latestBySource[sourceID]?.currentWork,
-            currentWorkIndex: latestBySource[sourceID]?.currentWorkIndex,
-            totalWorkCount: latestBySource[sourceID]?.totalWorkCount,
-            sourceCompleted: latestBySource[sourceID]?.completed == true,
-            volumes: makeVolumes()
-        )
         let now = clock.now
         let intervalElapsed = lastEmissionBySource[sourceID].map {
             $0.duration(to: now) >= minimumEmissionInterval
         } ?? true
-        shouldEmit = completed || intervalElapsed
-        if shouldEmit { lastEmissionBySource[sourceID] = now }
+        if completed || intervalElapsed {
+            lastEmissionBySource[sourceID] = now
+            let totals = latestBySource.values.reduce(
+                into: (entries: 0, bytes: UInt64(0))
+            ) { result, value in
+                result.entries += value.entries
+                result.bytes = result.bytes.addingClamped(value.bytes)
+            }
+            update = StorageScanProgress(
+                phase: .measuring,
+                sourceID: sourceID,
+                completedSourceCount: completedSources.count,
+                totalSourceCount: totalSourceCount,
+                processedEntryCount: totals.entries,
+                processedBytes: totals.bytes,
+                sourceProcessedEntryCount: latestBySource[sourceID]?.entries ?? entries,
+                sourceProcessedBytes: latestBySource[sourceID]?.bytes ?? bytes,
+                currentWork: latestBySource[sourceID]?.currentWork,
+                currentWorkIndex: latestBySource[sourceID]?.currentWorkIndex,
+                totalWorkCount: latestBySource[sourceID]?.totalWorkCount,
+                sourceCompleted: latestBySource[sourceID]?.completed == true,
+                volumes: makeVolumes()
+            )
+        }
         lock.unlock()
-        if shouldEmit { progress?(update) }
+        if let update { progress?(update) }
     }
 
     private func makeVolumes() -> [StorageVolumeSnapshot] {
@@ -1678,7 +1713,7 @@ private struct StorageLedgerClaim: Sendable {
     let sourceID: StorageSourceID
     let rootID: String
     let rootPath: String
-    let relativePath: String
+    let simulatorObjectIdentifier: String?
     let category: String
     let risk: StorageRiskLevel
     let isProtected: Bool

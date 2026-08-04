@@ -17,6 +17,7 @@ struct SettingsPage: View {
     @AppStorage("showRateInMenuBar") private var showRateInMenuBar = true
     @AppStorage("sampleInterval") private var sampleInterval = MonitorStore.defaultSamplingInterval
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.system.rawValue
+    @AppStorage("visualEffectLevel") private var visualEffectLevelRaw = VisualEffectLevel.balanced.rawValue
     @AppStorage("openMainWindowAtLogin") private var openMainWindowAtLogin = false
     @AppStorage(AgentStoragePreferences.hidePrivateDetailsKey)
     private var hidesAgentStoragePrivateDetails = false
@@ -129,6 +130,20 @@ struct SettingsPage: View {
                         .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 3)
+                }
+
+                Section(L10n.text("视觉效果")) {
+                    Picker(L10n.text("效果等级"), selection: $visualEffectLevelRaw) {
+                        ForEach(VisualEffectLevel.allCases) { level in
+                            Text(level.localizedTitle).tag(level.rawValue)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    let selectedLevel = VisualEffectLevel(rawValue: visualEffectLevelRaw) ?? .balanced
+                    Text(selectedLevel.localizedSummary)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Section(L10n.text("Claude 官方清理")) {

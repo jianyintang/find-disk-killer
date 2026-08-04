@@ -347,12 +347,15 @@ struct HistoryTrendChart: View {
             }
         }
         .padding(10)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .visualEffectMaterialBackground(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+        )
         .overlay {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
         }
-        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+        .visualEffectShadow(color: .black.opacity(0.12), radius: 8, y: 3)
         .accessibilityHidden(true)
     }
 

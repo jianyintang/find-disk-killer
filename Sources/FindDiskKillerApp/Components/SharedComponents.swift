@@ -3,6 +3,47 @@ import Charts
 import FindDiskKillerCore
 import SwiftUI
 
+enum VisualEffectLevel: String, CaseIterable, Identifiable, Sendable {
+    case low
+    case balanced
+    case full
+
+    var id: String { rawValue }
+
+    var localizedTitle: String {
+        switch self {
+        case .low: L10n.text("低")
+        case .balanced: L10n.text("平衡")
+        case .full: L10n.text("完整")
+        }
+    }
+
+    var localizedSummary: String {
+        switch self {
+        case .low: L10n.text("关闭材质与动效，降低日常显示资源占用")
+        case .balanced: L10n.text("保留卡片玻璃和曲线平滑移动")
+        case .full: L10n.text("保留完整玻璃层次和全部界面动效")
+        }
+    }
+
+    var usesCanvasMaterial: Bool { self == .full }
+    var usesSurfaceMaterial: Bool { self != .low }
+    var usesShadows: Bool { self != .low }
+    var usesChartFills: Bool { self != .low }
+    var disablesMotion: Bool { self == .low }
+}
+
+private struct VisualEffectLevelEnvironmentKey: EnvironmentKey {
+    static let defaultValue = VisualEffectLevel.full
+}
+
+extension EnvironmentValues {
+    var visualEffectLevel: VisualEffectLevel {
+        get { self[VisualEffectLevelEnvironmentKey.self] }
+        set { self[VisualEffectLevelEnvironmentKey.self] = newValue }
+    }
+}
+
 private struct WindowLiveResizeEnvironmentKey: EnvironmentKey {
     static let defaultValue = false
 }
@@ -38,9 +79,8 @@ enum InstrumentDesign {
     }
 
     enum Motion {
-        // A 360 ms sweep remains legible as a physical timeline advance while
-        // keeping several live instruments from holding the window at display
-        // refresh rate for a substantial part of every sampling interval.
+        // Keep the sweep shorter than the sampling interval while preserving
+        // the instrument's physical left-to-right movement.
         static let sampleTransitionDuration = 0.36
     }
 
@@ -89,22 +129,25 @@ struct InstrumentCanvas: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.isWindowLiveResizing) private var isWindowLiveResizing
+    @Environment(\.visualEffectLevel) private var visualEffectLevel
 
     var body: some View {
         ZStack {
             InstrumentDesign.Palette.canvas
-            if !reduceTransparency && !isWindowLiveResizing {
+            if visualEffectLevel.usesCanvasMaterial && !reduceTransparency && !isWindowLiveResizing {
                 Rectangle()
                     .fill(.ultraThinMaterial)
                     .opacity(colorScheme == .dark ? 0.46 : 0.34)
             }
-            LinearGradient(
-                colors: colorScheme == .dark
-                    ? [Color.white.opacity(0.028), .clear, Color.black.opacity(0.16)]
-                    : [Color.white.opacity(0.34), .clear, Color.black.opacity(0.035)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+            if visualEffectLevel.usesSurfaceMaterial {
+                LinearGradient(
+                    colors: colorScheme == .dark
+                        ? [Color.white.opacity(0.028), .clear, Color.black.opacity(0.16)]
+                        : [Color.white.opacity(0.34), .clear, Color.black.opacity(0.035)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
         }
         .ignoresSafeArea()
         .accessibilityHidden(true)
@@ -120,6 +163,7 @@ struct GlassSurface<Content: View>: View {
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.isWindowLiveResizing) private var isWindowLiveResizing
+    @Environment(\.visualEffectLevel) private var visualEffectLevel
 
     init(
         cornerRadius: CGFloat = InstrumentDesign.Radius.panel,
@@ -131,27 +175,33 @@ struct GlassSurface<Content: View>: View {
         self.content = content()
     }
 
+    @ViewBuilder
     var body: some View {
-        content
+        let surface = content
             .padding(padding)
             .background { surfaceBackground }
             .overlay { edgeTreatment }
-            .shadow(
-                color: .black.opacity(isWindowLiveResizing ? 0 : (colorScheme == .dark ? 0.38 : 0.10)),
-                radius: isWindowLiveResizing ? 0 : (colorScheme == .dark ? 9 : 7),
-                y: isWindowLiveResizing ? 0 : 3
-            )
-            .shadow(
-                color: .white.opacity(isWindowLiveResizing ? 0 : (colorScheme == .dark ? 0.025 : 0.30)),
-                radius: isWindowLiveResizing ? 0 : 1,
-                y: isWindowLiveResizing ? 0 : -0.5
-            )
+        if visualEffectLevel.usesShadows && !isWindowLiveResizing {
+            surface
+                .shadow(
+                    color: .black.opacity(colorScheme == .dark ? 0.38 : 0.10),
+                    radius: colorScheme == .dark ? 9 : 7,
+                    y: 3
+                )
+                .shadow(
+                    color: .white.opacity(colorScheme == .dark ? 0.025 : 0.30),
+                    radius: 1,
+                    y: -0.5
+                )
+        } else {
+            surface
+        }
     }
 
     @ViewBuilder
     private var surfaceBackground: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        if reduceTransparency || isWindowLiveResizing {
+        if reduceTransparency || isWindowLiveResizing || !visualEffectLevel.usesSurfaceMaterial {
             shape.fill(InstrumentDesign.Palette.canvasRaised)
         } else {
             shape
@@ -176,31 +226,36 @@ struct GlassSurface<Content: View>: View {
         }
     }
 
+    @ViewBuilder
     private var edgeTreatment: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        return ZStack {
-            shape.strokeBorder(
-                Color.primary.opacity(contrast == .increased ? 0.40 : 0.13),
-                lineWidth: contrast == .increased ? 1 : 0.75
-            )
-            shape.strokeBorder(
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(colorScheme == .dark ? 0.20 : 0.72),
-                        Color.white.opacity(0.025),
-                        Color.black.opacity(colorScheme == .dark ? 0.34 : 0.10)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                lineWidth: InstrumentDesign.Stroke.hairline
-            )
-            shape
-                .inset(by: 1.25)
-                .strokeBorder(
-                    Color.white.opacity(colorScheme == .dark ? 0.035 : 0.20),
-                    lineWidth: 0.5
+        ZStack {
+            if !visualEffectLevel.usesSurfaceMaterial {
+                shape.strokeBorder(Color.primary.opacity(contrast == .increased ? 0.30 : 0.10), lineWidth: 0.75)
+            } else {
+                shape.strokeBorder(
+                    Color.primary.opacity(contrast == .increased ? 0.40 : 0.13),
+                    lineWidth: contrast == .increased ? 1 : 0.75
                 )
+                shape.strokeBorder(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(colorScheme == .dark ? 0.20 : 0.72),
+                            Color.white.opacity(0.025),
+                            Color.black.opacity(colorScheme == .dark ? 0.34 : 0.10)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: InstrumentDesign.Stroke.hairline
+                )
+                shape
+                    .inset(by: 1.25)
+                    .strokeBorder(
+                        Color.white.opacity(colorScheme == .dark ? 0.035 : 0.20),
+                        lineWidth: 0.5
+                    )
+            }
         }
         .accessibilityHidden(true)
     }
@@ -212,6 +267,69 @@ extension View {
         padding: CGFloat = InstrumentDesign.Spacing.section
     ) -> some View {
         GlassSurface(cornerRadius: cornerRadius, padding: padding) { self }
+    }
+
+    func visualEffectMaterialBackground(_ material: Material) -> some View {
+        modifier(VisualEffectMaterialBackgroundModifier(material: material))
+    }
+
+    func visualEffectMaterialBackground<S: Shape>(_ material: Material, in shape: S) -> some View {
+        modifier(VisualEffectShapedMaterialBackgroundModifier(material: material, shape: shape))
+    }
+
+    func visualEffectShadow(
+        color: Color,
+        radius: CGFloat,
+        x: CGFloat = 0,
+        y: CGFloat = 0
+    ) -> some View {
+        modifier(VisualEffectShadowModifier(color: color, radius: radius, x: x, y: y))
+    }
+}
+
+private struct VisualEffectShadowModifier: ViewModifier {
+    let color: Color
+    let radius: CGFloat
+    let x: CGFloat
+    let y: CGFloat
+    @Environment(\.visualEffectLevel) private var visualEffectLevel
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if visualEffectLevel.usesShadows {
+            content.shadow(color: color, radius: radius, x: x, y: y)
+        } else {
+            content
+        }
+    }
+}
+
+private struct VisualEffectMaterialBackgroundModifier: ViewModifier {
+    let material: Material
+    @Environment(\.visualEffectLevel) private var visualEffectLevel
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if visualEffectLevel.usesSurfaceMaterial {
+            content.background(material)
+        } else {
+            content.background(InstrumentDesign.Palette.canvasRaised)
+        }
+    }
+}
+
+private struct VisualEffectShapedMaterialBackgroundModifier<S: Shape>: ViewModifier {
+    let material: Material
+    let shape: S
+    @Environment(\.visualEffectLevel) private var visualEffectLevel
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if visualEffectLevel.usesSurfaceMaterial {
+            content.background(material, in: shape)
+        } else {
+            content.background(InstrumentDesign.Palette.canvasRaised, in: shape)
+        }
     }
 }
 
@@ -557,6 +675,7 @@ struct InstrumentSparkline: View {
     @State private var scrollProgress = 0.0
     @State private var transitionTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.visualEffectLevel) private var visualEffectLevel
 
     init(values: [Double?], color: Color, capacity: Int? = nil) {
         self.values = values
@@ -572,8 +691,10 @@ struct InstrumentSparkline: View {
 
     var body: some View {
         ZStack {
-            sparklineShape(closesToBaseline: true)
-                .fill(color.opacity(0.13))
+            if visualEffectLevel.usesChartFills {
+                sparklineShape(closesToBaseline: true)
+                    .fill(color.opacity(0.13))
+            }
             sparklineShape(closesToBaseline: false)
                 .stroke(
                     color,
@@ -626,8 +747,7 @@ struct InstrumentSparkline: View {
             && Array(currentValues.dropFirst()) == Array(nextValues.dropLast())
         let isGrowing = nextValues.count == currentValues.count + 1
             && Array(nextValues.dropLast()) == currentValues
-        guard !reduceMotion, isRolling || isGrowing
-        else {
+        guard !reduceMotion, !visualEffectLevel.disablesMotion, isRolling || isGrowing else {
             replaceSamples(with: nextValues)
             return
         }
@@ -696,6 +816,7 @@ struct DiskIOSparkline: View {
     @State private var scrollProgress = 0.0
     @State private var transitionTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.visualEffectLevel) private var visualEffectLevel
 
     init(read: [Double?], write: [Double?], capacity: Int) {
         self.read = read
@@ -709,10 +830,12 @@ struct DiskIOSparkline: View {
 
     var body: some View {
         ZStack {
-            shape(values: samples.map(\.read), closesToBaseline: true)
-                .fill(InstrumentDesign.ColorRole.diskRead.opacity(0.10))
-            shape(values: samples.map(\.write), closesToBaseline: true)
-                .fill(InstrumentDesign.ColorRole.diskWrite.opacity(0.12))
+            if visualEffectLevel.usesChartFills {
+                shape(values: samples.map(\.read), closesToBaseline: true)
+                    .fill(InstrumentDesign.ColorRole.diskRead.opacity(0.10))
+                shape(values: samples.map(\.write), closesToBaseline: true)
+                    .fill(InstrumentDesign.ColorRole.diskWrite.opacity(0.12))
+            }
             shape(values: samples.map(\.read), closesToBaseline: false)
                 .stroke(
                     InstrumentDesign.ColorRole.diskRead.opacity(0.88),
@@ -781,8 +904,10 @@ struct DiskIOSparkline: View {
             )
         let isGrowing = incomingValues.count == currentValues.count + 1
             && valuesEqual(Array(incomingValues.dropLast()), currentValues)
-        guard !reduceMotion, isRolling || isGrowing, let latest = incomingValues.last
-        else {
+        guard !reduceMotion,
+              !visualEffectLevel.disablesMotion,
+              isRolling || isGrowing,
+              let latest = incomingValues.last else {
             replaceSamples(with: incomingValues)
             return
         }
@@ -924,6 +1049,7 @@ struct BidirectionalNetworkBars: View {
     @State private var scrollProgress = 0.0
     @State private var transitionTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.visualEffectLevel) private var visualEffectLevel
 
     init(receive: [Double?], send: [Double?], capacity: Int? = nil) {
         self.receive = receive
@@ -987,18 +1113,16 @@ struct BidirectionalNetworkBars: View {
                 Array(incomingValues.dropLast()),
                 by: { $0.0 == $1.0 && $0.1 == $1.1 }
             )
-        // Bucketed network data keeps a fixed count. Its boundaries move with
-        // the selected time window, so historical bucket values can change a
-        // little even when the timeline has advanced by one bucket. Preserve
-        // the physical motion in that case instead of replacing all bars.
         let fixedWindowRolling = currentValues.count == incomingValues.count
             && currentValues.count >= capacity
             && currentValues.count > 1
         let isRolling = exactRolling || fixedWindowRolling
         let isGrowing = incomingValues.count == currentValues.count + 1
             && timelineValuesEqual(Array(incomingValues.dropLast()), currentValues)
-        guard !reduceMotion, isRolling || isGrowing, let latest = incomingValues.last
-        else {
+        guard !reduceMotion,
+              !visualEffectLevel.disablesMotion,
+              isRolling || isGrowing,
+              let latest = incomingValues.last else {
             replaceSamples(with: incomingValues)
             return
         }
@@ -1268,7 +1392,7 @@ private struct AppActionButtonBody<Label: View>: View {
                     .stroke(Color.white.opacity(kind == .secondary ? 0.07 : 0.16), lineWidth: 0.5)
                     .mask(Rectangle().frame(height: 10).frame(maxHeight: .infinity, alignment: .top))
             }
-            .shadow(
+            .visualEffectShadow(
                 color: shadowColor,
                 radius: kind == .secondary ? 0 : 2,
                 y: kind == .secondary ? 0 : 1
