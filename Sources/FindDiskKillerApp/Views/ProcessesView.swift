@@ -11,15 +11,10 @@ struct ProcessesView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            InstrumentPageHeader(
-                "应用",
-                symbol: "square.stack.3d.up"
+            ProcessesPageHeader(
+                selectedRange: Bindable(store).selectedRange,
+                searchText: $searchText
             )
-            processesToolbar
-                .padding(.horizontal, InstrumentDesign.Spacing.page)
-                .padding(.vertical, InstrumentDesign.Spacing.related)
-                .glassSurface(padding: 10)
-                .padding(.horizontal, InstrumentDesign.Spacing.page)
 
             ProcessTable(
                 processes: filteredProcesses,
@@ -33,86 +28,11 @@ struct ProcessesView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .glassSurface(padding: 0)
+            .padding(.top, InstrumentDesign.Spacing.related)
             .padding(.horizontal, InstrumentDesign.Spacing.page)
             .padding(.bottom, InstrumentDesign.Spacing.page)
         }
         .background(InstrumentCanvas())
-    }
-
-    private var processesToolbar: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 14) {
-                rangeControl(showsLabel: true)
-                Spacer(minLength: 16)
-                processSearchField
-                EvidenceLabel(
-                    text: "I/O · CPU · 网络 · 当前用户可见",
-                    symbol: "person.crop.circle.badge.checkmark"
-                )
-            }
-
-            HStack(spacing: 12) {
-                rangeControl(showsLabel: false)
-                Spacer(minLength: 8)
-                processSearchField
-            }
-        }
-        .frame(height: 32)
-    }
-
-    private func rangeControl(showsLabel: Bool) -> some View {
-        HStack(spacing: 10) {
-            if showsLabel {
-                Text(L10n.text("时间范围"))
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-
-            GlassSegmentedControl(
-                "时间范围",
-                selection: Bindable(store).selectedRange
-            ) {
-                ForEach(SampleRange.allCases) { range in
-                    Text(range.localizedTitle).tag(range)
-                }
-            }
-            .frame(width: 260)
-            .accessibilityLabel(L10n.text("时间范围"))
-        }
-        .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private var processSearchField: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-
-            TextField(L10n.text("搜索应用或进程"), text: $searchText)
-                .textFieldStyle(.plain)
-                .lineLimit(1)
-
-            if !searchText.isEmpty {
-                Button {
-                    searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-                .help(L10n.text("清除搜索"))
-                .accessibilityLabel(L10n.text("清除搜索"))
-            }
-        }
-        .padding(.horizontal, 9)
-        .frame(width: 240, height: 28)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
-        .overlay {
-            RoundedRectangle(cornerRadius: 7)
-                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
-        }
     }
 
     private var filteredProcesses: [ProcessActivity] {
@@ -145,4 +65,75 @@ struct ProcessesView: View {
         }
     }
 
+}
+
+struct ProcessesPageHeader: View {
+    @Binding var selectedRange: SampleRange
+    @Binding var searchText: String
+
+    var body: some View {
+        InstrumentPageHeader("应用", symbol: "square.stack.3d.up") {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    rangeControl(width: 260)
+                    processSearchField(width: 240)
+                    EvidenceLabel(
+                        text: "I/O · CPU · 网络 · 当前用户可见",
+                        symbol: "person.crop.circle.badge.checkmark"
+                    )
+                }
+
+                HStack(spacing: 10) {
+                    rangeControl(width: 250)
+                    processSearchField(width: 220)
+                }
+
+                HStack(spacing: 8) {
+                    rangeControl(width: 210)
+                    processSearchField(width: 170)
+                }
+            }
+        }
+    }
+
+    private func rangeControl(width: CGFloat) -> some View {
+        GlassSegmentedControl("时间范围", selection: $selectedRange) {
+            ForEach(SampleRange.allCases) { range in
+                Text(range.localizedTitle).tag(range)
+            }
+        }
+        .frame(width: width)
+        .accessibilityLabel(L10n.text("时间范围"))
+    }
+
+    private func processSearchField(width: CGFloat) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+
+            TextField(L10n.text("搜索应用或进程"), text: $searchText)
+                .textFieldStyle(.plain)
+                .lineLimit(1)
+
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help(L10n.text("清除搜索"))
+                .accessibilityLabel(L10n.text("清除搜索"))
+            }
+        }
+        .padding(.horizontal, 9)
+        .frame(width: width, height: 28)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
+        }
+    }
 }

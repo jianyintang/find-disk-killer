@@ -1277,6 +1277,12 @@ final class ProcessHoverCoordinator {
     }
 }
 
+enum ProcessTableLayoutContract {
+    static let headerHeight: CGFloat = 34
+    static let rowHeight: CGFloat = 56
+    static let loadingRowCount = 6
+}
+
 struct ProcessTable: View {
     static let defaultSortKey: ProcessSortKey = .writeCurrent
     static let defaultSortAscending = false
@@ -1326,7 +1332,7 @@ struct ProcessTable: View {
             VStack(spacing: 0) {
                 processColumns(isHeader: true)
                     .padding(.horizontal, 14)
-                    .frame(height: 34)
+                    .frame(height: ProcessTableLayoutContract.headerHeight)
                 Divider()
 
                 if isLoading, activeRows.isEmpty {
@@ -1385,14 +1391,14 @@ struct ProcessTable: View {
             } label: {
                 processColumns(process: process)
                     .padding(.horizontal, 14)
-                    .frame(height: 56)
+                    .frame(height: ProcessTableLayoutContract.rowHeight)
                     .contentShape(Rectangle())
             }
             .buttonStyle(ProcessRowButtonStyle(
                 isSelected: selectedProcessID == process.id,
                 isHovered: hoverCoordinator.activeProcessID == process.id
             ))
-            .frame(height: 56)
+            .frame(height: ProcessTableLayoutContract.rowHeight)
             .accessibilityLabel(process.localizedDisplayName)
             .accessibilityValue(accessibilitySummary(for: process))
             .accessibilityHint(L10n.text("按下打开详情"))
@@ -1411,11 +1417,11 @@ struct ProcessTable: View {
             } label: {
                 systemLayerColumns(activity)
                     .padding(.horizontal, 14)
-                    .frame(height: 56)
+                    .frame(height: ProcessTableLayoutContract.rowHeight)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .frame(height: 56)
+            .frame(height: ProcessTableLayoutContract.rowHeight)
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.42))
             .popover(isPresented: $isSystemLayerExplanationPresented) {
                 SystemLayerExplanationView()
@@ -1542,10 +1548,10 @@ struct ProcessTable: View {
 
     private var loadingRows: some View {
         LazyVStack(spacing: 0) {
-            ForEach(0..<6, id: \.self) { _ in
+            ForEach(0..<ProcessTableLayoutContract.loadingRowCount, id: \.self) { _ in
                 loadingProcessColumns
                     .padding(.horizontal, 14)
-                    .frame(height: 56)
+                    .frame(height: ProcessTableLayoutContract.rowHeight)
                 Divider().padding(.leading, 8)
             }
         }

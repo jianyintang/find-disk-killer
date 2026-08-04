@@ -135,7 +135,7 @@ struct RootView: View {
 
                 auxiliaryDetail
             }
-                .navigationTitle(requestedSection == .overview && !isShowingAuxiliaryPage ? "" : detailTitle)
+                .navigationTitle("")
                 .toolbar {
                     if isShowingAuxiliaryPage || requestedSection.showsMonitoringToolbar {
                         StatusToolbar(store: store)
@@ -243,14 +243,6 @@ struct RootView: View {
         requestedSection = section
     }
 
-    private var detailTitle: String {
-        switch navigation.destination {
-        case .monitoring(let section): section.title
-        case .settings: L10n.text("设置")
-        case .about: L10n.text("关于")
-        }
-    }
-
     @ViewBuilder
     private var auxiliaryDetail: some View {
         switch navigation.destination {
@@ -287,6 +279,8 @@ struct RootView: View {
             SectionNavigationPlaceholder(
                 section: requestedSection,
                 snapshot: sectionSnapshots[requestedSection],
+                selectedRange: Bindable(store).selectedRange,
+                processSearchText: $processSearchText,
                 liveVolumeCount: store.volumes.filter(\.isLocal).count,
                 cpuCoreCount: max(
                     store.cpuCoreUsages.count,
@@ -563,6 +557,8 @@ private struct VolumePreviewRow: Identifiable, Sendable {
 private struct SectionNavigationPlaceholder: View {
     let section: AppSection
     let snapshot: SectionPreviewSnapshot?
+    @Binding var selectedRange: SampleRange
+    @Binding var processSearchText: String
     let liveVolumeCount: Int
     let cpuCoreCount: Int
     @State private var processTableWidth: CGFloat = 0
@@ -1016,101 +1012,58 @@ private struct SectionNavigationPlaceholder: View {
 
     private var processPlaceholder: some View {
         VStack(spacing: 0) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 14) {
-                    processRangePlaceholder(showsLabel: true)
-                    Spacer(minLength: 16)
-                    processSearchPlaceholder
-                    EvidenceLabel(
-                        text: "I/O · CPU · 网络 · 当前用户可见",
-                        symbol: "person.crop.circle.badge.checkmark"
-                    )
-                }
+            ProcessesPageHeader(
+                selectedRange: $selectedRange,
+                searchText: $processSearchText
+            )
 
-                HStack(spacing: 12) {
-                    processRangePlaceholder(showsLabel: false)
-                    Spacer(minLength: 8)
-                    processSearchPlaceholder
+            Group {
+                ScrollView([.horizontal, .vertical]) {
+                    VStack(spacing: 0) {
+                        previewTableHeader
+                        Divider()
+                        ForEach(previewProcesses) { process in
+                            previewProcessRow(process)
+                            Divider().padding(.leading, 14)
+                        }
+                    }
+                    .frame(width: previewTableWidth, alignment: .leading)
                 }
-            }
-            .frame(height: 32)
-            .padding(16)
-
-            Divider()
-            ScrollView([.horizontal, .vertical]) {
-                VStack(spacing: 0) {
-                    previewTableHeader
-                    Divider()
-                    ForEach(previewProcesses) { process in
-                        previewProcessRow(process)
-                        Divider().padding(.leading, 14)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .scrollIndicators(.automatic)
+                .defaultScrollAnchor(.topLeading)
+                .background {
+                    GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: ProcessPlaceholderWidthPreferenceKey.self,
+                            value: geometry.size.width
+                        )
                     }
                 }
-                .frame(width: previewTableWidth, alignment: .leading)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .scrollIndicators(.automatic)
-            .defaultScrollAnchor(.topLeading)
-            .background {
-                GeometryReader { geometry in
-                    Color.clear.preference(
-                        key: ProcessPlaceholderWidthPreferenceKey.self,
-                        value: geometry.size.width
-                    )
+                .onPreferenceChange(ProcessPlaceholderWidthPreferenceKey.self) { width in
+                    guard width.isFinite, width > 0, abs(width - processTableWidth) > 0.5 else { return }
+                    processTableWidth = width
                 }
             }
-            .onPreferenceChange(ProcessPlaceholderWidthPreferenceKey.self) { width in
-                guard width.isFinite, width > 0, abs(width - processTableWidth) > 0.5 else { return }
-                processTableWidth = width
-            }
+            .glassSurface(padding: 0)
+            .padding(.top, InstrumentDesign.Spacing.related)
+            .padding(.horizontal, InstrumentDesign.Spacing.page)
+            .padding(.bottom, InstrumentDesign.Spacing.page)
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(processLoadingAccessibilityLabel)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .contentShape(Rectangle())
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 
-    private func processRangePlaceholder(showsLabel: Bool) -> some View {
-        HStack(spacing: 10) {
-            if showsLabel {
-                Text(L10n.text("时间范围"))
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-
-            Picker("", selection: Binding.constant(SampleRange.minute)) {
-                ForEach(SampleRange.allCases) { range in
-                    Text(range.localizedTitle).tag(range)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 260)
+    private var processLoadingAccessibilityLabel: String {
+        if let snapshot {
+            return L10n.format(
+                "正在刷新 · 上次结果 %@",
+                L10n.date(snapshot.capturedAt, date: .omitted, time: .standard)
+            )
         }
-        .fixedSize(horizontal: true, vertical: false)
-        .redacted(reason: .placeholder)
-        .disabled(true)
-    }
-
-    private var processSearchPlaceholder: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            Text(L10n.text("搜索应用或进程"))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 9)
-        .frame(width: 240, height: 28)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
-        .overlay {
-            RoundedRectangle(cornerRadius: 7)
-                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
-        }
-        .redacted(reason: .placeholder)
+        return L10n.text("正在读取应用活动…")
     }
 
     private var resourcePlaceholder: some View {
@@ -1169,7 +1122,7 @@ private struct SectionNavigationPlaceholder: View {
         guard let processes = snapshot?.processes, !processes.isEmpty else {
             let count = section == .overview
                 ? OverviewLayoutContract.applicationRowLimit
-                : 6
+                : ProcessTableLayoutContract.loadingRowCount
             return (0..<count).map(ProcessPreviewRow.placeholder)
         }
         return processes
@@ -1218,7 +1171,7 @@ private struct SectionNavigationPlaceholder: View {
             previewColumnGap
         }
         .padding(.horizontal, 14)
-        .frame(height: 34)
+        .frame(height: ProcessTableLayoutContract.headerHeight)
     }
 
     private func previewHeader(
@@ -1263,7 +1216,7 @@ private struct SectionNavigationPlaceholder: View {
             previewColumnGap
         }
         .padding(.horizontal, 14)
-        .frame(height: 56)
+        .frame(height: ProcessTableLayoutContract.rowHeight)
         .redacted(reason: snapshot == nil ? .placeholder : [])
     }
 

@@ -26,6 +26,12 @@ import Testing
     #expect(OverviewLayoutContract.resourceControlWidth == 320)
 }
 
+@Test func appsSkeletonUsesTheLoadedProcessTableLayoutContract() {
+    #expect(ProcessTableLayoutContract.loadingRowCount == 6)
+    #expect(ProcessTableLayoutContract.headerHeight == 34)
+    #expect(ProcessTableLayoutContract.rowHeight == 56)
+}
+
 @Test func agentStorageOwnsItsOnlyToolbarActivityControl() {
     #expect(!AppSection.agentStorage.showsMonitoringToolbar)
     #expect(AppSection.overview.showsMonitoringToolbar)
