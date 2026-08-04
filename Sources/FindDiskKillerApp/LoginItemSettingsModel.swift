@@ -37,16 +37,22 @@ struct NativeLoginItemService: LoginItemServicing {
 final class LoginItemSettingsModel {
     private(set) var desiredEnabled = false
     private(set) var effectiveStatus: LoginItemEffectiveStatus = .disabled
+    private(set) var hasLoadedStatus = false
     private(set) var isTransitioning = false
     private let service: any LoginItemServicing
 
-    init(service: any LoginItemServicing = NativeLoginItemService()) {
+    init(
+        service: any LoginItemServicing = NativeLoginItemService(),
+        refreshesImmediately: Bool = true
+    ) {
         self.service = service
-        refresh()
+        if refreshesImmediately {
+            refresh()
+        }
     }
 
     func setEnabled(_ value: Bool) {
-        guard !isTransitioning else { return }
+        guard hasLoadedStatus, !isTransitioning else { return }
         desiredEnabled = value
         isTransitioning = true
         defer { isTransitioning = false }
@@ -63,6 +69,7 @@ final class LoginItemSettingsModel {
     func refresh() {
         effectiveStatus = service.status
         desiredEnabled = effectiveStatus == .enabled || effectiveStatus == .requiresApproval
+        hasLoadedStatus = true
     }
 
     func openSystemSettings() {

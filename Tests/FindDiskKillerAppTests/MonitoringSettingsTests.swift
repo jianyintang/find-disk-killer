@@ -6,13 +6,21 @@ import Testing
 
 @MainActor
 private final class FakeLoginItemService: LoginItemServicing {
-    var status: LoginItemEffectiveStatus
+    private var storedStatus: LoginItemEffectiveStatus
+    private(set) var statusReadCount = 0
+    var status: LoginItemEffectiveStatus {
+        get {
+            statusReadCount += 1
+            return storedStatus
+        }
+        set { storedStatus = newValue }
+    }
     var registerError: Error?
     var unregisterError: Error?
     var openedSettings = false
 
     init(status: LoginItemEffectiveStatus) {
-        self.status = status
+        storedStatus = status
     }
 
     func register() throws {
@@ -26,6 +34,26 @@ private final class FakeLoginItemService: LoginItemServicing {
     }
 
     func openSystemSettings() { openedSettings = true }
+}
+
+@MainActor
+@Test func settingsCanDeferLoginItemStatusUntilAfterItsFirstFrame() {
+    let service = FakeLoginItemService(status: .enabled)
+    let model = LoginItemSettingsModel(
+        service: service,
+        refreshesImmediately: false
+    )
+
+    #expect(service.statusReadCount == 0)
+    #expect(!model.desiredEnabled)
+    #expect(!model.hasLoadedStatus)
+
+    model.refresh()
+
+    #expect(service.statusReadCount == 1)
+    #expect(model.desiredEnabled)
+    #expect(model.hasLoadedStatus)
+    #expect(model.effectiveStatus == .enabled)
 }
 
 private struct LoginFixtureError: LocalizedError {

@@ -7,6 +7,18 @@ private enum SettingsPickerStyle {
     case menu
 }
 
+private enum SettingsServiceRefreshRequest: Hashable {
+    case initial
+    case applicationActivation(Int)
+
+    var delay: Duration {
+        switch self {
+        case .initial: .milliseconds(120)
+        case .applicationActivation: .milliseconds(400)
+        }
+    }
+}
+
 struct SettingsPage: View {
     let store: MonitorStore
     let history: HistoryModel
@@ -20,12 +32,15 @@ struct SettingsPage: View {
     @AppStorage("openMainWindowAtLogin") private var openMainWindowAtLogin = false
     @AppStorage(AgentStoragePreferences.hidePrivateDetailsKey)
     private var hidesAgentStoragePrivateDetails = false
-    @State private var loginItem = LoginItemSettingsModel()
+    @State private var loginItem = LoginItemSettingsModel(refreshesImmediately: false)
     @State private var traceHelperState: TraceHelperServiceState = .notRegistered
     @State private var historyWasCleared = false
     @State private var confirmation: HistorySettingsConfirmation?
     @State private var showsDisableHistoryOptions = false
     @State private var showsAgentStorageLocations = false
+    @State private var serviceRefreshRequest: SettingsServiceRefreshRequest?
+    @State private var activationRefreshGeneration = 0
+    @State private var isTraceHelperStateLoading = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,14 +71,22 @@ struct SettingsPage: View {
                         .frame(width: 180)
                     }
 
-                    Toggle(
-                        L10n.text("登录时启动"),
-                        isOn: Binding(
-                            get: { loginItem.desiredEnabled },
-                            set: { loginItem.setEnabled($0) }
+                    if loginItem.hasLoadedStatus {
+                        Toggle(
+                            L10n.text("登录时启动"),
+                            isOn: Binding(
+                                get: { loginItem.desiredEnabled },
+                                set: { loginItem.setEnabled($0) }
+                            )
                         )
-                    )
-                    .disabled(loginItem.isTransitioning)
+                        .disabled(loginItem.isTransitioning)
+                    } else {
+                        LabeledContent(L10n.text("登录时启动")) {
+                            ProgressView()
+                                .controlSize(.small)
+                                .accessibilityLabel(L10n.text("检测中…"))
+                        }
+                    }
 
                     if loginItem.desiredEnabled {
                         Toggle(
@@ -474,7 +497,15 @@ struct SettingsPage: View {
                 }
 
                 Section(L10n.text("深度追踪组件")) {
-                    LabeledContent(L10n.text("状态"), value: traceHelperStatusText)
+                    LabeledContent(L10n.text("状态")) {
+                        if isTraceHelperStateLoading {
+                            ProgressView()
+                                .controlSize(.small)
+                                .accessibilityLabel(L10n.text("检测中…"))
+                        } else {
+                            Text(traceHelperStatusText)
+                        }
+                    }
 
                     Text(L10n.text("只有你主动追踪文件或目录时，才会启用需要管理员批准的后台组件。"))
                         .foregroundStyle(.secondary)
@@ -526,8 +557,22 @@ struct SettingsPage: View {
         .task {
             store.setSamplingInterval(sampleInterval)
             sampleInterval = store.samplingInterval
-            refreshServiceStates()
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            if serviceRefreshRequest == nil {
+                serviceRefreshRequest = .initial
+            }
             await history.refreshStorage()
+        }
+        .task(id: serviceRefreshRequest) {
+            guard let serviceRefreshRequest else { return }
+            do {
+                try await Task.sleep(for: serviceRefreshRequest.delay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            await refreshServiceStates()
         }
         .task(id: historyWasCleared) {
             guard historyWasCleared else { return }
@@ -538,7 +583,8 @@ struct SettingsPage: View {
             store.setSamplingInterval(newValue)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            refreshServiceStates()
+            activationRefreshGeneration &+= 1
+            serviceRefreshRequest = .applicationActivation(activationRefreshGeneration)
         }
     }
 
@@ -658,12 +704,17 @@ struct SettingsPage: View {
         }
     }
 
-    private func refreshServiceStates() {
+    private func refreshServiceStates() async {
         loginItem.refresh()
+        guard !Task.isCancelled else { return }
+        await Task.yield()
         nodeRuntime.refresh()
+        await Task.yield()
+        guard !Task.isCancelled else { return }
         let controller = TraceHelperController()
         controller.refreshStatus()
         traceHelperState = controller.state
+        isTraceHelperStateLoading = false
     }
 
     private func removeTraceHelper() {
