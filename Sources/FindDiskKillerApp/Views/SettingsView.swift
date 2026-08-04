@@ -25,6 +25,7 @@ struct SettingsPage: View {
     @State private var historyWasCleared = false
     @State private var confirmation: HistorySettingsConfirmation?
     @State private var showsDisableHistoryOptions = false
+    @State private var showsAgentStorageLocations = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -204,66 +205,109 @@ struct SettingsPage: View {
                 case .dataAndPrivacy:
             Form {
                 Section(L10n.text("AI Agent 空间")) {
+                    if let snapshot = agentStorage.snapshot {
+                        HStack(spacing: 0) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(L10n.text("物理占用"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(AgentStorageSizeFormatter.string(snapshot.totalBytes))
+                                    .font(.title3.weight(.semibold).monospacedDigit())
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            Divider()
+                                .frame(height: 34)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(L10n.text("数据源"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(L10n.format("已发现 %d 个数据位置", snapshot.sources.count))
+                                    .font(.callout.weight(.medium))
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.vertical, 3)
+                    } else {
+                        Text(L10n.text("尚未分析 AI Agent 空间"))
+                            .foregroundStyle(.secondary)
+                    }
+
                     Toggle(
                         L10n.text("隐藏聊天标题和完整路径"),
                         isOn: $hidesAgentStoragePrivateDetails
                     )
 
                     Text(L10n.text("分析完全在本机进行；不会上传标题、路径或占用数据。"))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    if let sources = agentStorage.snapshot?.sources, !sources.isEmpty {
-                        ForEach(sources) { source in
-                            LabeledContent {
-                                VStack(alignment: .trailing, spacing: 3) {
-                                    Text(agentStoragePath(source.configuredPath))
-                                        .font(.caption.monospaced())
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                    if source.configuredPath != source.resolvedPath {
-                                        Text(agentStoragePath(source.resolvedPath))
-                                            .font(.caption2.monospaced())
+                    let sourceCount = agentStorage.snapshot?.sources.count ?? 0
+                    if sourceCount > 0 || !agentStorage.customRoots.isEmpty {
+                        DisclosureGroup(isExpanded: $showsAgentStorageLocations) {
+                            if let sources = agentStorage.snapshot?.sources {
+                                ForEach(sources) { source in
+                                    HStack(alignment: .top, spacing: 10) {
+                                        Label {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(source.displayName)
+                                                    .lineLimit(1)
+                                                Text(agentStoragePath(source.configuredPath))
+                                                    .font(.caption2.monospaced())
+                                                    .foregroundStyle(.secondary)
+                                                    .lineLimit(1)
+                                                    .truncationMode(.middle)
+                                            }
+                                        } icon: {
+                                            Image(systemName: agentStorageSourceSymbol(source))
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Spacer(minLength: 8)
+                                        VStack(alignment: .trailing, spacing: 2) {
+                                            Text(AgentStorageSizeFormatter.string(source.allocatedBytes))
+                                                .font(.caption.monospacedDigit())
+                                            Text(source.volumeName ?? L10n.text("未知磁盘"))
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .padding(.vertical, 3)
+                                }
+                            }
+
+                            ForEach(agentStorage.customRoots, id: \.path) { root in
+                                HStack(spacing: 10) {
+                                    Label {
+                                        Text(agentStoragePath(root.path))
+                                            .font(.caption.monospaced())
                                             .foregroundStyle(.secondary)
                                             .lineLimit(1)
                                             .truncationMode(.middle)
+                                    } icon: {
+                                        Image(systemName: "folder.badge.plus")
+                                            .foregroundStyle(.secondary)
                                     }
-                                    HStack(spacing: 5) {
-                                        Text(source.volumeName ?? L10n.text("未知磁盘"))
-                                        Text("·")
-                                        Text(AgentStorageSizeFormatter.string(source.allocatedBytes))
+                                    Spacer(minLength: 8)
+                                    Button {
+                                        agentStorage.removeCustomRoot(root)
+                                    } label: {
+                                        Image(systemName: "minus.circle")
                                     }
-                                    .font(.caption2.monospacedDigit())
-                                    .foregroundStyle(.secondary)
+                                    .buttonStyle(AppIconButtonStyle(size: 28, isFramed: false))
+                                    .help(L10n.text("移除数据位置"))
                                 }
-                            } label: {
-                                Label(source.displayName, systemImage: {
-                                    switch source.provider {
-                                    case .codex: "terminal"
-                                    case .claude: "sparkles"
-                                    case .openCode: "curlybraces"
-                                    }
-                                }())
+                                .padding(.vertical, 3)
                             }
-                        }
-                    }
-
-                    ForEach(agentStorage.customRoots, id: \.path) { root in
-                        HStack {
-                            Label(L10n.text("手动数据位置"), systemImage: "folder.badge.plus")
-                            Spacer()
-                            Text(agentStoragePath(root.path))
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Button {
-                                agentStorage.removeCustomRoot(root)
-                            } label: {
-                                Image(systemName: "minus.circle")
+                        } label: {
+                            HStack {
+                                Label(L10n.text("数据源"), systemImage: "folder")
+                                Spacer()
+                                Text(L10n.format("已发现 %d 个数据位置", sourceCount + agentStorage.customRoots.count))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
-                            .buttonStyle(AppIconButtonStyle(size: 28, isFramed: false))
-                            .help(L10n.text("移除数据位置"))
                         }
                     }
 
@@ -534,6 +578,14 @@ struct SettingsPage: View {
 
     private func agentStoragePath(_ path: String) -> String {
         hidesAgentStoragePrivateDetails ? L10n.text("路径已隐藏") : path
+    }
+
+    private func agentStorageSourceSymbol(_ source: AgentStorageSource) -> String {
+        switch source.provider {
+        case .codex: "terminal"
+        case .claude: "sparkles"
+        case .openCode: "curlybraces"
+        }
     }
 
     private var traceHelperCanBeRemoved: Bool {
