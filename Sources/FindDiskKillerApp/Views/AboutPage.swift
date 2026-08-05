@@ -21,7 +21,6 @@ struct AboutPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 brandHeader
-                    .glassSurface(padding: 20)
                 AboutUpdateSection(updates: updates)
                 VStack(spacing: 0) {
                     ExternalBrandLinkRow(

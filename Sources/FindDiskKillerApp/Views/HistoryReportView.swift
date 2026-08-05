@@ -16,7 +16,6 @@ struct HistoryReportView: View {
     var body: some View {
         VStack(spacing: 0) {
             reportToolbar
-            Divider()
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -31,7 +30,7 @@ struct HistoryReportView: View {
     }
 
     private var reportToolbar: some View {
-        InstrumentPageHeader("历史分析", symbol: "chart.xyaxis.line") {
+        InstrumentPageHeader("历史分析") {
             HStack(spacing: InstrumentDesign.Spacing.related) {
                 Text(L10n.text("分析周期"))
                     .font(.caption.weight(.medium))
@@ -417,7 +416,7 @@ struct HistoryReportNavigationPlaceholder: View {
 
 private struct HistoryReportLoadingToolbar: View {
     var body: some View {
-        InstrumentPageHeader("历史分析", symbol: "chart.xyaxis.line") {
+        InstrumentPageHeader("历史分析") {
             HStack(spacing: InstrumentDesign.Spacing.related) {
                 Text(L10n.text("分析周期"))
                     .font(.caption.weight(.medium))

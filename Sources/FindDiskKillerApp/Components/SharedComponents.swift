@@ -1535,71 +1535,79 @@ struct SectionHeading<Trailing: View>: View {
     }
 }
 
-/// A compact instrument-style page header shared by secondary destinations.
-/// The header keeps the title, context and controls on one stable glass plane
-/// so switching pages does not produce a white flash or a layout jump.
+enum InstrumentPageHeaderLayout {
+    static let minimumHeight: CGFloat = 62
+    static let horizontalPadding = InstrumentDesign.Spacing.page
+    static let topPadding = OverviewLayoutContract.pageTopPadding
+    static let bottomPadding: CGFloat = 10
+    static let wideSpacing: CGFloat = 18
+    static let compactSpacing: CGFloat = 10
+}
+
+/// A frameless page header that follows the layout rhythm of the Now page.
+/// The title and page controls share a row when space allows and stack without
+/// turning the page-level navigation into a separate panel at narrow widths.
 struct InstrumentPageHeader<Trailing: View>: View {
     let title: String
     let subtitle: String?
-    let symbol: String
     @ViewBuilder let trailing: () -> Trailing
 
     init(
         _ title: String,
         subtitle: String? = nil,
-        symbol: String,
         @ViewBuilder trailing: @escaping () -> Trailing
     ) {
         self.title = title
         self.subtitle = subtitle
-        self.symbol = symbol
         self.trailing = trailing
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: symbol)
-                .font(.system(size: 17, weight: .medium))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(InstrumentDesign.ColorRole.cpu)
-                .frame(width: 34, height: 34)
-                .background(
-                    InstrumentDesign.ColorRole.cpu.opacity(0.11),
-                    in: RoundedRectangle(cornerRadius: InstrumentDesign.Radius.icon)
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: InstrumentDesign.Radius.icon)
-                        .strokeBorder(Color.white.opacity(0.16), lineWidth: 0.5)
-                }
-                .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(L10n.text(title))
-                    .font(.system(size: 19, weight: .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                if let subtitle {
-                    Text(L10n.text(subtitle))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.8)
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: InstrumentPageHeaderLayout.wideSpacing) {
+                titleBlock
+                    .fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 12)
+                trailing()
             }
 
-            Spacer(minLength: 10)
-            trailing()
+            VStack(alignment: .leading, spacing: InstrumentPageHeaderLayout.compactSpacing) {
+                titleBlock
+                trailing()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
-        .padding(.horizontal, InstrumentDesign.Spacing.page)
-        .padding(.vertical, 12)
-        .glassSurface(padding: 0)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: InstrumentPageHeaderLayout.minimumHeight,
+            alignment: .leading
+        )
+        .padding(.horizontal, InstrumentPageHeaderLayout.horizontalPadding)
+        .padding(.top, InstrumentPageHeaderLayout.topPadding)
+        .padding(.bottom, InstrumentPageHeaderLayout.bottomPadding)
         .accessibilityElement(children: .contain)
+    }
+
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(L10n.text(title))
+                .font(.system(size: 26, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+            if let subtitle {
+                Text(L10n.text(subtitle))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+            }
+        }
     }
 }
 
 extension InstrumentPageHeader where Trailing == EmptyView {
-    init(_ title: String, subtitle: String? = nil, symbol: String) {
-        self.init(title, subtitle: subtitle, symbol: symbol) { EmptyView() }
+    init(_ title: String, subtitle: String? = nil) {
+        self.init(title, subtitle: subtitle) { EmptyView() }
     }
 }
 
