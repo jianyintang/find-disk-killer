@@ -114,12 +114,28 @@ private func warningSample(_ offset: TimeInterval, _ value: Double?, segment: In
     #expect(eightVolumes.isScrollable)
 }
 
-@Test func processTableKeepsBaseWidthsWhenTheContainerIsNarrow() {
+@Test func processTableCompressesToTheViewportBeforeEnablingHorizontalScroll() {
     let base = ProcessColumnWidths.defaults
+    let availableWidth = base.tableWidth - 100
 
-    let resolved = base.adapted(to: base.tableWidth - 180)
+    let resolved = base.adapted(to: availableWidth)
 
-    #expect(resolved == base)
+    #expect(abs(resolved.tableWidth - availableWidth) < 0.001)
+    for column in ProcessColumn.allCases {
+        #expect(resolved[column] >= column.limits.lowerBound)
+    }
+}
+
+@Test func processTableUsesReadableMinimumWidthsBeforeHorizontalScrolling() {
+    let base = ProcessColumnWidths.defaults
+    let minimumWidth = ProcessColumn.allCases.reduce(ProcessColumnWidths.horizontalPadding) {
+        $0 + $1.limits.lowerBound
+    } + CGFloat(ProcessColumn.allCases.count) * ProcessColumn.resizeHandleWidth
+
+    let resolved = base.adapted(to: minimumWidth - 80)
+
+    #expect(abs(resolved.tableWidth - minimumWidth) < 0.001)
+    #expect(resolved.tableWidth > minimumWidth - 80)
 }
 
 @Test func processTableDistributesWideSpaceWithoutOverstretchingTheApplicationColumn() {
@@ -151,6 +167,75 @@ private func warningSample(_ offset: TimeInterval, _ value: Double?, segment: In
 @Test func activeAppsDefaultSortIsCurrentWriteDescending() {
     #expect(ProcessTable.defaultSortKey == .writeCurrent)
     #expect(!ProcessTable.defaultSortAscending)
+    #expect(ProcessTable.appsPageSize == 20)
+}
+
+@MainActor
+@Test(arguments: [0, 1, 20, 21, 40, 41])
+func activeAppsPaginationUsesTwentyRowsPerPage(rowCount: Int) {
+    let rows = (0..<rowCount).map(paginationRow)
+    let expectedPageCount = max(1, (rowCount + ProcessTable.appsPageSize - 1) / ProcessTable.appsPageSize)
+
+    let firstPage = ProcessTable.page(
+        rows,
+        pageSize: ProcessTable.appsPageSize,
+        requestedPage: 0
+    )
+    let lastPage = ProcessTable.page(
+        rows,
+        pageSize: ProcessTable.appsPageSize,
+        requestedPage: expectedPageCount - 1
+    )
+    let expectedLastPageCount = rowCount == 0
+        ? 0
+        : rowCount - ((expectedPageCount - 1) * ProcessTable.appsPageSize)
+
+    #expect(firstPage.totalPages == expectedPageCount)
+    #expect(firstPage.rows.count == min(rowCount, ProcessTable.appsPageSize))
+    #expect(lastPage.rows.count == expectedLastPageCount)
+}
+
+@MainActor
+@Test func activeAppsPaginationClampsPageAfterResultsShrink() {
+    let rows = (0..<21).map(paginationRow)
+
+    let page = ProcessTable.page(
+        Array(rows.prefix(20)),
+        pageSize: ProcessTable.appsPageSize,
+        requestedPage: 1
+    )
+
+    #expect(page.pageIndex == 0)
+    #expect(page.totalPages == 1)
+    #expect(page.rows.count == 20)
+}
+
+@MainActor
+@Test func nowTopTwelveDoesNotEnablePagination() {
+    let rows = (0..<20).map(paginationRow)
+    let topTwelve = ProcessTable.visibleRows(
+        rows,
+        limit: 12,
+        sortKey: .name,
+        ascending: true
+    )
+    let page = ProcessTable.page(topTwelve, pageSize: nil, requestedPage: 4)
+
+    #expect(page.rows.count == 12)
+    #expect(page.pageIndex == 0)
+    #expect(page.totalPages == 1)
+}
+
+private func paginationRow(_ index: Int) -> ActiveAppRow {
+    .systemLayer(SystemLayerActivity(
+        id: "row-\(index)",
+        currentCPUPercent: nil,
+        totalWriteBytes: nil,
+        currentWriteBytesPerSecond: nil,
+        peakWriteBytesPerSecond: nil,
+        averageNetworkReceiveBytesPerSecond: nil,
+        averageNetworkSendBytesPerSecond: nil
+    ))
 }
 
 @MainActor
@@ -262,4 +347,63 @@ private func warningSample(_ offset: TimeInterval, _ value: Double?, segment: In
 
     #expect(coordinator.frozenProcesses == nil)
     #expect(coordinator.frozenSystemLayerActivity == nil)
+}
+
+@MainActor
+@Test func activeAppsScrollActivityDefersHoverUntilScrollingSettles() async {
+    let coordinator = ProcessHoverCoordinator()
+
+    coordinator.scrollingStarted()
+    #expect(coordinator.isScrolling)
+
+    coordinator.scrollingEnded()
+    try? await Task.sleep(for: .milliseconds(175))
+
+    #expect(!coordinator.isScrolling)
+}
+
+@MainActor
+@Test func activeAppsDefersSamplesButNotSearchChangesWhileScrolling() {
+    let previous = ProcessTableRevision(sample: 1, query: "")
+
+    #expect(!ProcessTable.shouldRefreshContent(
+        oldRevision: previous,
+        newRevision: ProcessTableRevision(sample: 2, query: ""),
+        isScrolling: true
+    ))
+    #expect(ProcessTable.shouldRefreshContent(
+        oldRevision: previous,
+        newRevision: ProcessTableRevision(sample: 2, query: "codex"),
+        isScrolling: true
+    ))
+    #expect(ProcessTable.shouldRefreshContent(
+        oldRevision: previous,
+        newRevision: ProcessTableRevision(sample: 2, query: ""),
+        isScrolling: false
+    ))
+}
+
+@MainActor
+@Test func activeAppsPreformatsSystemLayerRowsBeforeRendering() {
+    let activity = SystemLayerActivity(
+        currentCPUPercent: 12.5,
+        totalWriteBytes: 2_000,
+        currentWriteBytesPerSecond: nil,
+        peakWriteBytesPerSecond: 4_000,
+        averageNetworkReceiveBytesPerSecond: nil,
+        averageNetworkSendBytesPerSecond: 8_000
+    )
+
+    guard case let .systemLayer(presentation) = ProcessTable.presentation(
+        for: .systemLayer(activity)
+    ) else {
+        Issue.record("Expected a preformatted system-layer row")
+        return
+    }
+
+    #expect(presentation.cpu == PercentFormatter.cpu(12.5))
+    #expect(presentation.totalWrite == ByteRateFormatter.bytes(2_000))
+    #expect(presentation.currentWrite == nil)
+    #expect(presentation.networkUpload == ByteRateFormatter.rate(8_000))
+    #expect(presentation.accessibilityValue.contains(L10n.text("缺口")))
 }

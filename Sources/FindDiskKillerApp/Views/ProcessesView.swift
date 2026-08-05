@@ -138,7 +138,12 @@ private struct LiveProcessesTable: View {
     var body: some View {
         ProcessTable(
             processes: ProcessesView.filter(store.processes, query: searchText),
+            contentRevision: ProcessTableRevision(
+                sample: store.processSummaryRevision,
+                query: searchText
+            ),
             selectedProcessID: selectedProcessID,
+            pageSize: ProcessTable.appsPageSize,
             scrollAxes: [.horizontal, .vertical],
             hoverCoordinator: hoverCoordinator,
             onSelect: onSelect,

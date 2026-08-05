@@ -41,6 +41,10 @@ final class LoginItemSettingsModel {
     private(set) var isTransitioning = false
     private let service: any LoginItemServicing
 
+    var canConfigureOpenMainWindowAtLogin: Bool {
+        hasLoadedStatus && desiredEnabled
+    }
+
     init(
         service: any LoginItemServicing = NativeLoginItemService(),
         refreshesImmediately: Bool = true

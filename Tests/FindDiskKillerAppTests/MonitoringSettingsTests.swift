@@ -56,6 +56,23 @@ private final class FakeLoginItemService: LoginItemServicing {
     #expect(model.effectiveStatus == .enabled)
 }
 
+@MainActor
+@Test func loginWindowPreferenceOnlyEnablesAfterLoginItemStatusLoads() {
+    let service = FakeLoginItemService(status: .enabled)
+    let model = LoginItemSettingsModel(
+        service: service,
+        refreshesImmediately: false
+    )
+
+    #expect(!model.canConfigureOpenMainWindowAtLogin)
+    model.refresh()
+    #expect(model.canConfigureOpenMainWindowAtLogin)
+
+    service.status = .disabled
+    model.refresh()
+    #expect(!model.canConfigureOpenMainWindowAtLogin)
+}
+
 private struct LoginFixtureError: LocalizedError {
     var errorDescription: String? { "Registration failed" }
 }

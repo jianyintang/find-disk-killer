@@ -90,12 +90,11 @@ struct SettingsPage: View {
                         }
                     }
 
-                    if loginItem.desiredEnabled {
-                        Toggle(
-                            L10n.text("登录后打开主窗口"),
-                            isOn: $openMainWindowAtLogin
-                        )
-                    }
+                    Toggle(
+                        L10n.text("登录后打开主窗口"),
+                        isOn: $openMainWindowAtLogin
+                    )
+                    .disabled(!loginItem.canConfigureOpenMainWindowAtLogin)
 
                     if loginItem.effectiveStatus == .requiresApproval {
                         SettingsInlineStatus(
