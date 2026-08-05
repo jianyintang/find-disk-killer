@@ -2,6 +2,8 @@
 
 This document exists to reproduce the interface's visual character: material, color, edge treatment, depth, typography, icon rendering, and motion feel. It does not prescribe information architecture, page structure, content hierarchy, responsive layout, or product behavior.
 
+Every normative recipe in this document targets `effect.full`. Light, Dark, active-window, and inactive-window references all retain the full material, elevation, and motion budget unless an operating-system accessibility setting requires a substitution. Product-defined reduced-effect modes are implementation policy, not part of this visual system.
+
 ## Visual Intent
 
 The interface should feel like a precise, quiet native macOS instrument. Its character comes from restrained chroma, stable optical edges, shallow physical depth, crisp type, and motion that settles without spectacle.
@@ -166,6 +168,9 @@ Use `monospacedDigit()` for numeric text that changes in place. A value and its 
 | `motion.enter` | `0.28 s` | `curve.ease.out` | Material entering or expanding |
 | `motion.sample` | `0.36 s` | `curve.ease.in.out` | Continuous value transition |
 | `motion.settle` | `0.40 s` | `curve.ease.in.out` | Small geometry transformation |
+| `motion.chart.histogram` | `0.50 s` | `curve.ease.in.out` | Histogram height transition |
+| `motion.chart.meter` | `0.48 s` | `curve.ease.in.out` | Segmented-meter transition |
+| `motion.chart.donut` | `0.55 s` | `curve.ease.in.out` | Donut arc transition |
 
 | Token | Cubic-bezier control points |
 | --- | --- |
@@ -195,15 +200,9 @@ The canvas extends beneath the titlebar and toolbar. Neither region receives an 
 
 Canvas material uses SwiftUI `ultraThinMaterial` within the window. A glass surface uses `ultraThinMaterial` over the already-rendered canvas, so the two layers produce different depth despite sharing the same system material. Let system material follow the window's active state; do not force an always-active `NSVisualEffectView` state.
 
-Visual-effect levels resolve the same tokens through different material budgets:
+`effect.full` is the only normative visual-effect environment. It uses a transparent window with a clear background, canvas and surface materials enabled, both elevation layers enabled, and the declared motion durations. Design reviews, token comparisons, and canonical captures always begin in this mode.
 
-| Level | Window | Canvas material | Surface material | Elevation | Motion |
-| --- | --- | --- | --- | --- | --- |
-| `effect.full` | Transparent, clear background | On | On | On | Token durations |
-| `effect.balanced` | Opaque, native window background | Off | On | On | Token durations |
-| `effect.low` | Opaque, native window background | Off | Off; use `color.surface.raised` | Off | All durations `0 s` |
-
-Accessibility overrides take precedence over the selected effect level. Reduced Transparency forces opaque window and surface fallbacks. Reduce Motion resolves motion to the final state immediately.
+Accessibility overrides take precedence over `effect.full`. Reduced Transparency forces the documented opaque window and surface fallbacks. Reduce Motion resolves motion to the final state immediately. These substitutions preserve visual hierarchy but do not define an alternate design mode. Any product-controlled performance fallback belongs in implementation documentation and must not be used to approve design fidelity.
 
 ## Surface Recipes
 
@@ -346,6 +345,129 @@ A standalone emphasis icon may use a base filled with its semantic color at `0.1
 
 Only real SF Symbols are valid in a visual reference. Hand-drawn circles, chevrons, or line approximations do not demonstrate symbol weight, optical bounds, or native antialiasing.
 
+## Chart Visual Language
+
+Charts are precision instruments rendered inside the same `effect.full` material environment as every other surface. Their depth comes from the containing glass plane, a quiet plot tint, translucent area fills, and a temporary tooltip plane. Data marks themselves remain optically flat: never add glow, bloom, bevel, or drop shadow to a line, point, bar, segment, threshold, or arc.
+
+Chart tokens describe marks and plot treatment only. They do not prescribe chart placement, surrounding content, domain labels, time ranges, data density, or the number of charts in an interface.
+
+### Chart Color Selection
+
+Use color semantically before assigning it by series order. `color.status.critical` is reserved for a critical threshold or the portion beyond it; `color.status.positive` is reserved for an explicitly positive state. Neither color enters the ordinary categorical sequence.
+
+| Token | Reference | Use |
+| --- | --- | --- |
+| `chart.color.series.01` | `color.blue.500` | Single series and first categorical series |
+| `chart.color.series.02` | `color.cyan.500` | Second categorical series |
+| `chart.color.series.03` | `color.amber.500` | Third categorical series |
+| `chart.color.series.04` | `color.graphite.500` | Fourth categorical series or neutral comparison |
+| `chart.color.series.05` | `color.green.500` | Fifth categorical series |
+| `chart.color.series.06` | `color.violet.500` | Sixth categorical series |
+| `chart.color.series.07` | `color.indigo.500` | Seventh categorical series |
+| `chart.color.series.08` | `color.teal.500` | Eighth categorical series |
+| `chart.color.direction.a` | `color.direction.a` | First member of an opposed directional pair |
+| `chart.color.direction.b` | `color.direction.b` | Second member of an opposed directional pair |
+| `chart.color.threshold` | `color.status.critical` | Critical rule and over-threshold region only |
+
+For one series, use `chart.color.series.01`. For an opposed pair, use `chart.color.direction.a` and `chart.color.direction.b`; do not use that pairing for unrelated categories. For ordinary multi-series comparison, assign colors in numeric token order and keep the assignment stable across every rendering of the same series identity. Prefer direct labels for more than four simultaneous series. Color is never the sole differentiator: pair it with a solid/dashed line, mark shape, direct label, or signed position whenever series can overlap or color perception is uncertain.
+
+Chromatic values do not change between Light and Dark appearances. Inactive windows multiply the rendered chromatic opacity by `opacity.window.inactive.accent`. Increased Contrast strengthens neutral boundaries, not saturation.
+
+### Plot and Mark Tokens
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `chart.plot.fill.standard` | `color.text.secondary` at `0.035` | Default plot-area tint |
+| `chart.plot.fill.precision` | `color.text.primary` at `0.012` | Nearly clear plot for dense or precise marks |
+| `chart.grid.color` | `color.text.secondary` at `0.10` | Major grid line |
+| `chart.grid.width` | `0.5 pt` | Major grid line |
+| `chart.axis.color` | `color.text.secondary` at `0.26` | Baseline or opposed-bar center axis |
+| `chart.axis.width` | `0.75 pt` | Baseline or opposed-bar center axis |
+| `chart.line.width` | `1.7 pt` | Standard line series |
+| `chart.line.width.emphasis` | `2 pt` | Secondary trace requiring a dashed distinction |
+| `chart.line.dash.comparison` | `[6 pt, 4 pt]` | Overlapping comparison or second trace |
+| `chart.area.opacity.primary` | `0.12` | First or single-series area |
+| `chart.area.opacity.secondary` | `0.10` | Second area in the same plot |
+| `chart.area.opacity.single` | `0.11` | Quiet single-area alternative |
+| `chart.point.diameter` | `6 pt` | Selected point only |
+| `chart.selection.rule.color` | `color.text.secondary` at `0.70` | Historical selection rule |
+| `chart.selection.rule.color.quiet` | `color.text.secondary` at `0.55` | Dense or streaming selection rule |
+| `chart.selection.rule.width` | `0.75 pt` | Selection rule |
+| `chart.threshold.color` | `chart.color.threshold` at `0.72` | Critical rule |
+| `chart.threshold.color.quiet` | `chart.color.threshold` at `0.58` | Critical rule behind dense marks |
+| `chart.threshold.width` | `0.8 pt` | Critical rule |
+| `chart.threshold.dash` | `[5 pt, 4 pt]` | Critical rule |
+| `chart.threshold.area.opacity` | `0.10` | Region beyond a critical threshold |
+
+Use axis and grid marks only when they improve comparison. Avoid enclosing a plot in an additional border when its containing surface and plot tint already establish the plane. Axis labels use `type.micro` or native caption metrics with `color.text.secondary`; changing numeric labels use monospaced digits.
+
+### Line and Area Charts
+
+- A live or streaming line uses `chart.line.width`, linear interpolation, and `motion.sample`. Preserve continuity by translating or interpolating existing marks instead of cross-fading the entire plot.
+- A historical trend uses `chart.line.width` with monotone interpolation. Break the path at unavailable intervals; never interpolate across missing samples.
+- A line may use an area fill only when cumulative magnitude is visually relevant. Use `chart.area.opacity.primary` for the primary series and `chart.area.opacity.secondary` for the second. Do not stack translucent fills merely for decoration.
+- When two traces overlap and color alone is insufficient, keep the first line solid and use `chart.line.width.emphasis` with `chart.line.dash.comparison` for the second. Dash rhythm is a semantic differentiator and must remain stable during animation.
+- Resting points are omitted. Show a `chart.point.diameter` point only for a selected sample, endpoint requiring direct annotation, or discrete sample whose existence is itself meaningful.
+
+### Bars and Compact Quantitative Marks
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `chart.bar.radius` | `1.5 pt` | Micro histogram bar |
+| `chart.bar.gap` | `3 pt` | Micro histogram gap |
+| `chart.bar.width.minimum` | `2 pt` | Micro histogram minimum width |
+| `chart.bar.height.minimum` | `3 pt` | Visible nonzero histogram sample |
+| `chart.bar.opacity.active` | `0.70` | Standard histogram bar |
+| `chart.bar.opacity.missing` | `0.14` | Missing-sample placeholder using `color.text.secondary` |
+| `chart.bar.opposed.radius` | `1.2 pt` | Bidirectional bar end |
+| `chart.bar.opposed.opacity.a` | `0.68` | First side of a bidirectional pair |
+| `chart.bar.opposed.opacity.b` | `0.72` | Second side of a bidirectional pair |
+
+A micro histogram uses one series color and a constant baseline. Animate height with `motion.chart.histogram`; do not animate bars from arbitrary positions. A missing sample uses the neutral missing token and remains distinguishable from a known zero. Bidirectional bars share a single center axis, project opposed values to opposite sides of it, and use `chart.color.direction.a` / `chart.color.direction.b`; the signed position and color both communicate direction.
+
+### Segmented Meter and Donut
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `chart.meter.segment.count` | `10` | Canonical calibration meter |
+| `chart.meter.segment.gap` | `1.25 pt` | Gap between segments |
+| `chart.meter.segment.opacity.active` | `0.74` | Active segment |
+| `chart.meter.segment.opacity.inactive` | `0.15` | Inactive segment |
+| `chart.meter.segment.opacity.caution` | `0.84` | Caution segment using `color.status.caution` |
+| `chart.meter.border` | `color.text.primary` at `0.05`, `0.5 pt` | Meter optical boundary |
+| `chart.donut.track` | `color.text.secondary` at `0.18` | Donut track |
+| `chart.donut.stroke.width` | `8 pt` | Track and value arc |
+| `chart.donut.value.opacity` | `0.78` | Value arc |
+| `chart.donut.cap` | Butt | Arc cap |
+| `chart.donut.start.angle` | `-90 deg` | Twelve-o'clock origin |
+
+A segmented meter communicates quantized progression, not a continuous distribution. Activate segments from a stable origin and animate with `motion.chart.meter`; use caution color only after a real semantic threshold is crossed. A donut represents one normalized part-to-whole value. Animate its trimmed arc with `motion.chart.donut`, keep the track visible, and place any center value in monospaced digits. Do not use multiple concentric rings as decoration.
+
+### Threshold, Selection, and Tooltip
+
+A critical threshold is a dashed `chart.threshold` rule. If the chart encodes an over-threshold interval, tint only that region with `chart.threshold.area.opacity`; do not recolor the entire plot. Thresholds require a text or symbol label and never rely on red alone.
+
+Selection is a vertical rule plus selected points in each visible series. A pointer hover uses `motion.hover`; keyboard and persistent selection use `motion.state`. Selection must not change plot bounds, line width, or surrounding geometry.
+
+| Token | Value |
+| --- | --- |
+| `chart.tooltip.material` | `regularMaterial`; `thickMaterial` when more separation is required |
+| `chart.tooltip.radius` | `radius.control.compact` |
+| `chart.tooltip.inset` | `10 pt` |
+| `chart.tooltip.border` | `color.text.primary` at `0.10`, `1 pt`; dense variant uses `color.separator`, `0.5 pt` |
+| `chart.tooltip.shadow.light` | Black `0.12`, blur `8 pt`, y `3 pt` |
+| `chart.tooltip.shadow.dark` | Black `0.16`, blur `8 pt`, y `3 pt` |
+| `chart.tooltip.swatch.diameter` | `6 pt` |
+| `chart.tooltip.gap` | `7 pt` |
+
+Tooltip labels use `type.caption`; values use medium weight with monospaced digits. The tooltip is the only chart-local element with a drop shadow. Keep it inside the visible plot or flip its anchor around the selection rule so it never occludes the selected point or clips against the containing surface.
+
+### Chart Appearance and Accessibility
+
+Chart geometry, series identity, and color assignment remain identical across appearances. Light and Dark change only dynamic text, neutral plot tint, grid, axes, tooltip material, and the surrounding `effect.full` material response. Increased Contrast multiplies grid and axis opacity by `1.5`, caps the result at `1`, and raises `chart.selection.rule.width` and `chart.threshold.width` to `1 pt`; it does not increase chroma. Reduced Transparency replaces only material surfaces as documented in the appearance matrix. Reduce Motion preserves the final chart geometry and removes interpolation.
+
+Every chart needs a non-color representation of its series and a textual accessibility summary. Interactive charts expose the selected domain value and every visible series value through the accessibility layer. Missing, unavailable, and zero are distinct states; their spoken and visual representations must remain distinct.
+
 ## Appearance Matrix
 
 Later columns override earlier base recipes. Geometry never changes between appearances.
@@ -360,6 +482,7 @@ Later columns override earlier base recipes. Geometry never changes between appe
 | Control | Light native semantic colors | Dark native semantic colors | Border `1 pt`; focus ring `3 pt`; fill delta doubles | Use opaque native control background; no material tint | Clear hover and pressed; hide focus ring unless key-window focus remains |
 | Accent | Base chromatic value | Base chromatic value | Base value; never increase saturation | Base value | Multiply rendered accent opacity by `0.72` |
 | Icon base | Light icon recipe | Dark icon recipe | Border opacity `1`; focus ring `3 pt` | Opaque native control background | Clear hover; multiply accent foreground opacity by `0.72` |
+| Chart | Fixed series colors over light neutral plot tokens | Same fixed series colors over dark neutral plot tokens | Grid and axis opacity multiply by `1.5`; selection and threshold rules become `1 pt` | Marks unchanged; tooltip and containing surface use opaque fallbacks | Multiply chromatic mark opacity by `0.72`; dismiss hover tooltip |
 
 Each appearance must be evaluated as a complete native rendering environment. A dark rectangle placed on a light canvas is not evidence of Dark appearance; an opacity-reduced rectangle in an active window is not evidence of an inactive window.
 
@@ -389,10 +512,11 @@ A visual reference is valid only when it is produced by a native calibration vie
 
 ### Rendering Source
 
-- Compose the calibration view from the production canvas, glass surface, opaque surface, segmented control, action-button style, icon-button style, native text, and SF Symbols.
+- Compose the calibration view from the production canvas, glass surface, opaque surface, segmented control, action-button style, icon-button style, chart primitives, native text, and SF Symbols.
 - Attach it to a real on-screen `NSWindow` configured by the production window configurator. Off-screen SwiftUI image rendering is insufficient for system materials.
-- Use neutral calibration content such as `Aa 0123`, lines, swatches, and SF Symbols. Do not include a navigation model, page mockup, product label, or application data.
+- Use neutral calibration content such as `Aa 0123`, lines, swatches, chart marks, and SF Symbols. Do not include a navigation model, page mockup, product label, or application data.
 - Place low-contrast neutral and chromatic bands behind glass so blur, tint, and edge transmission can be inspected.
+- Include the same line/area, dual-line, threshold, selection, tooltip, histogram, bidirectional-bar, segmented-meter, and donut geometry in Light and Dark captures. Use fixed calibration samples so mark geometry is directly comparable; they are test fixtures, not simulated application state.
 
 ### Capture Matrix
 
@@ -421,7 +545,7 @@ Every reference set records:
 - display scale, expected to be `@2x` for the canonical set;
 - embedded color profile, expected to be sRGB IEC61966-2.1;
 - Light or Dark appearance, key-window state, Increased Contrast, Reduced Transparency, and Reduce Motion state;
-- visual-effect level and whether a live resize was active.
+- confirmation that the capture used `effect.full`, plus whether a live resize or accessibility override was active.
 
 Capture on both the minimum supported macOS release and the current supported macOS release because system material and native controls may differ. Compare captures from the same OS family before treating a pixel difference as a regression.
 
@@ -440,6 +564,7 @@ The following SVGs illustrate layer vocabulary only. They are not visual baselin
 - [Light material layer diagram](docs/assets/design/material-reference-light.svg)
 - [Dark material layer diagram](docs/assets/design/material-reference-dark.svg)
 - [Control state relationship diagram](docs/assets/design/control-state-reference.svg)
+- [Chart visual language diagram](docs/assets/design/chart-visual-language.svg)
 
 The SVGs use approximated fills, blur filters, fallback fonts, and hand-drawn glyphs. Browser scaling further changes fractional strokes. Their labels and relative ordering are useful; their rendered appearance is not authoritative.
 
