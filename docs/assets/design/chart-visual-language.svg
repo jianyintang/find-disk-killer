@@ -1,0 +1,182 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1040" viewBox="0 0 1400 1040">
+  <defs>
+    <linearGradient id="light-canvas" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.34"/>
+      <stop offset="0.52" stop-color="#ecf0f2" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.035"/>
+    </linearGradient>
+    <linearGradient id="dark-canvas" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.028"/>
+      <stop offset="0.52" stop-color="#090b0d" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.16"/>
+    </linearGradient>
+    <linearGradient id="light-glass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.70"/>
+      <stop offset="0.55" stop-color="#f6f8f9" stop-opacity="0.50"/>
+      <stop offset="1" stop-color="#d6dde0" stop-opacity="0.42"/>
+    </linearGradient>
+    <linearGradient id="dark-glass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.075"/>
+      <stop offset="0.52" stop-color="#151a1d" stop-opacity="0.84"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.28"/>
+    </linearGradient>
+    <linearGradient id="area-blue-light" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4d759e" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#4d759e" stop-opacity="0.015"/>
+    </linearGradient>
+    <linearGradient id="area-blue-dark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4d759e" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#4d759e" stop-opacity="0.02"/>
+    </linearGradient>
+    <filter id="shadow-light" x="-20%" y="-20%" width="140%" height="155%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+    <filter id="shadow-dark" x="-20%" y="-20%" width="140%" height="155%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <filter id="tooltip-shadow" x="-30%" y="-35%" width="160%" height="180%">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+    <clipPath id="light-main-clip"><rect x="62" y="188" width="596" height="210" rx="4"/></clipPath>
+    <clipPath id="dark-main-clip"><rect x="742" y="188" width="596" height="210" rx="4"/></clipPath>
+  </defs>
+
+  <rect width="700" height="1040" fill="#ecf0f2"/>
+  <rect width="700" height="1040" fill="url(#light-canvas)"/>
+  <rect x="700" width="700" height="1040" fill="#090b0d"/>
+  <rect x="700" width="700" height="1040" fill="url(#dark-canvas)"/>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif">
+    <text x="40" y="48" font-size="22" font-weight="600" fill="#1b2226">CHART VISUAL LANGUAGE</text>
+    <text x="40" y="74" font-size="12" fill="#58656c">LIGHT · EFFECT.FULL</text>
+    <text x="40" y="96" font-size="11" fill="#6c777d">Non-normative schematic · full-effect native captures remain authoritative</text>
+    <text x="720" y="48" font-size="22" font-weight="600" fill="#eef2f4">CHART VISUAL LANGUAGE</text>
+    <text x="720" y="74" font-size="12" fill="#9ca8ae">DARK · EFFECT.FULL</text>
+    <text x="720" y="96" font-size="11" fill="#7d898f">Non-normative schematic · full-effect native captures remain authoritative</text>
+
+    <!-- Light: line, area, threshold, selection, and tooltip -->
+    <rect x="40" y="128" width="640" height="302" rx="8" fill="#000000" fill-opacity="0.10" filter="url(#shadow-light)"/>
+    <rect x="40" y="125" width="640" height="302" rx="8" fill="url(#light-glass)" stroke="#1b2226" stroke-opacity="0.13" stroke-width="0.75"/>
+    <rect x="41.3" y="126.3" width="637.4" height="299.4" rx="6.7" fill="none" stroke="#ffffff" stroke-opacity="0.20" stroke-width="0.5"/>
+    <text x="62" y="160" font-size="10" font-weight="600" fill="#58656c">LINE / AREA · THRESHOLD · SELECTION</text>
+    <rect x="62" y="188" width="596" height="210" rx="4" fill="#58656c" fill-opacity="0.035"/>
+    <g stroke="#58656c" stroke-opacity="0.10" stroke-width="0.5">
+      <path d="M62 240 H658 M62 292 H658 M62 344 H658"/>
+      <path d="M181 188 V398 M300 188 V398 M419 188 V398 M538 188 V398"/>
+    </g>
+    <g clip-path="url(#light-main-clip)">
+      <rect x="62" y="188" width="596" height="50" fill="#bf3d38" fill-opacity="0.10"/>
+      <path d="M62 368 C115 346 148 354 196 319 C239 287 278 323 323 283 C366 245 402 272 447 224 C490 179 528 232 572 207 C607 187 630 199 658 181 L658 398 L62 398 Z" fill="url(#area-blue-light)"/>
+      <path d="M62 368 C115 346 148 354 196 319 C239 287 278 323 323 283 C366 245 402 272 447 224 C490 179 528 232 572 207 C607 187 630 199 658 181" fill="none" stroke="#4d759e" stroke-width="1.7" stroke-linejoin="round"/>
+    </g>
+    <path d="M62 238 H658" stroke="#bf3d38" stroke-opacity="0.72" stroke-width="0.8" stroke-dasharray="5 4"/>
+    <text x="650" y="230" font-size="9" text-anchor="end" fill="#bf3d38">THRESHOLD</text>
+    <path d="M447 188 V398" stroke="#58656c" stroke-opacity="0.70" stroke-width="0.75"/>
+    <circle cx="447" cy="224" r="3" fill="#4d759e" stroke="#ffffff" stroke-width="1"/>
+    <rect x="462" y="273" width="152" height="56" rx="6" fill="#000000" fill-opacity="0.12" filter="url(#tooltip-shadow)"/>
+    <rect x="462" y="270" width="152" height="56" rx="6" fill="#ffffff" fill-opacity="0.90" stroke="#1b2226" stroke-opacity="0.10" stroke-width="1"/>
+    <text x="474" y="291" font-size="10" fill="#58656c">SELECTED SAMPLE</text>
+    <circle cx="477" cy="309" r="3" fill="#4d759e"/><text x="487" y="313" font-size="11" fill="#58656c">SERIES A</text><text x="602" y="313" font-family="'SF Mono', monospace" font-size="11" text-anchor="end" fill="#1b2226">Aa 0123</text>
+
+    <!-- Dark: mirrored primary chart -->
+    <rect x="720" y="128" width="640" height="302" rx="8" fill="#000000" fill-opacity="0.38" filter="url(#shadow-dark)"/>
+    <rect x="720" y="125" width="640" height="302" rx="8" fill="url(#dark-glass)" stroke="#ffffff" stroke-opacity="0.13" stroke-width="0.75"/>
+    <rect x="721.3" y="126.3" width="637.4" height="299.4" rx="6.7" fill="none" stroke="#ffffff" stroke-opacity="0.035" stroke-width="0.5"/>
+    <text x="742" y="160" font-size="10" font-weight="600" fill="#9ca8ae">LINE / AREA · THRESHOLD · SELECTION</text>
+    <rect x="742" y="188" width="596" height="210" rx="4" fill="#ffffff" fill-opacity="0.025"/>
+    <g stroke="#9ca8ae" stroke-opacity="0.10" stroke-width="0.5">
+      <path d="M742 240 H1338 M742 292 H1338 M742 344 H1338"/>
+      <path d="M861 188 V398 M980 188 V398 M1099 188 V398 M1218 188 V398"/>
+    </g>
+    <g clip-path="url(#dark-main-clip)">
+      <rect x="742" y="188" width="596" height="50" fill="#bf3d38" fill-opacity="0.10"/>
+      <path d="M742 368 C795 346 828 354 876 319 C919 287 958 323 1003 283 C1046 245 1082 272 1127 224 C1170 179 1208 232 1252 207 C1287 187 1310 199 1338 181 L1338 398 L742 398 Z" fill="url(#area-blue-dark)"/>
+      <path d="M742 368 C795 346 828 354 876 319 C919 287 958 323 1003 283 C1046 245 1082 272 1127 224 C1170 179 1208 232 1252 207 C1287 187 1310 199 1338 181" fill="none" stroke="#4d759e" stroke-width="1.7" stroke-linejoin="round"/>
+    </g>
+    <path d="M742 238 H1338" stroke="#bf3d38" stroke-opacity="0.72" stroke-width="0.8" stroke-dasharray="5 4"/>
+    <text x="1330" y="230" font-size="9" text-anchor="end" fill="#bf3d38">THRESHOLD</text>
+    <path d="M1127 188 V398" stroke="#9ca8ae" stroke-opacity="0.70" stroke-width="0.75"/>
+    <circle cx="1127" cy="224" r="3" fill="#4d759e" stroke="#eef2f4" stroke-width="1"/>
+    <rect x="1142" y="273" width="152" height="56" rx="6" fill="#000000" fill-opacity="0.16" filter="url(#tooltip-shadow)"/>
+    <rect x="1142" y="270" width="152" height="56" rx="6" fill="#171d20" fill-opacity="0.96" stroke="#ffffff" stroke-opacity="0.10" stroke-width="1"/>
+    <text x="1154" y="291" font-size="10" fill="#9ca8ae">SELECTED SAMPLE</text>
+    <circle cx="1157" cy="309" r="3" fill="#4d759e"/><text x="1167" y="313" font-size="11" fill="#9ca8ae">SERIES A</text><text x="1282" y="313" font-family="'SF Mono', monospace" font-size="11" text-anchor="end" fill="#eef2f4">Aa 0123</text>
+
+    <!-- Compact glass surfaces -->
+    <g fill="url(#light-glass)" stroke="#1b2226" stroke-opacity="0.13" stroke-width="0.75">
+      <rect x="40" y="452" width="304" height="170" rx="8"/><rect x="376" y="452" width="304" height="170" rx="8"/>
+      <rect x="40" y="644" width="304" height="158" rx="8"/><rect x="376" y="644" width="304" height="158" rx="8"/>
+      <rect x="40" y="824" width="304" height="166" rx="8"/><rect x="376" y="824" width="304" height="166" rx="8"/>
+    </g>
+    <g fill="url(#dark-glass)" stroke="#ffffff" stroke-opacity="0.13" stroke-width="0.75">
+      <rect x="720" y="452" width="304" height="170" rx="8"/><rect x="1056" y="452" width="304" height="170" rx="8"/>
+      <rect x="720" y="644" width="304" height="158" rx="8"/><rect x="1056" y="644" width="304" height="158" rx="8"/>
+      <rect x="720" y="824" width="304" height="166" rx="8"/><rect x="1056" y="824" width="304" height="166" rx="8"/>
+    </g>
+
+    <!-- Dual line -->
+    <text x="60" y="480" font-size="10" font-weight="600" fill="#58656c">DUAL LINE</text>
+    <text x="740" y="480" font-size="10" font-weight="600" fill="#9ca8ae">DUAL LINE</text>
+    <g fill="none">
+      <path d="M62 578 C100 558 121 571 157 533 S218 552 250 510 S298 527 322 495" stroke="#4799a6" stroke-width="1.7"/>
+      <path d="M62 588 C101 545 131 558 167 555 S224 515 258 542 S300 502 322 517" stroke="#bf782e" stroke-width="2" stroke-dasharray="6 4"/>
+      <path d="M742 578 C780 558 801 571 837 533 S898 552 930 510 S978 527 1002 495" stroke="#4799a6" stroke-width="1.7"/>
+      <path d="M742 588 C781 545 811 558 847 555 S904 515 938 542 S980 502 1002 517" stroke="#bf782e" stroke-width="2" stroke-dasharray="6 4"/>
+    </g>
+    <g font-size="9"><circle cx="62" cy="505" r="3" fill="#4799a6"/><text x="72" y="508" fill="#58656c">DIRECTION A</text><circle cx="157" cy="505" r="3" fill="#bf782e"/><text x="167" y="508" fill="#58656c">DIRECTION B · DASH</text>
+      <circle cx="742" cy="505" r="3" fill="#4799a6"/><text x="752" y="508" fill="#9ca8ae">DIRECTION A</text><circle cx="837" cy="505" r="3" fill="#bf782e"/><text x="847" y="508" fill="#9ca8ae">DIRECTION B · DASH</text></g>
+
+    <!-- Micro histogram -->
+    <text x="396" y="480" font-size="10" font-weight="600" fill="#58656c">MICRO HISTOGRAM</text>
+    <text x="1076" y="480" font-size="10" font-weight="600" fill="#9ca8ae">MICRO HISTOGRAM</text>
+    <g fill="#4d759e" fill-opacity="0.70">
+      <rect x="398" y="570" width="14" height="28" rx="1.5"/><rect x="415" y="548" width="14" height="50" rx="1.5"/><rect x="432" y="558" width="14" height="40" rx="1.5"/><rect x="466" y="531" width="14" height="67" rx="1.5"/><rect x="483" y="542" width="14" height="56" rx="1.5"/><rect x="500" y="512" width="14" height="86" rx="1.5"/><rect x="517" y="525" width="14" height="73" rx="1.5"/><rect x="534" y="492" width="14" height="106" rx="1.5"/><rect x="551" y="508" width="14" height="90" rx="1.5"/><rect x="568" y="520" width="14" height="78" rx="1.5"/><rect x="585" y="500" width="14" height="98" rx="1.5"/><rect x="602" y="535" width="14" height="63" rx="1.5"/><rect x="619" y="517" width="14" height="81" rx="1.5"/><rect x="636" y="489" width="14" height="109" rx="1.5"/>
+      <rect x="1078" y="570" width="14" height="28" rx="1.5"/><rect x="1095" y="548" width="14" height="50" rx="1.5"/><rect x="1112" y="558" width="14" height="40" rx="1.5"/><rect x="1146" y="531" width="14" height="67" rx="1.5"/><rect x="1163" y="542" width="14" height="56" rx="1.5"/><rect x="1180" y="512" width="14" height="86" rx="1.5"/><rect x="1197" y="525" width="14" height="73" rx="1.5"/><rect x="1214" y="492" width="14" height="106" rx="1.5"/><rect x="1231" y="508" width="14" height="90" rx="1.5"/><rect x="1248" y="520" width="14" height="78" rx="1.5"/><rect x="1265" y="500" width="14" height="98" rx="1.5"/><rect x="1282" y="535" width="14" height="63" rx="1.5"/><rect x="1299" y="517" width="14" height="81" rx="1.5"/><rect x="1316" y="489" width="14" height="109" rx="1.5"/>
+    </g>
+    <rect x="449" y="595" width="14" height="3" rx="1.5" fill="#58656c" fill-opacity="0.14"/><rect x="1129" y="595" width="14" height="3" rx="1.5" fill="#9ca8ae" fill-opacity="0.14"/>
+
+    <!-- Bidirectional bars -->
+    <text x="60" y="672" font-size="10" font-weight="600" fill="#58656c">BIDIRECTIONAL BARS</text>
+    <text x="740" y="672" font-size="10" font-weight="600" fill="#9ca8ae">BIDIRECTIONAL BARS</text>
+    <path d="M192 690 V778 M872 690 V778" stroke="#85919e" stroke-opacity="0.26" stroke-width="0.75"/>
+    <g fill="#4799a6" fill-opacity="0.68"><rect x="104" y="699" width="88" height="10" rx="1.2"/><rect x="135" y="719" width="57" height="10" rx="1.2"/><rect x="79" y="739" width="113" height="10" rx="1.2"/><rect x="121" y="759" width="71" height="10" rx="1.2"/><rect x="784" y="699" width="88" height="10" rx="1.2"/><rect x="815" y="719" width="57" height="10" rx="1.2"/><rect x="759" y="739" width="113" height="10" rx="1.2"/><rect x="801" y="759" width="71" height="10" rx="1.2"/></g>
+    <g fill="#bf782e" fill-opacity="0.72"><rect x="192" y="699" width="61" height="10" rx="1.2"/><rect x="192" y="719" width="98" height="10" rx="1.2"/><rect x="192" y="739" width="44" height="10" rx="1.2"/><rect x="192" y="759" width="81" height="10" rx="1.2"/><rect x="872" y="699" width="61" height="10" rx="1.2"/><rect x="872" y="719" width="98" height="10" rx="1.2"/><rect x="872" y="739" width="44" height="10" rx="1.2"/><rect x="872" y="759" width="81" height="10" rx="1.2"/></g>
+
+    <!-- Segmented meter -->
+    <text x="396" y="672" font-size="10" font-weight="600" fill="#58656c">SEGMENTED METER</text>
+    <text x="1076" y="672" font-size="10" font-weight="600" fill="#9ca8ae">SEGMENTED METER</text>
+    <g stroke="#1b2226" stroke-opacity="0.05" stroke-width="0.5">
+      <g fill="#4d759e" fill-opacity="0.74"><rect x="398" y="707" width="22" height="56" rx="2"/><rect x="423" y="707" width="22" height="56" rx="2"/><rect x="448" y="707" width="22" height="56" rx="2"/><rect x="473" y="707" width="22" height="56" rx="2"/><rect x="498" y="707" width="22" height="56" rx="2"/><rect x="523" y="707" width="22" height="56" rx="2"/></g>
+      <g fill="#bf782e" fill-opacity="0.84"><rect x="548" y="707" width="22" height="56" rx="2"/><rect x="573" y="707" width="22" height="56" rx="2"/></g>
+      <g fill="#4d759e" fill-opacity="0.15"><rect x="598" y="707" width="22" height="56" rx="2"/><rect x="623" y="707" width="22" height="56" rx="2"/></g>
+      <g fill="#4d759e" fill-opacity="0.74"><rect x="1078" y="707" width="22" height="56" rx="2"/><rect x="1103" y="707" width="22" height="56" rx="2"/><rect x="1128" y="707" width="22" height="56" rx="2"/><rect x="1153" y="707" width="22" height="56" rx="2"/><rect x="1178" y="707" width="22" height="56" rx="2"/><rect x="1203" y="707" width="22" height="56" rx="2"/></g>
+      <g fill="#bf782e" fill-opacity="0.84"><rect x="1228" y="707" width="22" height="56" rx="2"/><rect x="1253" y="707" width="22" height="56" rx="2"/></g>
+      <g fill="#4d759e" fill-opacity="0.15"><rect x="1278" y="707" width="22" height="56" rx="2"/><rect x="1303" y="707" width="22" height="56" rx="2"/></g>
+    </g>
+
+    <!-- Donut -->
+    <text x="60" y="852" font-size="10" font-weight="600" fill="#58656c">DONUT · BUTT CAP · -90° ORIGIN</text>
+    <text x="740" y="852" font-size="10" font-weight="600" fill="#9ca8ae">DONUT · BUTT CAP · -90° ORIGIN</text>
+    <circle cx="192" cy="916" r="43" fill="none" stroke="#58656c" stroke-opacity="0.18" stroke-width="8"/>
+    <circle cx="192" cy="916" r="43" fill="none" stroke="#4d759e" stroke-opacity="0.78" stroke-width="8" stroke-dasharray="189 82" transform="rotate(-90 192 916)"/>
+    <text x="192" y="921" font-family="'SF Mono', monospace" font-size="13" text-anchor="middle" fill="#1b2226">Aa 0123</text>
+    <circle cx="872" cy="916" r="43" fill="none" stroke="#9ca8ae" stroke-opacity="0.18" stroke-width="8"/>
+    <circle cx="872" cy="916" r="43" fill="none" stroke="#4d759e" stroke-opacity="0.78" stroke-width="8" stroke-dasharray="189 82" transform="rotate(-90 872 916)"/>
+    <text x="872" y="921" font-family="'SF Mono', monospace" font-size="13" text-anchor="middle" fill="#eef2f4">Aa 0123</text>
+
+    <!-- Deterministic series palette -->
+    <text x="396" y="852" font-size="10" font-weight="600" fill="#58656c">DETERMINISTIC SERIES ORDER</text>
+    <text x="1076" y="852" font-size="10" font-weight="600" fill="#9ca8ae">DETERMINISTIC SERIES ORDER</text>
+    <g font-size="9" font-family="'SF Mono', monospace">
+      <g fill="#58656c"><text x="396" y="890">01</text><text x="396" y="916">02</text><text x="396" y="942">03</text><text x="526" y="890">04</text><text x="526" y="916">05</text><text x="526" y="942">06</text><text x="626" y="890">07</text><text x="626" y="916">08</text></g>
+      <g fill="#9ca8ae"><text x="1076" y="890">01</text><text x="1076" y="916">02</text><text x="1076" y="942">03</text><text x="1206" y="890">04</text><text x="1206" y="916">05</text><text x="1206" y="942">06</text><text x="1306" y="890">07</text><text x="1306" y="916">08</text></g>
+    </g>
+    <g><circle cx="423" cy="887" r="6" fill="#4d759e"/><circle cx="423" cy="913" r="6" fill="#4799a6"/><circle cx="423" cy="939" r="6" fill="#bf782e"/><circle cx="553" cy="887" r="6" fill="#85919e"/><circle cx="553" cy="913" r="6" fill="#4f9e78"/><circle cx="553" cy="939" r="6" fill="#8761a3"/><circle cx="653" cy="887" r="6" fill="#7361a6"/><circle cx="653" cy="913" r="6" fill="#479687"/>
+      <circle cx="1103" cy="887" r="6" fill="#4d759e"/><circle cx="1103" cy="913" r="6" fill="#4799a6"/><circle cx="1103" cy="939" r="6" fill="#bf782e"/><circle cx="1233" cy="887" r="6" fill="#85919e"/><circle cx="1233" cy="913" r="6" fill="#4f9e78"/><circle cx="1233" cy="939" r="6" fill="#8761a3"/><circle cx="1333" cy="887" r="6" fill="#7361a6"/><circle cx="1333" cy="913" r="6" fill="#479687"/></g>
+    <text x="396" y="973" font-size="9" fill="#bf3d38">CRITICAL IS RESERVED · NOT A SERIES COLOR</text>
+    <text x="1076" y="973" font-size="9" fill="#bf3d38">CRITICAL IS RESERVED · NOT A SERIES COLOR</text>
+
+    <text x="40" y="1018" font-size="10" fill="#6c777d">Marks are shadowless · glass, plot tint, area opacity, and tooltip elevation create depth</text>
+    <text x="720" y="1018" font-size="10" fill="#7d898f">Marks are shadowless · glass, plot tint, area opacity, and tooltip elevation create depth</text>
+  </g>
+</svg>
