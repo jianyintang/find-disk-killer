@@ -1,129 +1,346 @@
-# Instrument Interface Design
+# Instrument Interface Design System
 
-This document defines the visual language for a native macOS instrument interface. It is a reusable design system: the rules describe appearance, composition, typography, state communication, and motion without depending on a particular product, domain, or data model.
+This document defines a reusable visual system for native macOS instrument interfaces. It specifies design intent, concrete token values, composition rules, and motion behavior without depending on a particular product, domain, or data model.
 
 ## Design Intent
 
-The interface should feel like a precise, quiet instrument rather than a marketing page or a web dashboard. It should support sustained attention and quick scanning through restrained contrast, stable alignment, and carefully controlled physical depth.
+The interface should feel like a precise, quiet instrument rather than a marketing page or a web dashboard. It supports sustained attention and quick scanning through restrained contrast, stable alignment, and controlled physical depth.
 
 - Let hierarchy come from scale, spacing, and contrast before decoration.
-- Prefer information density with generous grouping over oversized empty regions.
-- Keep surfaces calm and legible in both light and dark appearances.
-- Use color and motion to explain relationships or change, never as decoration without meaning.
+- Prefer compact, well-grouped information over oversized empty regions.
+- Keep surfaces calm and legible in light, dark, increased-contrast, and reduced-transparency appearances.
+- Use color and motion to explain relationships, focus, or change.
 - Preserve the same visual grammar when content, language, or window size changes.
 
-## Canvas and Material
+## Token Architecture
 
-The interface is composed on a layered instrument canvas with translucent surfaces above it.
+Tokens are the source of truth for visual decisions. They have three layers:
 
-1. Use a cool, near-white mist for light appearance and a layered graphite/ink canvas for dark appearance.
-2. Use translucent system material for primary surfaces, with a low-opacity neutral tint and subtle background blur.
-3. Give each surface a 0.5-1 px outline, a faint bright top/leading edge, and a darker trailing/bottom edge.
-4. Use a short, soft contact shadow below a raised surface. Avoid large floating shadows.
-5. Use an 8 px radius for panels, 6 px for controls, and 6-7 px for icon bases.
-6. When transparency is reduced, replace material with an opaque raised canvas color while preserving geometry, border, and hierarchy.
-7. During live window resizing, freeze expensive blur and shadow effects and remove nonessential animation.
+1. **Reference tokens** contain raw values, such as `color.blue.500` or `space.250`.
+2. **Semantic tokens** describe purpose, such as `color.accent.primary` or `space.content.related`.
+3. **Component tokens** combine semantic tokens for a specific reusable element, such as `surface.glass.radius`.
 
-Depth should be legible from the edge treatment and tonal separation. Do not stack multiple decorative cards to create hierarchy; use whitespace, dividers, and material changes first.
+Use lowercase dot-separated names in the form `category.role.variant.state`. A global token must not contain a screen name, feature name, data source, or business concept. Component code consumes semantic or component tokens; raw values remain confined to the token definition.
 
-## Color Roles
+All dimensions are in logical points (`pt`). Color values use the sRGB color space. Opacity is expressed as a number from `0` to `1`. Duration is expressed in seconds.
 
-Neutral colors should cover roughly 85-92% of the frame. Accent colors are semantic tokens that can be assigned to any domain by the consuming screen.
+## Reference Tokens
 
-| Role | Use | Token |
+### Neutral Color
+
+Neutral tokens are adaptive because material depth must remain perceptually equivalent across appearances.
+
+| Token | Light | Dark | Purpose |
+| --- | --- | --- | --- |
+| `color.neutral.canvas` | `#ECF0F2` | `#090B0D` | Base window canvas |
+| `color.neutral.canvasRaised` | `#F6F8F9` | `#0F1315` | Opaque raised surface |
+| `color.neutral.sidebarTint` | `#DBE2E6` at `0.58` | `#13171A` at `0.70` | Sidebar material tint |
+| `color.neutral.white` | `#FFFFFF` | `#FFFFFF` | Edge light and material tint |
+| `color.neutral.black` | `#000000` | `#000000` | Contact shadow and depth tint |
+
+Text and separator colors use native macOS semantic colors so their contrast follows the active appearance:
+
+| Token | macOS source |
+| --- | --- |
+| `color.text.primary` | `Color.primary` |
+| `color.text.secondary` | `Color.secondary` |
+| `color.text.tertiary` | `Color(nsColor: .tertiaryLabelColor)` |
+| `color.separator` | `Color(nsColor: .separatorColor)` |
+| `color.focus` | `Color(nsColor: .keyboardFocusIndicatorColor)` |
+
+### Chromatic Color
+
+The chromatic palette is deliberately muted. The values remain constant between light and dark appearances; usage opacity and surrounding neutrals provide adaptation.
+
+| Token | sRGB | SwiftUI RGB | Intended character |
+| --- | --- | --- | --- |
+| `color.blue.500` | `#4D759E` | `(0.30, 0.46, 0.62)` | Precise, primary focus |
+| `color.cyan.500` | `#4799A6` | `(0.28, 0.60, 0.65)` | Cool direction or flow |
+| `color.amber.500` | `#BF782E` | `(0.75, 0.47, 0.18)` | Warm direction or caution |
+| `color.graphite.500` | `#85919E` | `(0.52, 0.57, 0.62)` | Neutral comparison series |
+| `color.green.500` | `#4F9E78` | `(0.31, 0.62, 0.47)` | Constructive action |
+| `color.green.600` | `#4F9C59` | `(0.31, 0.61, 0.35)` | Positive or verified state |
+| `color.violet.500` | `#8761A3` | `(0.53, 0.38, 0.64)` | Secondary quantitative series |
+| `color.indigo.500` | `#7361A6` | `(0.45, 0.38, 0.65)` | Secondary directional series |
+| `color.red.600` | `#BF3D38` | `(0.75, 0.24, 0.22)` | Destructive or critical state |
+| `color.teal.500` | `#479687` | `(0.28, 0.59, 0.53)` | Constructive secondary action |
+
+### Spacing
+
+The spacing scale combines a 2 pt micro-grid with an 8 pt composition rhythm. Use the smallest token that still makes the relationship clear.
+
+| Token | Value | Typical use |
+| --- | ---: | --- |
+| `space.0` | `0 pt` | Joined edges and divided rows |
+| `space.050` | `2 pt` | Label-to-caption separation |
+| `space.100` | `4 pt` | Tight inline grouping |
+| `space.150` | `6 pt` | Compact control content |
+| `space.200` | `8 pt` | Default inline gap |
+| `space.250` | `10 pt` | Related icon and text |
+| `space.300` | `12 pt` | Row and toolbar groups |
+| `space.400` | `16 pt` | Compact surface inset |
+| `space.450` | `18 pt` | Standard surface inset |
+| `space.500` | `20 pt` | Page inset |
+| `space.600` | `24 pt` | Section separation |
+| `space.800` | `32 pt` | Major composition break |
+
+Semantic spacing aliases:
+
+| Token | Alias |
+| --- | --- |
+| `space.content.compact` | `space.150` |
+| `space.content.related` | `space.250` |
+| `space.surface.inset` | `space.450` |
+| `space.page.inset` | `space.500` |
+| `space.section.gap` | `space.600` |
+
+### Radius and Stroke
+
+| Token | Value | Purpose |
+| --- | ---: | --- |
+| `radius.small` | `5 pt` | Small tags and chart callouts |
+| `radius.control` | `6 pt` | Buttons, fields, and segmented controls |
+| `radius.icon` | `7 pt` | Icon bases |
+| `radius.panel` | `8 pt` | Primary surfaces and repeated items |
+| `stroke.hairline` | `0.6 pt` | Optical inner edge |
+| `stroke.surface` | `0.75 pt` | Standard surface outline |
+| `stroke.surface.increasedContrast` | `1 pt` | Increased-contrast outline |
+| `stroke.chart` | `1.7 pt` | Primary chart series |
+
+All rounded rectangles use continuous corners. Do not derive a new radius by scaling a component; choose the closest named token.
+
+### Typography
+
+Typography uses the system font families, zero letter spacing, and the platform's default line metrics. This retains native rendering while fixing the intended hierarchy.
+
+| Token | Family | Size | Weight | Use |
+| --- | --- | ---: | --- | --- |
+| `type.display` | SF Pro Display | `26 pt` | Semibold | Highest page emphasis |
+| `type.title` | SF Pro Display | `20 pt` | Semibold | Page title |
+| `type.section` | SF Pro Display | `17 pt` | Medium | Section title |
+| `type.body` | SF Pro Text | `13 pt` | Regular | Primary prose and controls |
+| `type.label` | SF Pro Text | `12 pt` | Medium | Metric and field labels |
+| `type.caption` | SF Pro Text | `11 pt` | Regular | Supporting metadata |
+| `type.micro` | SF Pro Text | `10 pt` | Regular | Axes and dense helper labels |
+| `type.value.large` | SF Pro Display | `48 pt` | Light | Singular primary value |
+| `type.value.medium` | SF Pro Display | `36 pt` | Regular | Compact primary value |
+| `type.unit` | SF Pro Text | `12 pt` | Regular | Unit on the value baseline |
+| `type.data` | SF Mono | `12 pt` | Regular | Paths, times, identifiers, and tables |
+
+Apply `monospacedDigit()` to any numeric text that changes in place. Values and units share the first text baseline. Display type is reserved for page-level emphasis; sidebars, tables, and compact panels use `type.section` or smaller.
+
+### Opacity
+
+| Token | Value | Purpose |
+| --- | ---: | --- |
+| `opacity.fill.subtle` | `0.10` | Quiet accent background |
+| `opacity.fill.standard` | `0.12` | Selected or emphasized background |
+| `opacity.fill.strong` | `0.22` | Light material tint |
+| `opacity.border.standard` | `0.13` | Standard surface outline |
+| `opacity.border.increasedContrast` | `0.40` | Increased-contrast outline |
+| `opacity.disabled.content` | `0.45` | Disabled foreground content |
+| `opacity.disabled.surface` | `0.60` | Disabled surface treatment |
+
+Opacity tokens modify the color role; they never replace it. A disabled element uses both disabled opacity and a noninteractive cursor/behavior state.
+
+### Motion
+
+| Token | Duration | Curve | Purpose |
+| --- | ---: | --- | --- |
+| `motion.feedback` | `0.12 s` | `easeOut` | Hover and pressed feedback |
+| `motion.state` | `0.20 s` | `easeInOut` | Selection and local state change |
+| `motion.enter` | `0.28 s` | `easeOut` | Surface entering or expanding |
+| `motion.sample` | `0.36 s` | `easeInOut` | Changing values and live samples |
+| `motion.layout` | `0.40 s` | `easeInOut` | Small layout transformations |
+
+Portable cubic-bezier definitions:
+
+| Token | Control points |
+| --- | --- |
+| `curve.easeOut` | `(0.16, 1.00, 0.30, 1.00)` |
+| `curve.easeIn` | `(0.70, 0.00, 0.84, 0.00)` |
+| `curve.easeInOut` | `(0.65, 0.00, 0.35, 1.00)` |
+
+For direct manipulation and reordering, use `motion.spring.settle`: mass `1`, stiffness `260`, damping `32.25`, initial velocity `0`. The damping value is approximately critical damping, `c = 2 * sqrt(k * m)`, so the element settles without decorative overshoot.
+
+Reduce Motion resolves every duration token to `0 s` and replaces spring motion with an immediate state change. It does not remove the final position, opacity, or selection indication.
+
+### Layout
+
+| Token | Value | Purpose |
+| --- | ---: | --- |
+| `layout.sidebar.minWidth` | `220 pt` | Minimum usable sidebar |
+| `layout.sidebar.idealWidth` | `250 pt` | Default sidebar |
+| `layout.sidebar.maxWidth` | `280 pt` | Maximum sidebar before content gains priority |
+| `layout.row.compactHeight` | `32 pt` | Dense table row |
+| `layout.row.standardHeight` | `40 pt` | Standard list or inspector row |
+| `layout.control.minimumHeight` | `28 pt` | Compact macOS control |
+| `layout.iconButton.size` | `28 pt` | Stable square icon control |
+| `layout.chart.minimumHeight` | `160 pt` | Compact readable chart region |
+
+## Semantic Color Tokens
+
+Semantic tokens bind the palette to visual meaning without binding it to business vocabulary.
+
+| Token | Reference | Use |
 | --- | --- | --- |
-| Primary accent | Current focus, primary values, or the active category | `accent.primary` |
-| Secondary accent | A related comparison or supporting series | `accent.secondary` |
-| Direction A | One side of a directional pair | `accent.directionA` |
-| Direction B | The opposing side of a directional pair | `accent.directionB` |
-| Positive | Verified or favorable state | `status.positive` |
-| Caution | An actual condition requiring attention | `status.caution` |
-| Destructive | Irreversible or dangerous action | `status.destructive` |
-| Neutral | Context, inactive state, and supporting metadata | `neutral.*` |
+| `color.surface.canvas` | `color.neutral.canvas` | Window background |
+| `color.surface.raised` | `color.neutral.canvasRaised` | Opaque fallback and raised plane |
+| `color.surface.sidebar` | `color.neutral.sidebarTint` | Sidebar tint |
+| `color.accent.primary` | `color.blue.500` | Current focus and primary quantitative series |
+| `color.accent.secondary` | `color.violet.500` | Supporting comparison series |
+| `color.direction.a` | `color.cyan.500` | First side of a directional pair |
+| `color.direction.b` | `color.amber.500` | Opposing side of a directional pair |
+| `color.data.neutral` | `color.graphite.500` | Neutral series or inactive comparison |
+| `color.status.positive` | `color.green.600` | Positive or verified state |
+| `color.status.caution` | `color.amber.500` | State requiring attention |
+| `color.status.destructive` | `color.red.600` | Irreversible or critical state |
+| `color.action.constructive` | `color.teal.500` | Constructive secondary action |
 
-Use one dominant accent and at most one supporting accent in a view. Avoid rainbow palettes and colored gradients. Neutral gradients are allowed only when they communicate material thickness. A caution or destructive color must not appear in ordinary chart segments.
+Neutral colors should cover roughly 85-92% of the frame. Use one dominant accent and at most one supporting accent in a view. Direction tokens are labels for a pair, not fixed business meanings; the consuming interface assigns their vocabulary consistently.
 
-Accent colors need a light and dark appearance variant, a high-contrast variant, and a disabled treatment. Text, symbols, borders, and fills should share the same semantic token instead of using unrelated near-duplicate colors.
+Avoid rainbow palettes and colored gradients. Neutral gradients are allowed only when they communicate material thickness. Caution and destructive colors do not appear in ordinary chart segments.
 
-## Typography
+## Component Tokens
 
-Use the system font family. Letter spacing is zero. Use monospaced digits for changing numeric values so updates do not move surrounding content.
+### Canvas
 
-- Display title: SF Pro Display semibold, 19-26 pt.
-- Section title: SF Pro Display medium, 16-18 pt.
-- Label: SF Pro Text medium, 11-12 pt, secondary color.
-- Primary value: SF Pro Display light/regular, 32-48 pt.
-- Unit: SF Pro Text regular, 11-13 pt, subordinate on the same baseline.
-- Table and path values: SF Mono, 11-13 pt.
-- Axis and helper labels: SF Pro Text, 10-11 pt.
+| Token | Light | Dark |
+| --- | --- | --- |
+| `canvas.background` | `color.surface.canvas` | `color.surface.canvas` |
+| `canvas.material` | `ultraThinMaterial` at `0.34` | `ultraThinMaterial` at `0.46` |
+| `canvas.highlight.start` | White at `0.34` | White at `0.028` |
+| `canvas.shadow.end` | Black at `0.035` | Black at `0.16` |
+| `canvas.gradient.axis` | Top-leading to bottom-trailing | Top-leading to bottom-trailing |
 
-Keep a clear baseline between values and units. Reserve display-scale type for page-level emphasis; compact panels, sidebars, tables, and tool surfaces use the smaller scales. Long labels wrap or truncate deliberately with enough width for the longest expected word; they must never overlap adjacent content.
+When transparency is reduced, omit the material and gradient layers while retaining `canvas.background`.
 
-## Layout and Composition
+### Glass Surface
 
-Use an 8 px base spacing unit. Related elements use 8, 12, or 16 px gaps; major groups use 24 or 32 px. Align titles, controls, values, and table columns to shared vertical guides.
+| Token | Value |
+| --- | --- |
+| `surface.glass.radius` | `radius.panel` |
+| `surface.glass.inset` | `space.surface.inset` |
+| `surface.glass.material` | `ultraThinMaterial` |
+| `surface.glass.fallback` | `color.surface.raised` |
+| `surface.glass.border.width` | `stroke.surface` |
+| `surface.glass.border.color` | `color.text.primary` at `opacity.border.standard` |
+| `surface.glass.innerBorder.width` | `0.5 pt` |
+| `surface.glass.innerBorder.inset` | `1.25 pt` |
+
+Surface layer recipe, from back to front:
+
+1. Fill the continuous rounded rectangle with the material.
+2. Apply a neutral tint: white at `0.22` in light appearance or black at `0.16` in dark appearance.
+3. Apply a top-leading to bottom-trailing gradient: light `[white 0.30, clear, black 0.025]`; dark `[white 0.045, clear, black 0.10]`.
+4. Draw the standard outline. Increased Contrast changes its opacity to `0.40` and width to `1 pt`.
+5. Draw an optical edge with `stroke.hairline`: light `[white 0.72, white 0.025, black 0.10]`; dark `[white 0.20, white 0.025, black 0.34]`.
+6. Inset `1.25 pt` and draw the `0.5 pt` inner highlight: white at `0.20` in light appearance or `0.035` in dark appearance.
+7. Apply the elevation tokens below.
+
+| Token | Light | Dark |
+| --- | --- | --- |
+| `elevation.surface.contact` | Black `0.10`, blur `7 pt`, y `3 pt` | Black `0.38`, blur `9 pt`, y `3 pt` |
+| `elevation.surface.highlight` | White `0.30`, blur `1 pt`, y `-0.5 pt` | White `0.025`, blur `1 pt`, y `-0.5 pt` |
+
+During live resize, remove material, gradients, and elevation; use `surface.glass.fallback` without changing padding, radius, or border geometry.
+
+### Interactive Control
+
+| Token | Value |
+| --- | --- |
+| `control.radius` | `radius.control` |
+| `control.minimumHeight` | `layout.control.minimumHeight` |
+| `control.inlineGap` | `space.150` |
+| `control.hover.duration` | `motion.feedback` |
+| `control.hover.fill` | Active semantic color at `0.10` |
+| `control.selected.fill` | Active semantic color at `0.12` |
+| `control.focus.stroke` | `color.focus`, `2 pt` outside the content edge |
+| `control.disabled.contentOpacity` | `opacity.disabled.content` |
+
+Hover, focus, pressed, selected, disabled, and unavailable states must not change the control's dimensions. Pressed state reduces visual elevation before changing fill; selection combines fill with a symbol, border, or positional indicator.
+
+### Metric Band
+
+| Token | Value |
+| --- | --- |
+| `metricBand.item.minWidth` | `144 pt` |
+| `metricBand.gap` | `space.400` |
+| `metricBand.divider` | `color.separator`, `stroke.hairline` |
+| `metricBand.label` | `type.label`, `color.text.secondary` |
+| `metricBand.value` | `type.value.medium`, `color.text.primary` |
+| `metricBand.unit` | `type.unit`, `color.text.secondary` |
+
+Two to four related values share a first-text baseline and equal-width tracks. The container reserves the widest expected value width so updates do not reflow adjacent items.
+
+### Dense Row and Table
+
+| Token | Value |
+| --- | --- |
+| `row.compact.height` | `layout.row.compactHeight` |
+| `row.standard.height` | `layout.row.standardHeight` |
+| `row.horizontalInset` | `space.300` |
+| `row.columnGap` | `space.400` |
+| `row.value` | `type.data` with monospaced digits |
+| `row.separator` | `color.separator`, `stroke.hairline` |
+| `row.selected.fill` | `color.accent.primary` at `0.12` |
+
+Columns keep stable widths within a table. Selection changes in place and does not alter row height, padding, or column geometry.
+
+### Chart
+
+| Token | Value |
+| --- | --- |
+| `chart.stroke.width` | `stroke.chart` |
+| `chart.area.opacity` | `0.10` |
+| `chart.grid.stroke` | `color.separator` at `0.55` |
+| `chart.axis.label` | `type.micro`, `color.text.tertiary` |
+| `chart.transition` | `motion.sample` |
+| `chart.minimumHeight` | `layout.chart.minimumHeight` |
+
+Use a line for a changing quantity, bars for comparison, and a ring or segmented shape for a small number of proportions. Keep labels outside data marks where possible. A discontinuity is a visible gap or symbol, never a smoothed connection.
+
+## Motion and Mathematical Behavior
+
+Motion communicates continuity, focus, and causality. It should feel like a physical instrument settling into place rather than a decorative animation layer.
+
+- Limit local feedback translation to `4-12 pt` and panel translation to one control height.
+- Animate opacity and position together for a surface transition. Do not scale-pop controls.
+- Keep a persistent object's identity across state changes; do not replace it with an unrelated shape.
+- For a live horizontal series, translate existing samples by `dx = plotWidth / visibleIntervalCount` while the new sample enters at the trailing edge. Interpolate the translation with `motion.sample`.
+- For numeric interpolation, use `v(t) = v0 + (v1 - v0) * E(t)`, where `E(t)` is the selected easing curve. Render with monospaced digits so interpolation cannot alter layout width.
+- For proportional marks, interpolate normalized values before projecting them into pixels. Clamp only the rendered geometry, not the source value.
+- Avoid continuous pulsing, glowing, or motion without a state transition.
+
+## Composition Rules
 
 1. Start a screen with a compact header containing an optional symbol, title, context, and trailing controls on one visual plane.
-2. Place scrollable content on the instrument canvas, with stable top and side insets.
-3. Use flat, stable rows inside a surface. A nested card is reserved for a genuinely framed tool, modal, or repeated item.
-4. Let the next information group remain partially visible at the bottom edge when the window is scrolled, providing continuity without a separate banner.
-5. Keep a split sidebar between 220-280 pt where navigation or inspection requires it. At narrow widths, use `ViewThatFits`-style alternatives and stack lower-priority groups only after the primary group has a stable minimum size.
-6. Give fixed-format controls, tiles, grids, tables, and chart regions stable dimensions so labels and state changes cannot shift the layout.
+2. Place scrollable content on the canvas with `space.page.inset` at the sides.
+3. Use flat, stable rows inside a surface. A nested card is reserved for a framed tool, modal, or repeated item.
+4. Align titles, controls, values, and columns to shared vertical guides.
+5. At narrow widths, preserve the primary group's minimum dimensions before stacking lower-priority groups.
+6. Give boards, tiles, tables, chart regions, and icon controls stable dimensions so state and label changes cannot shift the layout.
 
-### Common Surface Patterns
-
-- **Header plane:** title hierarchy, context, and actions with one quiet material treatment.
-- **Metric band:** two to four related values sharing a baseline and divider rhythm.
-- **Inspector split:** a stable selection list beside one detail surface.
-- **Dense table:** compact rows, aligned columns, and a restrained selection treatment.
-- **Framed tool:** an isolated chart, editor, or confirmation surface that needs its own boundary.
-
-These patterns are compositional options, not requirements for any particular screen.
-
-## Data Visualization
-
-Charts are part of the visual system and should remain readable without relying on decoration.
-
-- Use a line for a changing quantity and a pale same-color area fill only when accumulated magnitude matters.
-- Use a bar for comparison and a ring or segmented shape for a small number of proportions.
-- Keep grid lines faint, axes quiet, and labels outside the data marks whenever possible.
-- Use a consistent baseline, scale, and unit within a chart. Mark discontinuities with a visible gap or symbol rather than smoothing them away.
-- Reserve the caution and destructive tokens for real state boundaries or annotations.
-- Provide a text or symbol equivalent for every color-coded distinction.
-
-## Motion and Physical Principles
-
-Motion should explain continuity, focus, and causality. It must feel like a physical instrument settling into place, not a decorative animation layer.
-
-- Use 0.25-0.40 s for ordinary value and sample transitions.
-- Prefer ease-out for elements entering or expanding, ease-in for elements leaving, and ease-in-out for a state that transforms in place.
-- Keep translation distances short: 4-12 px for local feedback and no more than one control height for a panel transition.
-- Preserve object identity. A live series should translate along its timeline with the newest sample entering at the edge; do not redraw it as an unrelated shape.
-- Animate opacity and position together for a surface transition. Avoid scale-popping controls and continuous pulsing or glowing.
-- Use low-amplitude interpolation for changing values, with no overshoot unless the physical metaphor explicitly calls for it.
-- Respect Reduce Motion by removing shape and value interpolation while preserving the final state and its hierarchy.
-- During live resize, keep controls interactive and defer expensive visual effects until the new geometry settles.
-
-## Interaction States
-
-Every interactive element has distinct visual treatments for rest, hover, focus, pressed, selected, disabled, and unavailable states.
-
-- Hover changes surface tint or border contrast subtly; it should not change layout.
-- Focus uses a visible keyboard indicator with sufficient contrast and a stable inset.
-- Pressed states reduce elevation or tint briefly to suggest contact.
-- Selection changes both a visual token and a structural indicator such as a leading bar, icon, or fill; never use color alone.
-- Disabled states reduce contrast and saturation while preserving readable labels and geometry.
-- Loading and empty states keep the final layout's dimensions and hierarchy. Use quiet placeholders only for unknown content, and keep known state labels visible.
+Common compositions are a header plane, metric band, inspector split, dense table, and framed tool. They are reusable spatial patterns, not requirements for any specific screen.
 
 ## Accessibility and Appearance Variants
 
-- Maintain readable contrast for text, symbols, borders, and selected states in light, dark, increased-contrast, and reduced-transparency appearances.
+- Maintain readable contrast for text, symbols, borders, and selected states in all supported appearances.
 - Pair every color distinction with text, shape, position, or symbol.
-- Give icon-only controls a localized accessible name and a hover tooltip.
-- Keep focus indicators visible when keyboard navigation is used.
+- Give icon-only controls an accessible name and a hover tooltip.
+- Keep keyboard focus indicators visible and geometrically stable.
 - Hide purely decorative placeholders from assistive technologies while exposing the actual state and available action.
-- Test narrow windows, large text, long localized labels, and both pointer and keyboard navigation without changing the design hierarchy.
+- Long labels wrap or truncate deliberately; text never overlaps adjacent content.
+- Test narrow windows, large text, long localized labels, and pointer and keyboard navigation without changing the visual hierarchy.
 
-## Implementation Notes
+## Implementation Contract
 
-Represent the rules above as shared tokens and primitives so new screens inherit the same geometry, colors, typography, and motion. A screen may introduce domain-specific labels, icons, or data visualizations, but it should not introduce a new surface language without a deliberate design decision.
+Token definitions are versioned design decisions. A token value changes only when the system's visual language changes; a component-specific exception does not mutate a global token.
+
+- Keep reference values in one namespace and expose semantic aliases to components.
+- Use component tokens for shared surface recipes instead of repeating modifier chains.
+- Do not place raw colors, spacing, radii, strokes, shadows, or motion durations in feature views.
+- Add a new reference token only when no existing value expresses the intended relationship.
+- Add a semantic token when an existing value needs a new stable purpose.
+- Add a component token when two or more properties must remain visually coupled.
+- Document appearance variants beside the base token rather than hiding them in implementation conditionals.
