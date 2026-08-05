@@ -16,6 +16,9 @@ func sidebarNavigationPreservesMonitoringAndRoutesSettingsPanes() {
     navigation.showAbout()
     navigation.showSettings()
     #expect(navigation.settingsPane == .general)
+
+    navigation.select(.monitoring(navigation.lastMonitoringDestination))
+    #expect(navigation.destination == .monitoring(.processes))
 }
 
 @Test @MainActor

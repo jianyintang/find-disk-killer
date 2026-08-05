@@ -131,12 +131,7 @@ struct RootView: View {
         } detail: {
             ZStack {
                 InstrumentCanvas()
-                detail
-                    .opacity(isShowingAuxiliaryPage ? 0 : 1)
-                    .allowsHitTesting(!isShowingAuxiliaryPage)
-                    .accessibilityHidden(isShowingAuxiliaryPage)
-
-                auxiliaryDetail
+                presentedDetail
             }
                 .navigationTitle("")
                 .toolbar {
@@ -255,8 +250,10 @@ struct RootView: View {
     }
 
     @ViewBuilder
-    private var auxiliaryDetail: some View {
+    private var presentedDetail: some View {
         switch navigation.destination {
+        case .monitoring:
+            detail
         case .settings:
             SettingsPage(
                 store: store,
@@ -268,8 +265,6 @@ struct RootView: View {
             )
         case .about:
             AboutPage(updates: updates)
-        case .monitoring:
-            EmptyView()
         }
     }
 

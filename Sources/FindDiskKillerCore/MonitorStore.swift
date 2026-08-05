@@ -10,6 +10,8 @@ public final class MonitorStore {
     public private(set) var disks: [DiskActivity] = []
     public private(set) var volumes: [VolumeInfo] = []
     public private(set) var processes: [ProcessActivity] = []
+    /// Lightweight publication token for views that cache process-derived layout.
+    public private(set) var processSummaryRevision = 0
     public private(set) var systemLayerActivity: SystemLayerActivity?
     public private(set) var health: MonitorHealth = .starting
     public private(set) var isCollecting = false
@@ -1087,6 +1089,7 @@ public final class MonitorStore {
             else { return }
             processes = result.0
             systemLayerActivity = result.1
+            processSummaryRevision &+= 1
             updateHealth(at: date)
         }
     }

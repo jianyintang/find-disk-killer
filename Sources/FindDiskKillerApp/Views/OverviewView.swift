@@ -525,6 +525,7 @@ struct OverviewView: View {
             ProcessTable(
                 processes: displayedProcesses,
                 systemLayerActivity: displayedSystemLayerActivity,
+                contentRevision: ProcessTableRevision(sample: store.processSummaryRevision),
                 selectedProcessID: selectedProcessID,
                 limit: 12,
                 hoverCoordinator: processHoverCoordinator,
@@ -1168,6 +1169,8 @@ final class ProcessHoverCoordinator {
 
     @ObservationIgnored private var pendingShowTask: Task<Void, Never>?
     @ObservationIgnored private var pendingDismissTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingScrollEndTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var isScrolling = false
 
     var activeProcessID: ProcessActivity.ID? {
         interaction.activeProcessID
@@ -1195,6 +1198,7 @@ final class ProcessHoverCoordinator {
         process: ProcessActivity,
         processes: [ProcessActivity]
     ) {
+        guard !isScrolling else { return }
         if interaction.suppressedProcessID == process.id { return }
         if interaction.activeProcessID == process.id { return }
         if frozenProcesses == nil {
@@ -1222,6 +1226,7 @@ final class ProcessHoverCoordinator {
     }
 
     func endHover(for processID: ProcessActivity.ID) {
+        guard !isScrolling else { return }
         switch interaction.end(processID) {
         case .ignored, .suppressionCleared:
             return
@@ -1263,7 +1268,30 @@ final class ProcessHoverCoordinator {
     }
 
     func reset() {
+        pendingScrollEndTask?.cancel()
+        pendingScrollEndTask = nil
+        isScrolling = false
         clearForSelection()
+    }
+
+    func scrollingStarted() {
+        pendingScrollEndTask?.cancel()
+        pendingScrollEndTask = nil
+        guard !isScrolling else { return }
+        isScrolling = true
+        cancelTasks()
+        interaction.clearForSelection()
+        presentation = nil
+    }
+
+    func scrollingEnded() {
+        pendingScrollEndTask?.cancel()
+        pendingScrollEndTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, let self else { return }
+            self.isScrolling = false
+            self.pendingScrollEndTask = nil
+        }
     }
 
     private func cancelTasks() {
@@ -1280,14 +1308,72 @@ enum ProcessTableLayoutContract {
     static let loadingRowCount = 6
 }
 
+struct ProcessTableRevision: Equatable {
+    var sample = 0
+    var query = ""
+}
+
+struct ProcessTablePage {
+    let rows: [ActiveAppRow]
+    let pageIndex: Int
+    let totalPages: Int
+}
+
+struct ProcessRowPresentation {
+    let process: ProcessActivity
+    let displayName: String
+    let subtitle: String
+    let cpu: String
+    let totalWrite: String
+    let currentWrite: String
+    let peakWrite: String
+    let networkDownload: String
+    let networkUpload: String
+    let accessibilityValue: String
+}
+
+struct SystemLayerRowPresentation {
+    let activity: SystemLayerActivity
+    let displayName: String
+    let subtitle: String
+    let cpu: String?
+    let totalWrite: String?
+    let currentWrite: String?
+    let peakWrite: String?
+    let networkDownload: String?
+    let networkUpload: String?
+    let accessibilityValue: String
+}
+
+enum ProcessTableRowPresentation: Identifiable {
+    case process(ProcessRowPresentation)
+    case systemLayer(SystemLayerRowPresentation)
+
+    var id: String {
+        switch self {
+        case let .process(value): value.process.id
+        case let .systemLayer(value): value.activity.id
+        }
+    }
+}
+
+private struct ProcessTableSortRevision: Equatable {
+    let key: ProcessSortKey
+    let ascending: Bool
+}
+
 struct ProcessTable: View {
     static let defaultSortKey: ProcessSortKey = .writeCurrent
     static let defaultSortAscending = false
+    static let appsPageSize = 20
+    private static let topAnchorID = "process-table-top"
 
     let processes: [ProcessActivity]
     var systemLayerActivity: SystemLayerActivity?
+    let contentRevision: ProcessTableRevision
     let selectedProcessID: ProcessActivity.ID?
     var limit: Int? = nil
+    var pageSize: Int? = nil
     var scrollAxes: Axis.Set = .horizontal
     let hoverCoordinator: ProcessHoverCoordinator
     let onSelect: (ProcessActivity) -> Void
@@ -1299,12 +1385,17 @@ struct ProcessTable: View {
     @State private var columnWidths = ProcessColumnWidths.load()
     @State private var availableTableWidth: CGFloat = 0
     @State private var isSystemLayerExplanationPresented = false
+    @State private var cachedVisibleRows: [ProcessTableRowPresentation] = []
+    @State private var pageIndex = 0
+    @State private var totalPages = 1
 
     init(
         processes: [ProcessActivity],
         systemLayerActivity: SystemLayerActivity? = nil,
+        contentRevision: ProcessTableRevision = ProcessTableRevision(),
         selectedProcessID: ProcessActivity.ID?,
         limit: Int? = nil,
+        pageSize: Int? = nil,
         scrollAxes: Axis.Set = .horizontal,
         hoverCoordinator: ProcessHoverCoordinator,
         onSelect: @escaping (ProcessActivity) -> Void,
@@ -1314,8 +1405,10 @@ struct ProcessTable: View {
     ) {
         self.processes = processes
         self.systemLayerActivity = systemLayerActivity
+        self.contentRevision = contentRevision
         self.selectedProcessID = selectedProcessID
         self.limit = limit
+        self.pageSize = pageSize
         self.scrollAxes = scrollAxes
         self.hoverCoordinator = hoverCoordinator
         self.onSelect = onSelect
@@ -1325,68 +1418,168 @@ struct ProcessTable: View {
     }
 
     var body: some View {
-        ScrollView(scrollAxes) {
+        ScrollViewReader { proxy in
             VStack(spacing: 0) {
-                processColumns(isHeader: true)
-                    .padding(.horizontal, 14)
-                    .frame(height: ProcessTableLayoutContract.headerHeight)
-                Divider()
+                ScrollView(scrollAxes) {
+                    VStack(spacing: 0) {
+                        processColumns(isHeader: true)
+                            .padding(.horizontal, 14)
+                            .frame(height: ProcessTableLayoutContract.headerHeight)
+                            .id(Self.topAnchorID)
+                        Divider()
 
-                if isLoading, activeRows.isEmpty {
-                    loadingRows
-                } else if activeRows.isEmpty {
-                    ContentUnavailableView(
-                        emptyStateTitle ?? L10n.text("正在建立应用基线"),
-                        systemImage: emptyStateSymbol
-                    )
-                        .frame(width: tableWidth)
-                        .frame(minHeight: 180)
-                } else {
-                    LazyVStack(spacing: 0) {
-                        ForEach(visibleSortedRows) { row in
-                            activeRow(row)
-                            Divider().padding(.leading, 8)
+                        if isLoading, cachedVisibleRows.isEmpty {
+                            loadingRows
+                        } else if cachedVisibleRows.isEmpty {
+                            ContentUnavailableView(
+                                emptyStateTitle ?? L10n.text("正在建立应用基线"),
+                                systemImage: emptyStateSymbol
+                            )
+                                .frame(width: tableWidth)
+                                .frame(minHeight: 180)
+                        } else {
+                            VStack(spacing: 0) {
+                                ForEach(cachedVisibleRows) { row in
+                                    activeRow(row)
+                                    Divider().padding(.leading, 8)
+                                }
+                            }
                         }
                     }
+                    .frame(width: tableWidth, alignment: .leading)
+                    .background {
+                        ProcessTableScrollObserver(
+                            onStart: hoverCoordinator.scrollingStarted,
+                            onEnd: finishScrolling,
+                            onViewportWidth: updateAvailableTableWidth
+                        )
+                    }
+                }
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: pageSize == nil ? nil : .infinity,
+                    alignment: .leading
+                )
+                .scrollIndicators(.automatic)
+                .defaultScrollAnchor(.topLeading)
+
+                if pageSize != nil, !cachedVisibleRows.isEmpty {
+                    pagination(proxy: proxy)
                 }
             }
-            .frame(width: tableWidth, alignment: .leading)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .scrollIndicators(.automatic)
-        .defaultScrollAnchor(.topLeading)
-        .background {
-            GeometryReader { geometry in
-                Color.clear.preference(
-                    key: ProcessTableWidthPreferenceKey.self,
-                    value: geometry.size.width
+            .onHover { isHovered in
+                hoverCoordinator.tableHoverChanged(
+                    isHovered,
+                    processes: processes,
+                    systemLayerActivity: systemLayerActivity
                 )
+                if !isHovered {
+                    refreshCachedRows()
+                }
             }
-        }
-        .onPreferenceChange(ProcessTableWidthPreferenceKey.self) { width in
-            guard width.isFinite, width > 0, abs(width - availableTableWidth) > 0.5 else { return }
-            availableTableWidth = width
-        }
-        .onHover { isHovered in
-            hoverCoordinator.tableHoverChanged(
-                isHovered,
-                processes: processes,
-                systemLayerActivity: systemLayerActivity
-            )
-        }
-        .onDisappear {
-            hoverCoordinator.reset()
+            .onAppear { refreshCachedRows() }
+            .onChange(of: contentRevision) { oldRevision, newRevision in
+                let queryChanged = oldRevision.query != newRevision.query
+                guard Self.shouldRefreshContent(
+                    oldRevision: oldRevision,
+                    newRevision: newRevision,
+                    isScrolling: hoverCoordinator.isScrolling
+                ) else { return }
+                refreshCachedRows(requestedPage: queryChanged ? 0 : pageIndex)
+                if queryChanged { scrollToTop(proxy) }
+            }
+            .onChange(of: sortRevision) { _, _ in
+                refreshCachedRows(requestedPage: 0)
+                scrollToTop(proxy)
+            }
+            .onDisappear {
+                hoverCoordinator.reset()
+            }
         }
     }
 
+    private var sortRevision: ProcessTableSortRevision {
+        ProcessTableSortRevision(key: sortKey, ascending: ascending)
+    }
+
+    static func shouldRefreshContent(
+        oldRevision: ProcessTableRevision,
+        newRevision: ProcessTableRevision,
+        isScrolling: Bool
+    ) -> Bool {
+        oldRevision.query != newRevision.query || !isScrolling
+    }
+
+    private func pagination(proxy: ScrollViewProxy) -> some View {
+        HStack(spacing: 10) {
+            Spacer()
+            Button {
+                showPage(pageIndex - 1, proxy: proxy)
+            } label: {
+                Image(systemName: "chevron.left")
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.borderless)
+            .disabled(pageIndex == 0)
+            .help(L10n.text("上一页"))
+            .accessibilityLabel(L10n.text("上一页"))
+
+            Text(L10n.format("第 %d / %d 页", pageIndex + 1, totalPages))
+                .font(.caption.weight(.medium).monospacedDigit())
+                .frame(minWidth: 72)
+
+            Button {
+                showPage(pageIndex + 1, proxy: proxy)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.borderless)
+            .disabled(pageIndex + 1 >= totalPages)
+            .help(L10n.text("下一页"))
+            .accessibilityLabel(L10n.text("下一页"))
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 42)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+    }
+
+    private func showPage(_ requestedPage: Int, proxy: ScrollViewProxy) {
+        refreshCachedRows(requestedPage: requestedPage)
+        scrollToTop(proxy)
+    }
+
+    private func scrollToTop(_ proxy: ScrollViewProxy) {
+        Task { @MainActor in
+            proxy.scrollTo(Self.topAnchorID, anchor: .topLeading)
+        }
+    }
+
+    private func finishScrolling() {
+        hoverCoordinator.scrollingEnded()
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(160))
+            guard !Task.isCancelled, !hoverCoordinator.isScrolling else { return }
+            refreshCachedRows()
+        }
+    }
+
+    private func updateAvailableTableWidth(_ width: CGFloat) {
+        guard width.isFinite, width > 0, abs(width - availableTableWidth) > 0.5 else { return }
+        availableTableWidth = width
+    }
+
     @ViewBuilder
-    private func activeRow(_ row: ActiveAppRow) -> some View {
+    private func activeRow(_ row: ProcessTableRowPresentation) -> some View {
         switch row {
-        case let .process(process):
+        case let .process(presentation):
+            let process = presentation.process
             Button {
                 select(process)
             } label: {
-                processColumns(process: process)
+                processColumns(presentation)
                     .padding(.horizontal, 14)
                     .frame(height: ProcessTableLayoutContract.rowHeight)
                     .contentShape(Rectangle())
@@ -1396,8 +1589,8 @@ struct ProcessTable: View {
                 isHovered: hoverCoordinator.activeProcessID == process.id
             ))
             .frame(height: ProcessTableLayoutContract.rowHeight)
-            .accessibilityLabel(process.localizedDisplayName)
-            .accessibilityValue(accessibilitySummary(for: process))
+            .accessibilityLabel(presentation.displayName)
+            .accessibilityValue(presentation.accessibilityValue)
             .accessibilityHint(L10n.text("按下打开详情"))
             .onContinuousHover { phase in
                 updateContinuousHover(for: process, phase: phase)
@@ -1408,11 +1601,11 @@ struct ProcessTable: View {
             ) {
                 ProcessHoverCard(process: hoverCoordinator.presentation?.process ?? process)
             }
-        case let .systemLayer(activity):
+        case let .systemLayer(presentation):
             Button {
                 isSystemLayerExplanationPresented.toggle()
             } label: {
-                systemLayerColumns(activity)
+                systemLayerColumns(presentation)
                     .padding(.horizontal, 14)
                     .frame(height: ProcessTableLayoutContract.rowHeight)
                     .contentShape(Rectangle())
@@ -1423,8 +1616,8 @@ struct ProcessTable: View {
             .popover(isPresented: $isSystemLayerExplanationPresented) {
                 SystemLayerExplanationView()
             }
-            .accessibilityLabel(L10n.text("macOS 与存储层"))
-            .accessibilityValue(accessibilitySummary(for: activity))
+            .accessibilityLabel(presentation.displayName)
+            .accessibilityValue(presentation.accessibilityValue)
             .accessibilityHint(L10n.text("按下查看统计口径"))
         }
     }
@@ -1451,56 +1644,41 @@ struct ProcessTable: View {
         .foregroundStyle(.secondary)
     }
 
-    private func processColumns(process: ProcessActivity) -> some View {
+    private func processColumns(_ presentation: ProcessRowPresentation) -> some View {
         let widths = displayedColumnWidths
         return HStack(spacing: 0) {
             HStack(spacing: 9) {
-                ProcessIcon(process: process, size: 26)
+                ProcessIcon(process: presentation.process, size: 26)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(process.localizedDisplayName)
+                    Text(presentation.displayName)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Text(process.memberCount > 1
-                        ? L10n.format("%d 个进程 · 全盘合计", process.memberCount)
-                        : L10n.text("全盘 I/O 合计"))
+                    Text(presentation.subtitle)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
             .frame(width: widths[.application], alignment: .leading)
-            .help(process.executablePath)
+            .help(presentation.process.executablePath)
 
             columnGap()
-            metricText(PercentFormatter.cpu(process.currentCPUPercent), width: widths[.cpu])
+            metricText(presentation.cpu, width: widths[.cpu])
             columnGap()
-            metricText(ByteRateFormatter.bytes(process.totalWriteBytes), width: widths[.writeTotal])
+            metricText(presentation.totalWrite, width: widths[.writeTotal])
             columnGap()
-            metricText(ByteRateFormatter.rate(process.currentWriteBytesPerSecond), width: widths[.writeCurrent])
+            metricText(presentation.currentWrite, width: widths[.writeCurrent])
             columnGap()
-            metricText(ByteRateFormatter.rate(process.peakWriteBytesPerSecond), width: widths[.writePeak])
+            metricText(presentation.peakWrite, width: widths[.writePeak])
             columnGap()
-            if process.isNetworkAvailable {
-                metricText(
-                    ByteRateFormatter.rate(process.averageNetworkReceiveBytesPerSecond),
-                    width: widths[.networkDownload]
-                )
-                columnGap()
-                metricText(
-                    ByteRateFormatter.rate(process.averageNetworkSendBytesPerSecond),
-                    width: widths[.networkUpload]
-                )
-                columnGap()
-            } else {
-                metricText(L10n.text("缺口"), width: widths[.networkDownload])
-                columnGap()
-                metricText(L10n.text("缺口"), width: widths[.networkUpload])
-                columnGap()
-            }
+            metricText(presentation.networkDownload, width: widths[.networkDownload])
+            columnGap()
+            metricText(presentation.networkUpload, width: widths[.networkUpload])
+            columnGap()
         }
         .font(.callout)
     }
 
-    private func systemLayerColumns(_ activity: SystemLayerActivity) -> some View {
+    private func systemLayerColumns(_ presentation: SystemLayerRowPresentation) -> some View {
         let widths = displayedColumnWidths
         return HStack(spacing: 0) {
             HStack(spacing: 9) {
@@ -1510,10 +1688,10 @@ struct ProcessTable: View {
                     .frame(width: 26, height: 26)
                     .background(.quaternary.opacity(0.65), in: RoundedRectangle(cornerRadius: 6))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(L10n.text("macOS 与存储层"))
+                    Text(presentation.displayName)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Text(L10n.text("系统服务、文件系统及无法进一步拆分的活动"))
+                    Text(presentation.subtitle)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -1522,17 +1700,17 @@ struct ProcessTable: View {
             .frame(width: widths[.application], alignment: .leading)
 
             columnGap()
-            optionalMetric(activity.currentCPUPercent.map(PercentFormatter.cpu), width: widths[.cpu])
+            optionalMetric(presentation.cpu, width: widths[.cpu])
             columnGap()
-            optionalMetric(activity.totalWriteBytes.map(ByteRateFormatter.bytes), width: widths[.writeTotal])
+            optionalMetric(presentation.totalWrite, width: widths[.writeTotal])
             columnGap()
-            optionalMetric(activity.currentWriteBytesPerSecond.map(ByteRateFormatter.rate), width: widths[.writeCurrent])
+            optionalMetric(presentation.currentWrite, width: widths[.writeCurrent])
             columnGap()
-            optionalMetric(activity.peakWriteBytesPerSecond.map(ByteRateFormatter.rate), width: widths[.writePeak])
+            optionalMetric(presentation.peakWrite, width: widths[.writePeak])
             columnGap()
-            optionalMetric(activity.averageNetworkReceiveBytesPerSecond.map(ByteRateFormatter.rate), width: widths[.networkDownload])
+            optionalMetric(presentation.networkDownload, width: widths[.networkDownload])
             columnGap()
-            optionalMetric(activity.averageNetworkSendBytesPerSecond.map(ByteRateFormatter.rate), width: widths[.networkUpload])
+            optionalMetric(presentation.networkUpload, width: widths[.networkUpload])
             columnGap()
         }
         .font(.callout)
@@ -1544,7 +1722,7 @@ struct ProcessTable: View {
     }
 
     private var loadingRows: some View {
-        LazyVStack(spacing: 0) {
+        VStack(spacing: 0) {
             ForEach(0..<ProcessTableLayoutContract.loadingRowCount, id: \.self) { _ in
                 loadingProcessColumns
                     .padding(.horizontal, 14)
@@ -1605,7 +1783,7 @@ struct ProcessTable: View {
 
     private func resizeHandle(after column: ProcessColumn) -> some View {
         ProcessColumnResizeHandle(
-            width: columnWidths[column],
+            width: displayedColumnWidths[column],
             limits: column.limits,
             onChange: { columnWidths[column] = $0 },
             onEnd: { columnWidths.save() }
@@ -1665,20 +1843,96 @@ struct ProcessTable: View {
         .accessibilityLabel(L10n.format("按%@排序", L10n.text(title)))
     }
 
-    private var activeRows: [ActiveAppRow] {
-        var rows = processSource.map(ActiveAppRow.process)
-        if let systemLayerSource { rows.append(.systemLayer(systemLayerSource)) }
-        return rows
-    }
-
     private var systemLayerSource: SystemLayerActivity? {
         hoverCoordinator.frozenProcesses == nil
             ? systemLayerActivity
             : hoverCoordinator.frozenSystemLayerActivity
     }
 
-    private var visibleSortedRows: [ActiveAppRow] {
-        Self.visibleRows(activeRows, limit: limit, sortKey: sortKey, ascending: ascending)
+    private func refreshCachedRows(requestedPage: Int? = nil) {
+        let sortedRows = Self.visibleRows(
+            Self.rows(from: processSource, systemLayerActivity: systemLayerSource),
+            limit: limit,
+            sortKey: sortKey,
+            ascending: ascending
+        )
+        let projection = Self.page(
+            sortedRows,
+            pageSize: pageSize,
+            requestedPage: requestedPage ?? pageIndex
+        )
+        cachedVisibleRows = projection.rows.map(Self.presentation)
+        pageIndex = projection.pageIndex
+        totalPages = projection.totalPages
+    }
+
+    private static func rows(
+        from processes: [ProcessActivity],
+        systemLayerActivity: SystemLayerActivity?
+    ) -> [ActiveAppRow] {
+        var rows = processes.map(ActiveAppRow.process)
+        if let systemLayerActivity { rows.append(.systemLayer(systemLayerActivity)) }
+        return rows
+    }
+
+    static func presentation(for row: ActiveAppRow) -> ProcessTableRowPresentation {
+        switch row {
+        case let .process(process):
+            let missing = L10n.text("缺口")
+            let cpu = PercentFormatter.cpu(process.currentCPUPercent)
+            let currentRead = ByteRateFormatter.rate(process.currentReadBytesPerSecond)
+            let currentWrite = ByteRateFormatter.rate(process.currentWriteBytesPerSecond)
+            return .process(ProcessRowPresentation(
+                process: process,
+                displayName: process.localizedDisplayName,
+                subtitle: process.memberCount > 1
+                    ? L10n.format("%d 个进程 · 全盘合计", process.memberCount)
+                    : L10n.text("全盘 I/O 合计"),
+                cpu: cpu,
+                totalWrite: ByteRateFormatter.bytes(process.totalWriteBytes),
+                currentWrite: currentWrite,
+                peakWrite: ByteRateFormatter.rate(process.peakWriteBytesPerSecond),
+                networkDownload: process.isNetworkAvailable
+                    ? ByteRateFormatter.rate(process.averageNetworkReceiveBytesPerSecond)
+                    : missing,
+                networkUpload: process.isNetworkAvailable
+                    ? ByteRateFormatter.rate(process.averageNetworkSendBytesPerSecond)
+                    : missing,
+                accessibilityValue: [
+                    ProcessLoadAssessment.assess(process).title,
+                    "\(L10n.text("CPU · 5 秒")): \(cpu)",
+                    "\(L10n.text("读取")): \(currentRead)",
+                    "\(L10n.text("写入")): \(currentWrite)"
+                ].joined(separator: ". ")
+            ))
+        case let .systemLayer(activity):
+            let missing = L10n.text("缺口")
+            let cpu = activity.currentCPUPercent.map(PercentFormatter.cpu)
+            let totalWrite = activity.totalWriteBytes.map(ByteRateFormatter.bytes)
+            let currentWrite = activity.currentWriteBytesPerSecond.map(ByteRateFormatter.rate)
+            let peakWrite = activity.peakWriteBytesPerSecond.map(ByteRateFormatter.rate)
+            let networkDownload = activity.averageNetworkReceiveBytesPerSecond.map(ByteRateFormatter.rate)
+            let networkUpload = activity.averageNetworkSendBytesPerSecond.map(ByteRateFormatter.rate)
+            return .systemLayer(SystemLayerRowPresentation(
+                activity: activity,
+                displayName: L10n.text("macOS 与存储层"),
+                subtitle: L10n.text("系统服务、文件系统及无法进一步拆分的活动"),
+                cpu: cpu,
+                totalWrite: totalWrite,
+                currentWrite: currentWrite,
+                peakWrite: peakWrite,
+                networkDownload: networkDownload,
+                networkUpload: networkUpload,
+                accessibilityValue: [
+                    "\(L10n.text("CPU · 5 秒")): \(cpu ?? missing)",
+                    "\(L10n.text("写入总量")): \(totalWrite ?? missing)",
+                    "\(L10n.text("当前写入")): \(currentWrite ?? missing)",
+                    "\(L10n.text("写入峰值")): \(peakWrite ?? missing)",
+                    "\(L10n.text("下载平均")): \(networkDownload ?? missing)",
+                    "\(L10n.text("上传平均")): \(networkUpload ?? missing)"
+                ].joined(separator: ". ")
+            ))
+        }
     }
 
     static func visibleRows(
@@ -1738,6 +1992,26 @@ struct ProcessTable: View {
         return selected
     }
 
+    static func page(
+        _ rows: [ActiveAppRow],
+        pageSize: Int?,
+        requestedPage: Int
+    ) -> ProcessTablePage {
+        guard let pageSize, pageSize > 0 else {
+            return ProcessTablePage(rows: rows, pageIndex: 0, totalPages: 1)
+        }
+        let totalPages = max(1, (rows.count + pageSize - 1) / pageSize)
+        let pageIndex = min(max(0, requestedPage), totalPages - 1)
+        let startIndex = pageIndex * pageSize
+        let endIndex = min(startIndex + pageSize, rows.count)
+        let visibleRows = startIndex < endIndex ? Array(rows[startIndex..<endIndex]) : []
+        return ProcessTablePage(
+            rows: visibleRows,
+            pageIndex: pageIndex,
+            totalPages: totalPages
+        )
+    }
+
     private var processSource: [ProcessActivity] {
         hoverCoordinator.frozenProcesses ?? processes
     }
@@ -1776,25 +2050,104 @@ struct ProcessTable: View {
         )
     }
 
-    private func accessibilitySummary(for process: ProcessActivity) -> String {
-        let assessment = ProcessLoadAssessment.assess(process).title
-        return [
-            assessment,
-            "\(L10n.text("CPU · 5 秒")): \(PercentFormatter.cpu(process.currentCPUPercent))",
-            "\(L10n.text("读取")): \(ByteRateFormatter.rate(process.currentReadBytesPerSecond))",
-            "\(L10n.text("写入")): \(ByteRateFormatter.rate(process.currentWriteBytesPerSecond))"
-        ].joined(separator: ". ")
+}
+
+private struct ProcessTableScrollObserver: NSViewRepresentable {
+    let onStart: @MainActor () -> Void
+    let onEnd: @MainActor () -> Void
+    let onViewportWidth: @MainActor (CGFloat) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            onStart: onStart,
+            onEnd: onEnd,
+            onViewportWidth: onViewportWidth
+        )
     }
 
-    private func accessibilitySummary(for activity: SystemLayerActivity) -> String {
-        [
-            "\(L10n.text("CPU · 5 秒")): \(activity.currentCPUPercent.map(PercentFormatter.cpu) ?? L10n.text("缺口"))",
-            "\(L10n.text("写入总量")): \(activity.totalWriteBytes.map(ByteRateFormatter.bytes) ?? L10n.text("缺口"))",
-            "\(L10n.text("当前写入")): \(activity.currentWriteBytesPerSecond.map(ByteRateFormatter.rate) ?? L10n.text("缺口"))",
-            "\(L10n.text("写入峰值")): \(activity.peakWriteBytesPerSecond.map(ByteRateFormatter.rate) ?? L10n.text("缺口"))",
-            "\(L10n.text("下载平均")): \(activity.averageNetworkReceiveBytesPerSecond.map(ByteRateFormatter.rate) ?? L10n.text("缺口"))",
-            "\(L10n.text("上传平均")): \(activity.averageNetworkSendBytesPerSecond.map(ByteRateFormatter.rate) ?? L10n.text("缺口"))"
-        ].joined(separator: ". ")
+    func makeNSView(context: Context) -> NSView {
+        NSView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onStart = onStart
+        context.coordinator.onEnd = onEnd
+        context.coordinator.onViewportWidth = onViewportWidth
+        DispatchQueue.main.async {
+            context.coordinator.observe(nsView.enclosingScrollView)
+        }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.stopObserving()
+    }
+
+    @MainActor
+    final class Coordinator {
+        var onStart: @MainActor () -> Void
+        var onEnd: @MainActor () -> Void
+        var onViewportWidth: @MainActor (CGFloat) -> Void
+        private weak var scrollView: NSScrollView?
+        private var observers: [NSObjectProtocol] = []
+
+        init(
+            onStart: @escaping @MainActor () -> Void,
+            onEnd: @escaping @MainActor () -> Void,
+            onViewportWidth: @escaping @MainActor (CGFloat) -> Void
+        ) {
+            self.onStart = onStart
+            self.onEnd = onEnd
+            self.onViewportWidth = onViewportWidth
+        }
+
+        func observe(_ nextScrollView: NSScrollView?) {
+            guard scrollView !== nextScrollView else { return }
+            stopObserving()
+            guard let nextScrollView else { return }
+            scrollView = nextScrollView
+            let clipView = nextScrollView.contentView
+            clipView.postsFrameChangedNotifications = true
+            let center = NotificationCenter.default
+            observers = [
+                center.addObserver(
+                    forName: NSScrollView.willStartLiveScrollNotification,
+                    object: nextScrollView,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.onStart() }
+                },
+                center.addObserver(
+                    forName: NSScrollView.didEndLiveScrollNotification,
+                    object: nextScrollView,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.onEnd() }
+                },
+                center.addObserver(
+                    forName: NSView.frameDidChangeNotification,
+                    object: clipView,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.reportViewportWidth() }
+                }
+            ]
+            reportViewportWidth()
+            DispatchQueue.main.async { [weak self] in
+                self?.reportViewportWidth()
+            }
+        }
+
+        private func reportViewportWidth() {
+            guard let scrollView else { return }
+            onViewportWidth(scrollView.contentView.bounds.width)
+        }
+
+        func stopObserving() {
+            let center = NotificationCenter.default
+            observers.forEach(center.removeObserver)
+            observers.removeAll()
+            scrollView = nil
+        }
     }
 }
 
@@ -1961,7 +2314,33 @@ struct ProcessColumnWidths: Equatable {
     }
 
     func adapted(to availableWidth: CGFloat) -> ProcessColumnWidths {
-        guard availableWidth.isFinite, availableWidth > tableWidth else { return self }
+        guard availableWidth.isFinite, availableWidth > 0 else { return self }
+
+        if availableWidth < tableWidth {
+            var resolved = self
+            let minimumWidth = ProcessColumn.allCases.reduce(Self.horizontalPadding) {
+                $0 + $1.limits.lowerBound
+            } + CGFloat(ProcessColumn.allCases.count) * ProcessColumn.resizeHandleWidth
+            if availableWidth <= minimumWidth {
+                for column in ProcessColumn.allCases {
+                    resolved.values[column] = column.limits.lowerBound
+                }
+                return resolved
+            }
+
+            let deficit = tableWidth - availableWidth
+            let totalCapacity = ProcessColumn.allCases.reduce(CGFloat.zero) {
+                $0 + max(0, self[$1] - $1.limits.lowerBound)
+            }
+            guard totalCapacity > 0 else { return self }
+            for column in ProcessColumn.allCases {
+                let capacity = max(0, self[column] - column.limits.lowerBound)
+                resolved.values[column] = self[column] - deficit * capacity / totalCapacity
+            }
+            return resolved
+        }
+
+        guard availableWidth > tableWidth else { return self }
 
         var resolved = self
         var remaining = availableWidth - tableWidth
@@ -1980,14 +2359,6 @@ struct ProcessColumnWidths: Equatable {
             resolved.values[column] = self[column] + remaining * column.adaptiveWeight / totalWeight
         }
         return resolved
-    }
-}
-
-private struct ProcessTableWidthPreferenceKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
     }
 }
 
