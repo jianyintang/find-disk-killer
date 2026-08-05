@@ -47,8 +47,7 @@ struct SettingsPage: View {
     var body: some View {
         VStack(spacing: 0) {
             InstrumentPageHeader(
-                "设置",
-                symbol: "gearshape"
+                "设置"
             ) {
                 ViewThatFits(in: .horizontal) {
                     settingsPanePicker(style: .segmented)

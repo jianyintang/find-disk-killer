@@ -62,7 +62,7 @@ struct ProcessesPageHeader: View {
     @Binding var searchText: String
 
     var body: some View {
-        InstrumentPageHeader("应用", symbol: "square.stack.3d.up") {
+        InstrumentPageHeader("应用") {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) {
                     rangeControl(width: 260)

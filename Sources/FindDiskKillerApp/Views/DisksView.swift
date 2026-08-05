@@ -11,7 +11,7 @@ struct DisksView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            InstrumentPageHeader("磁盘", symbol: "internaldrive") {
+            InstrumentPageHeader("磁盘") {
                 HStack(spacing: InstrumentDesign.Spacing.related) {
                     GlassSegmentedControl(
                         "磁盘视图",

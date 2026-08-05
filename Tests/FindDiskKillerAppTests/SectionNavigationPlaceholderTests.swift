@@ -32,6 +32,13 @@ import Testing
     #expect(ProcessTableLayoutContract.rowHeight == 56)
 }
 
+@Test func secondaryPagesUseTheNowHeaderLayoutContract() {
+    #expect(InstrumentPageHeaderLayout.minimumHeight == 62)
+    #expect(InstrumentPageHeaderLayout.horizontalPadding == InstrumentDesign.Spacing.page)
+    #expect(InstrumentPageHeaderLayout.topPadding == OverviewLayoutContract.pageTopPadding)
+    #expect(InstrumentPageHeaderLayout.wideSpacing == 18)
+}
+
 @Test func agentStorageOwnsItsOnlyToolbarActivityControl() {
     #expect(!AppSection.agentStorage.showsMonitoringToolbar)
     #expect(AppSection.overview.showsMonitoringToolbar)
