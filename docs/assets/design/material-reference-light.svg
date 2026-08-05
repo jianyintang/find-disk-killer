@@ -32,8 +32,8 @@
     <path d="M-40 572 C260 430 450 665 720 475 S1010 475 1260 315"/>
   </g>
   <g font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" fill="#1b2226">
-    <text x="54" y="64" font-size="24" font-weight="600">LIGHT MATERIAL REFERENCE</text>
-    <text x="54" y="91" font-size="12" fill="#526068">Canvas #ECF0F2 · top-leading neutral light · shallow contact depth</text>
+    <text x="54" y="64" font-size="24" font-weight="600">LIGHT MATERIAL LAYER DIAGRAM</text>
+    <text x="54" y="91" font-size="12" fill="#526068">Non-normative schematic · approximate fills and shadows</text>
   </g>
 
   <rect x="54" y="135" width="514" height="222" rx="8" fill="#000000" fill-opacity="0.10" filter="url(#surface-shadow)"/>
@@ -111,5 +111,5 @@
     <text x="798" y="615" font-size="12" fill="#58656c">1.0 increased contrast</text>
     <line x1="955" y1="611" x2="1146" y2="611" stroke="#1b2226" stroke-opacity="0.72" stroke-width="1"/>
   </g>
-  <text x="54" y="666" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="10" fill="#6c777d">Static calibration plate · native compositor material remains authoritative</text>
+  <text x="54" y="666" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="10" fill="#6c777d">Layer vocabulary only · native compositor captures remain authoritative</text>
 </svg>

@@ -9,8 +9,8 @@
   </defs>
   <rect width="1200" height="760" fill="#ecf0f2"/>
   <g font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif">
-    <text x="54" y="58" font-size="24" font-weight="600" fill="#1b2226">CONTROL STATE REFERENCE</text>
-    <text x="54" y="86" font-size="12" fill="#58656c">Exact visual overrides · geometry remains stable across states</text>
+    <text x="54" y="58" font-size="24" font-weight="600" fill="#1b2226">CONTROL STATE RELATIONSHIPS</text>
+    <text x="54" y="86" font-size="12" fill="#58656c">Non-normative schematic · native controls remain authoritative</text>
 
     <g font-size="10" font-weight="600" fill="#6b777d">
       <text x="54" y="138">REST</text><text x="216" y="138">HOVER</text><text x="378" y="138">PRESSED</text>
@@ -92,6 +92,6 @@
     <g font-size="11" font-weight="600" text-anchor="middle">
       <text x="149" y="620" fill="#1b2226">LIGHT</text><text x="361" y="620" fill="#eef2f4">DARK</text><text x="573" y="620" fill="#1b2226">INCREASED CONTRAST</text><text x="785" y="620" fill="#1b2226">OPAQUE FALLBACK</text><text x="997" y="620" fill="#1b2226">INACTIVE</text>
     </g>
-    <text x="54" y="728" font-size="10" fill="#6c777d">Static calibration plate · labels identify visual states only</text>
+    <text x="54" y="728" font-size="10" fill="#6c777d">State vocabulary only · fills, type, symbols, and shadows are approximate</text>
   </g>
 </svg>
