@@ -237,55 +237,78 @@ struct StorageMapView: View {
     }
 
     private var scopeBar: some View {
-        HStack(spacing: 12) {
-            Text(L10n.text("来源分类"))
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(.primary)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                scopeBarTitle
+                scopeTabs
+                    .frame(width: 640, height: 32)
+                Spacer(minLength: 8)
+                scopeMetadata
+            }
 
-            Picker(L10n.text("来源分类"), selection: $scope) {
-                ForEach(StorageMapScope.allCases) { item in
-                    Text(item.title).tag(item)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) {
+                    scopeBarTitle
+                    Spacer(minLength: 8)
+                    scopeMetadata
                 }
-            }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .frame(width: 156, height: 30, alignment: .leading)
-            .background(Color.primary.opacity(0.075), in: RoundedRectangle(cornerRadius: InstrumentDesign.Radius.control))
-            .overlay {
-                RoundedRectangle(cornerRadius: InstrumentDesign.Radius.control)
-                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: InstrumentDesign.Stroke.hairline)
-            }
-            Spacer(minLength: 8)
-            if model.snapshot != nil {
-                HStack(spacing: 14) {
-                    if hasSafeCleanupForOverview {
-                        Button { route = .safeCleanup } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "checkmark.shield.fill")
-                                Text(L10n.text("安全清理"))
-                                Text(safeCleanupValueForOverview)
-                                    .monospacedDigit()
-                            }
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(InstrumentDesign.ColorRole.cleanup)
-                            .padding(.horizontal, 9)
-                            .frame(height: 28)
-                            .background(InstrumentDesign.ColorRole.cleanup.opacity(0.11), in: RoundedRectangle(cornerRadius: 6))
-                        }
-                        .buttonStyle(.plain)
-                        .help(L10n.text("查看可安全清理的缓存"))
-                        .accessibilityIdentifier("storage-map-safe-cleanup-scope")
-                    }
-                    Text(L10n.format("%d 个来源", visibleItems.count))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                scopeTabs
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 32)
             }
         }
         .padding(.horizontal, 18)
-        .frame(height: 52)
-        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, minHeight: 52)
         .clipped()
+    }
+
+    private var scopeBarTitle: some View {
+        Text(L10n.text("来源分类"))
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .fixedSize()
+    }
+
+    private var scopeTabs: some View {
+        GlassSegmentedControl("来源分类", selection: $scope) {
+            ForEach(StorageMapScope.allCases) { item in
+                Text(item.title)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .tag(item)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var scopeMetadata: some View {
+        if model.snapshot != nil {
+            HStack(spacing: 14) {
+                if hasSafeCleanupForOverview {
+                    Button { route = .safeCleanup } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.shield.fill")
+                            Text(L10n.text("安全清理"))
+                            Text(safeCleanupValueForOverview)
+                                .monospacedDigit()
+                        }
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(InstrumentDesign.ColorRole.cleanup)
+                        .padding(.horizontal, 9)
+                        .frame(height: 28)
+                        .background(InstrumentDesign.ColorRole.cleanup.opacity(0.11), in: RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                    .help(L10n.text("查看可安全清理的缓存"))
+                    .accessibilityIdentifier("storage-map-safe-cleanup-scope")
+                }
+                Text(L10n.format("%d 个来源", visibleItems.count))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+        }
     }
 
     private var hasSafeCleanupForOverview: Bool {

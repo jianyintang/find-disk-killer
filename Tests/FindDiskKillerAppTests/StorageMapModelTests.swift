@@ -1186,6 +1186,18 @@ import Testing
     #expect(!row.contains(".disabled(isOpening)"))
 }
 
+@Test func storageMapSourceCategoryUsesSharedSegmentedTabs() throws {
+    let source = try storageMapViewSource()
+    let scopeBar = try #require(
+        source.split(separator: "private var scopeBar", maxSplits: 1).last?
+            .split(separator: "private var hasSafeCleanupForOverview", maxSplits: 1).first
+    )
+
+    #expect(scopeBar.contains("GlassSegmentedControl"))
+    #expect(scopeBar.contains("ViewThatFits(in: .horizontal)"))
+    #expect(!scopeBar.contains(".pickerStyle(.menu)"))
+}
+
 @Test func storageMapDetailsUseOneNativeBackControlAndOfficialBrandIcon() throws {
     let source = try storageMapViewSource()
     let agentBody = try #require(
