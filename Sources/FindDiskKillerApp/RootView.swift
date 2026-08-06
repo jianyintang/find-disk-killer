@@ -331,13 +331,13 @@ struct RootView: View {
                     nodeRuntime: claudeNodeRuntime
                 )
             } else {
-                AuxiliaryPagePlaceholder(title: L10n.text("设置"))
+                AuxiliaryPagePlaceholder(kind: .settings)
             }
         case .about:
             if presentedAuxiliaryPage == .about {
                 AboutPage(updates: updates)
             } else {
-                AuxiliaryPagePlaceholder(title: L10n.text("关于"))
+                AuxiliaryPagePlaceholder(kind: .about)
             }
         }
     }
@@ -360,8 +360,9 @@ struct RootView: View {
                 section: requestedSection,
                 snapshot: sectionSnapshots[requestedSection],
                 selectedRange: Bindable(store).selectedRange,
-                processSearchText: $processSearchText,
-                liveVolumeCount: store.volumes.filter(\.isLocal).count
+                liveVolumeCount: store.volumes.filter(\.isLocal).count,
+                visibleProcessCount: store.visibleProcessCount,
+                allVolumeCount: store.volumes.count
             )
         }
     }
@@ -414,11 +415,9 @@ struct RootView: View {
             return
         }
 
-        // 立即在后台并行捕获离开页面的快照，与合并延迟重叠，
-        // 保证快速来回切换时占位页能尽快显示上一帧的真实数据。
-        let departingSnapshotTask = Task { @MainActor in
-            await SectionPreviewSnapshot.capture(section: departing, store: store)
-        }
+        // 记录离开页面的快照时间，供占位页显示“上次刷新”状态；捕获本身是纯时间戳，
+        // 不复制任何数据，也不会阻塞页面切换。
+        let departingCapturedAt = SectionPreviewSnapshot.capture()
 
         do {
             // Coalesce rapid navigation so only the page the user settles on builds its
@@ -435,10 +434,7 @@ struct RootView: View {
             loadedSection = target
         }
 
-        // 页面切换不被快照构建阻塞；快照完成后再更新缓存，供下次访问使用。
-        let departingSnapshot = await departingSnapshotTask.value
-        guard !Task.isCancelled, requestedSection == target else { return }
-        sectionSnapshots[departing] = departingSnapshot
+        sectionSnapshots[departing] = departingCapturedAt
 
         do {
             try await Task.sleep(for: .milliseconds(120))
@@ -446,12 +442,7 @@ struct RootView: View {
             return
         }
         guard !Task.isCancelled, requestedSection == target else { return }
-        let targetSnapshot = await SectionPreviewSnapshot.capture(
-            section: target,
-            store: store
-        )
-        guard !Task.isCancelled, requestedSection == target else { return }
-        sectionSnapshots[target] = targetSnapshot
+        sectionSnapshots[target] = SectionPreviewSnapshot.capture()
     }
 }
 
@@ -461,53 +452,256 @@ private enum AuxiliaryPage: Equatable {
 }
 
 private struct AuxiliaryPagePlaceholder: View {
-    let title: String
+    let kind: AuxiliaryPage
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(.quaternary)
-                    .frame(width: 56, height: 17)
-                Spacer(minLength: 12)
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(.quaternary)
-                    .frame(width: 260, height: 30)
-            }
-            .padding(.horizontal, InstrumentPageHeaderLayout.horizontalPadding)
-            .padding(.top, InstrumentPageHeaderLayout.topPadding)
-            .padding(.bottom, InstrumentPageHeaderLayout.bottomPadding)
-            .frame(minHeight: InstrumentPageHeaderLayout.minimumHeight)
+        switch kind {
+        case .settings:
+            SettingsPagePlaceholder()
+        case .about:
+            AboutPagePlaceholder()
+        }
+    }
+}
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    ForEach(0..<3, id: \.self) { _ in
-                        VStack(spacing: 0) {
-                            ForEach(0..<3, id: \.self) { _ in
-                                HStack(spacing: 12) {
-                                    RoundedRectangle(cornerRadius: 3)
-                                        .fill(.quaternary)
-                                        .frame(width: 110, height: 11)
-                                    Spacer(minLength: 12)
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .fill(.quaternary.opacity(0.7))
-                                        .frame(width: 90, height: 22)
-                                }
-                                .frame(height: 44)
-                                Divider()
-                            }
-                        }
-                        .glassSurface(padding: 14)
-                    }
+/// Mirrors the Settings page (General pane) exactly by reusing the real Form
+/// container: the system inset-grouped width, centering, group cards and
+/// dividers therefore match the loaded page pixel for pixel. Only fixed
+/// labels are shown as text; every value that would change is a neutral shape.
+private struct SettingsPagePlaceholder: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            InstrumentPageHeader("设置") {
+                HStack(spacing: 8) {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(.quaternary.opacity(0.7))
+                        .frame(width: 118, height: 26)
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(.quaternary)
+                        .frame(width: 118, height: 26)
                 }
-                .padding(InstrumentDesign.Spacing.page)
+                .frame(width: 260, height: 30)
+                .accessibilityHidden(true)
             }
+            .accessibilityElement(children: .combine)
+
+            Form {
+                Section {
+                    settingsRow(labelWidth: 96, control: .picker)
+                    settingsRow(labelWidth: 120, control: .toggle)
+                    settingsRow(labelWidth: 150, control: .toggle)
+                }
+
+                Section(L10n.text("软件更新")) {
+                    settingsRow(labelWidth: 124, control: .toggle)
+                    settingsCaptionRow
+                }
+
+                Section {
+                    settingsRow(labelWidth: 158, control: .toggle)
+                    settingsRow(labelWidth: 116, control: .toggle, caption: true)
+                    settingsRow(labelWidth: 96, control: .fieldWithSlider)
+                }
+
+                Section(L10n.text("视觉效果")) {
+                    settingsRow(labelWidth: 96, control: .picker)
+                }
+
+                Section(L10n.text("Claude 官方清理")) {
+                    settingsRow(labelWidth: 124, control: .text)
+                    settingsRow(labelWidth: 96, control: .text)
+                }
+            }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .background(InstrumentDesign.Palette.canvas)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(InstrumentCanvas())
         .allowsHitTesting(false)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(L10n.format("正在准备%@…", title))
+        .accessibilityLabel(L10n.format("正在准备%@…", L10n.text("设置")))
+    }
+
+    private enum Control {
+        case picker
+        case toggle
+        case fieldWithSlider
+        case text
+    }
+
+    private func settingsRow(
+        labelWidth: CGFloat,
+        control: Control,
+        caption: Bool = false
+    ) -> some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 2.5)
+                .fill(.quaternary.opacity(0.8))
+                .frame(width: labelWidth, height: 10)
+            Spacer(minLength: 12)
+            Group {
+                switch control {
+                case .picker:
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(.quaternary.opacity(0.65))
+                        .frame(width: 170, height: 24)
+                case .toggle:
+                    RoundedRectangle(cornerRadius: 11)
+                        .fill(.quaternary.opacity(0.6))
+                        .frame(width: 38, height: 22)
+                case .fieldWithSlider:
+                    VStack(alignment: .trailing, spacing: 6) {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(.quaternary.opacity(0.65))
+                            .frame(width: 64, height: 22)
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(.quaternary.opacity(0.45))
+                            .frame(width: 170, height: 4)
+                    }
+                case .text:
+                    RoundedRectangle(cornerRadius: 2.5)
+                        .fill(.quaternary.opacity(0.55))
+                        .frame(width: 130, height: 10)
+                }
+            }
+            .accessibilityHidden(true)
+        }
+        .frame(height: caption ? 44 : 30)
+    }
+
+    private var settingsCaptionRow: some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(.quaternary.opacity(0.5))
+                .frame(width: 230, height: 8)
+            Spacer(minLength: 12)
+        }
+        .frame(height: 30)
+    }
+}
+
+/// Mirrors the About page exactly: brand header, update section, brand link
+/// group and the "More information" group. Fixed labels render as text;
+/// everything dynamic is a neutral shape.
+private struct AboutPagePlaceholder: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                HStack(spacing: 20) {
+                    RoundedRectangle(cornerRadius: 18)
+                        .fill(.quaternary)
+                        .frame(width: 84, height: 84)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("FindDiskKiller")
+                            .font(.title.bold())
+                        RoundedRectangle(cornerRadius: 2.5)
+                            .fill(.quaternary.opacity(0.65))
+                            .frame(width: 120, height: 10)
+                        RoundedRectangle(cornerRadius: 2.5)
+                            .fill(.quaternary.opacity(0.5))
+                            .frame(width: 260, height: 9)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(L10n.text("软件更新"))
+                        .font(.headline)
+                    VStack(spacing: 0) {
+                        HStack(spacing: 16) {
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(.quaternary.opacity(0.7))
+                                .frame(width: 34, height: 34)
+                            VStack(alignment: .leading, spacing: 4) {
+                                RoundedRectangle(cornerRadius: 2.5)
+                                    .fill(.quaternary.opacity(0.8))
+                                    .frame(width: 72, height: 10)
+                                RoundedRectangle(cornerRadius: 2.5)
+                                    .fill(.quaternary.opacity(0.55))
+                                    .frame(width: 110, height: 8)
+                            }
+                            Spacer(minLength: 20)
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(.quaternary.opacity(0.7))
+                                .frame(width: 96, height: 28)
+                        }
+                        .padding(16)
+                    }
+                    .glassSurface(padding: 0)
+                }
+
+                VStack(spacing: 0) {
+                    aboutLinkRow(title: L10n.text("官网"), descriptionWidth: 180)
+                    Divider()
+                    aboutLinkRow(title: "GitHub", descriptionWidth: 150)
+                }
+                .background(Color.secondary.opacity(0.035))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7)
+                        .strokeBorder(Color.secondary.opacity(0.14), lineWidth: 0.5)
+                }
+                .glassSurface(padding: 0)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.text("更多信息"))
+                        .font(.headline)
+                    HStack(spacing: 18) {
+                        aboutCompactLink(title: L10n.text("隐私政策"))
+                        aboutCompactLink(title: L10n.text("获取支持"))
+                    }
+                }
+                .glassSurface(padding: 16)
+            }
+            .frame(maxWidth: 760, alignment: .leading)
+            .padding(32)
+            .frame(maxWidth: .infinity, alignment: .top)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(InstrumentCanvas())
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(L10n.format("正在准备%@…", L10n.text("关于")))
+    }
+
+    private func aboutLinkRow(title: String, descriptionWidth: CGFloat) -> some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.quaternary)
+                .frame(width: 28, height: 28)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.callout.weight(.medium))
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(.quaternary.opacity(0.5))
+                    .frame(width: descriptionWidth, height: 8)
+            }
+            Spacer(minLength: 12)
+            RoundedRectangle(cornerRadius: 2.5)
+                .fill(.quaternary.opacity(0.5))
+                .frame(width: 90, height: 10)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+        }
+        .padding(14)
+    }
+
+    private func aboutCompactLink(title: String) -> some View {
+        HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 4)
+                .fill(.quaternary)
+                .frame(width: 16, height: 16)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.callout)
+            Image(systemName: "chevron.right")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+        }
     }
 }
 
@@ -566,153 +760,19 @@ private struct InstrumentWindowConfigurator: NSViewRepresentable {
 
 private struct SectionPreviewSnapshot: Sendable {
     let capturedAt: Date
-    let processes: [ProcessPreviewRow]
-    let volumes: [VolumePreviewRow]
 
-    @MainActor
-    static func capture(section: AppSection, store: MonitorStore) async -> Self {
-        let input = SectionPreviewInput(
-            section: section,
-            capturedAt: Date(),
-            processes: store.processes,
-            volumes: store.volumes,
-            disks: store.disks
-        )
-        return await Task.detached(priority: .utility) {
-            build(input)
-        }.value
+    static func capture() -> Self {
+        Self(capturedAt: Date())
     }
-
-    nonisolated private static func build(_ input: SectionPreviewInput) -> Self {
-        let processes: [ProcessPreviewRow]
-        if input.section == .processes || input.section == .overview {
-            let limit = input.section == .overview ? 12 : 6
-            processes = input.processes
-                .sorted { $0.currentCPUPercent > $1.currentCPUPercent }
-                .prefix(limit)
-                .map(ProcessPreviewRow.init)
-        } else {
-            processes = []
-        }
-
-        let volumes: [VolumePreviewRow]
-        if input.section == .disks || input.section == .overview {
-            volumes = input.volumes.filter(\.isLocal).prefix(5).map { volume in
-                let disks = input.disks.filter {
-                    $0.isPhysical && volume.physicalDiskBSDNames.contains($0.bsdName)
-                }
-                return VolumePreviewRow(
-                    id: volume.id,
-                    name: volume.name,
-                    readRate: disks.reduce(0) { $0 + $1.readBytesPerSecond },
-                    writeRate: disks.reduce(0) { $0 + $1.writeBytesPerSecond }
-                )
-            }
-        } else {
-            volumes = []
-        }
-
-        return Self(
-            capturedAt: input.capturedAt,
-            processes: processes,
-            volumes: volumes
-        )
-    }
-}
-
-private struct SectionPreviewInput: Sendable {
-    let section: AppSection
-    let capturedAt: Date
-    let processes: [ProcessActivity]
-    let volumes: [VolumeInfo]
-    let disks: [DiskActivity]
-}
-
-private struct ProcessPreviewRow: Identifiable, Sendable {
-    let id: String
-    let name: String
-    let subtitle: String
-    let cpu: String
-    let totalWrite: String
-    let currentWrite: String
-    let peakWrite: String
-    let download: String
-    let upload: String
-
-    init(_ process: ProcessActivity) {
-        id = process.id
-        name = process.localizedDisplayName
-        subtitle = process.memberCount > 1
-            ? L10n.format("%d 个进程 · 全盘合计", process.memberCount)
-            : L10n.text("全盘 I/O 合计")
-        cpu = process.currentUnavailableMetrics.contains(.cpu)
-            ? L10n.text("不可用") : PercentFormatter.cpu(process.currentCPUPercent)
-        totalWrite = process.intervalUnavailableMetrics.contains(.write)
-            ? L10n.text("不可用") : ByteRateFormatter.bytes(process.totalWriteBytes)
-        currentWrite = process.currentUnavailableMetrics.contains(.write)
-            ? L10n.text("不可用")
-            : ByteRateFormatter.rate(process.currentWriteBytesPerSecond)
-        peakWrite = process.intervalUnavailableMetrics.contains(.write)
-            ? L10n.text("不可用")
-            : ByteRateFormatter.rate(process.peakWriteBytesPerSecond)
-        download = process.isNetworkAvailable
-            ? ByteRateFormatter.rate(process.averageNetworkReceiveBytesPerSecond)
-            : L10n.text("不可用")
-        upload = process.isNetworkAvailable
-            ? ByteRateFormatter.rate(process.averageNetworkSendBytesPerSecond)
-            : L10n.text("不可用")
-    }
-
-    static func placeholder(_ index: Int) -> Self {
-        Self(
-            id: "placeholder-\(index)",
-            name: L10n.text("应用"),
-            subtitle: L10n.text("全盘 I/O 合计"),
-            cpu: "00.0%",
-            totalWrite: "000 MB",
-            currentWrite: "0.00 MB/s",
-            peakWrite: "0.00 MB/s",
-            download: "0.00 MB/s",
-            upload: "0.00 MB/s"
-        )
-    }
-
-    private init(
-        id: String,
-        name: String,
-        subtitle: String,
-        cpu: String,
-        totalWrite: String,
-        currentWrite: String,
-        peakWrite: String,
-        download: String,
-        upload: String
-    ) {
-        self.id = id
-        self.name = name
-        self.subtitle = subtitle
-        self.cpu = cpu
-        self.totalWrite = totalWrite
-        self.currentWrite = currentWrite
-        self.peakWrite = peakWrite
-        self.download = download
-        self.upload = upload
-    }
-}
-
-private struct VolumePreviewRow: Identifiable, Sendable {
-    let id: String
-    let name: String
-    let readRate: Double
-    let writeRate: Double
 }
 
 private struct SectionNavigationPlaceholder: View {
     let section: AppSection
     let snapshot: SectionPreviewSnapshot?
     @Binding var selectedRange: SampleRange
-    @Binding var processSearchText: String
     let liveVolumeCount: Int
+    let visibleProcessCount: Int
+    let allVolumeCount: Int
     @State private var processTableWidth: CGFloat = 0
 
     var body: some View {
@@ -910,8 +970,9 @@ private struct SectionNavigationPlaceholder: View {
     private var overviewVolumeColumnPlaceholder: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
-                DataValue(value: "0.00", unit: "MB/s", size: 44)
-                    .redacted(reason: .placeholder)
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(.quaternary)
+                    .frame(width: 84, height: 26)
                 Text(L10n.text("当前写入"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -920,10 +981,9 @@ private struct SectionNavigationPlaceholder: View {
 
             ScrollView(.vertical) {
                 LazyVStack(spacing: 0) {
-                    ForEach(previewVolumes) { volume in
-                        overviewVolumeRow(volume)
+                    ForEach(0..<previewVolumeCount, id: \.self) { _ in
+                        overviewVolumeRow
                             .frame(height: overviewSkeletonDiskLayout.rowHeight)
-                            .redacted(reason: snapshot == nil ? .placeholder : [])
                     }
                 }
             }
@@ -936,29 +996,26 @@ private struct SectionNavigationPlaceholder: View {
         .frame(height: overviewSkeletonDiskLayout.contentHeight, alignment: .top)
     }
 
-    private func overviewVolumeRow(_ volume: VolumePreviewRow) -> some View {
+    private var overviewVolumeRow: some View {
         HStack(spacing: 10) {
-            Image(systemName: "internaldrive")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
+            RoundedRectangle(cornerRadius: 5)
+                .fill(.quaternary)
                 .frame(width: 24, height: 24)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(volume.name)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
-                Text(L10n.text("设备实时吞吐"))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 5) {
+                RoundedRectangle(cornerRadius: 2.5)
+                    .fill(.quaternary.opacity(0.8))
+                    .frame(width: 96, height: 9)
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(.quaternary.opacity(0.55))
+                    .frame(width: 64, height: 7)
             }
             Spacer(minLength: 8)
-            HStack(spacing: 10) {
-                Text(ByteRateFormatter.rate(volume.readRate))
-                    .foregroundStyle(InstrumentDesign.ColorRole.diskRead)
-                Text(ByteRateFormatter.rate(volume.writeRate))
-                    .foregroundStyle(InstrumentDesign.ColorRole.diskWrite)
-            }
-            .font(.caption.monospaced().weight(.medium))
+            RoundedRectangle(cornerRadius: 2.5)
+                .fill(.quaternary.opacity(0.65))
+                .frame(width: 52, height: 9)
+            RoundedRectangle(cornerRadius: 2.5)
+                .fill(.quaternary.opacity(0.65))
+                .frame(width: 52, height: 9)
         }
         .padding(.vertical, 8)
         .overlay(alignment: .bottom) { Divider() }
@@ -971,9 +1028,9 @@ private struct SectionNavigationPlaceholder: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             HStack(spacing: 8) {
-                skeletonSummaryValue("读取", color: InstrumentDesign.ColorRole.diskRead)
-                skeletonSummaryValue("写入", color: InstrumentDesign.ColorRole.diskWrite)
-                skeletonSummaryValue("写入峰值", color: .secondary)
+                skeletonSummaryValue("读取")
+                skeletonSummaryValue("写入")
+                skeletonSummaryValue("写入峰值")
             }
             HStack(spacing: 12) {
                 Text(L10n.text("读取"))
@@ -987,15 +1044,14 @@ private struct SectionNavigationPlaceholder: View {
         .padding(.top, 2)
     }
 
-    private func skeletonSummaryValue(_ title: String, color: Color) -> some View {
+    private func skeletonSummaryValue(_ title: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(L10n.text(title))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            Text("0.00 MB/s")
-                .font(.system(.caption, design: .monospaced, weight: .semibold))
-                .foregroundStyle(color)
-                .redacted(reason: .placeholder)
+            RoundedRectangle(cornerRadius: 2.5)
+                .fill(.quaternary.opacity(0.65))
+                .frame(width: 64, height: 11)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1042,7 +1098,7 @@ private struct SectionNavigationPlaceholder: View {
     }
 
     private var overviewSkeletonDiskLayout: OverviewDiskLayout {
-        OverviewDiskLayout(volumeCount: previewVolumes.count)
+        OverviewDiskLayout(volumeCount: previewVolumeCount)
     }
 
     private var overviewApplicationTable: some View {
@@ -1050,8 +1106,8 @@ private struct SectionNavigationPlaceholder: View {
             VStack(spacing: 0) {
                 previewTableHeader
                 Divider()
-                ForEach(previewProcesses) { process in
-                    previewProcessRow(process)
+                ForEach(0..<previewProcessCount, id: \.self) { _ in
+                    previewProcessRow
                     Divider().padding(.leading, 8)
                 }
             }
@@ -1078,31 +1134,35 @@ private struct SectionNavigationPlaceholder: View {
             processHeaderPlaceholder
 
             Group {
-                ScrollView([.horizontal, .vertical]) {
-                    VStack(spacing: 0) {
-                        previewTableHeader
-                        Divider()
-                        ForEach(previewProcesses) { process in
-                            previewProcessRow(process)
-                            Divider().padding(.leading, 14)
+                VStack(spacing: 0) {
+                    ScrollView([.horizontal, .vertical]) {
+                        VStack(spacing: 0) {
+                            previewTableHeader
+                            Divider()
+                            ForEach(0..<previewProcessCount, id: \.self) { _ in
+                                previewProcessRow
+                                Divider().padding(.leading, 14)
+                            }
+                        }
+                        .frame(width: previewTableWidth, alignment: .leading)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .scrollIndicators(.automatic)
+                    .defaultScrollAnchor(.topLeading)
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: ProcessPlaceholderWidthPreferenceKey.self,
+                                value: geometry.size.width
+                            )
                         }
                     }
-                    .frame(width: previewTableWidth, alignment: .leading)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .scrollIndicators(.automatic)
-                .defaultScrollAnchor(.topLeading)
-                .background {
-                    GeometryReader { geometry in
-                        Color.clear.preference(
-                            key: ProcessPlaceholderWidthPreferenceKey.self,
-                            value: geometry.size.width
-                        )
+                    .onPreferenceChange(ProcessPlaceholderWidthPreferenceKey.self) { width in
+                        guard width.isFinite, width > 0, abs(width - processTableWidth) > 0.5 else { return }
+                        processTableWidth = width
                     }
-                }
-                .onPreferenceChange(ProcessPlaceholderWidthPreferenceKey.self) { width in
-                    guard width.isFinite, width > 0, abs(width - processTableWidth) > 0.5 else { return }
-                    processTableWidth = width
+
+                    previewPaginationPlaceholder
                 }
             }
             .glassSurface(padding: 0)
@@ -1117,27 +1177,52 @@ private struct SectionNavigationPlaceholder: View {
     }
 
     private var processHeaderPlaceholder: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(.quaternary)
-                    .frame(width: 56, height: 17)
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(.quaternary.opacity(0.7))
-                    .frame(width: 130, height: 9)
+        InstrumentPageHeader("应用") {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(.quaternary)
+                        .frame(width: 260, height: 30)
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(.quaternary.opacity(0.7))
+                        .frame(width: 240, height: 30)
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(.quaternary.opacity(0.6))
+                        .frame(width: 150, height: 22)
+                }
+
+                HStack(spacing: 10) {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(.quaternary)
+                        .frame(width: 250, height: 30)
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(.quaternary.opacity(0.7))
+                        .frame(width: 220, height: 30)
+                }
             }
-            Spacer(minLength: 12)
-            RoundedRectangle(cornerRadius: 6)
-                .fill(.quaternary)
-                .frame(width: 260, height: 30)
-            RoundedRectangle(cornerRadius: 6)
-                .fill(.quaternary.opacity(0.7))
-                .frame(width: 240, height: 30)
+            .accessibilityHidden(true)
         }
-        .padding(.horizontal, InstrumentPageHeaderLayout.horizontalPadding)
-        .padding(.top, InstrumentPageHeaderLayout.topPadding)
-        .padding(.bottom, InstrumentPageHeaderLayout.bottomPadding)
-        .frame(minHeight: InstrumentPageHeaderLayout.minimumHeight)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var previewPaginationPlaceholder: some View {
+        HStack(spacing: 10) {
+            Spacer()
+            RoundedRectangle(cornerRadius: 4)
+                .fill(.quaternary)
+                .frame(width: 18, height: 18)
+            RoundedRectangle(cornerRadius: 2)
+                .fill(.quaternary.opacity(0.7))
+                .frame(width: 72, height: 10)
+            RoundedRectangle(cornerRadius: 4)
+                .fill(.quaternary)
+                .frame(width: 18, height: 18)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 42)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
         .accessibilityHidden(true)
     }
 
@@ -1152,79 +1237,111 @@ private struct SectionNavigationPlaceholder: View {
     }
 
     private var resourcePlaceholder: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                HStack(spacing: 18) {
-                    ForEach(0..<4, id: \.self) { _ in
-                        VStack(alignment: .leading, spacing: 7) {
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(.quaternary)
-                                .frame(width: 76, height: 10)
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(.quaternary)
-                                .frame(width: 112, height: 22)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+        VStack(spacing: 0) {
+            InstrumentPageHeader("磁盘") {
+                HStack(spacing: InstrumentDesign.Spacing.related) {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(.quaternary)
+                        .frame(width: 260, height: 30)
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(.quaternary.opacity(0.7))
+                        .frame(width: 30, height: 30)
                 }
-
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(.quaternary.opacity(0.55))
-                    .frame(height: 220)
-
-                VStack(spacing: 0) {
-                    ForEach(previewVolumes) { volume in
-                        HStack(spacing: 12) {
-                            Image(systemName: "internaldrive")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 28)
-                            Text(volume.name)
-                                .lineLimit(1)
-                            Spacer()
-                            Text(ByteRateFormatter.rate(volume.readRate))
-                                .foregroundStyle(.teal)
-                            Text(ByteRateFormatter.rate(volume.writeRate))
-                                .foregroundStyle(.orange)
-                                .frame(width: 110, alignment: .trailing)
-                        }
-                        .frame(height: 50)
-                        .redacted(reason: snapshot == nil ? .placeholder : [])
-                        Divider()
-                    }
-                }
+                .accessibilityHidden(true)
             }
-            .padding(22)
+            .accessibilityElement(children: .combine)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    HStack(spacing: 16) {
+                        diskMetricPlaceholder("读取 · 最近 5 秒", symbol: "eye")
+                        Divider().frame(height: 38)
+                        diskMetricPlaceholder("写入 · 最近 5 秒", symbol: "pencil.line")
+                        Divider().frame(height: 38)
+                        diskMetricPlaceholder("已挂载卷", symbol: "externaldrive.connected.to.line.below")
+                    }
+                    .glassSurface(padding: 16)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        SectionHeading("物理设备总吞吐", subtitle: "虚拟磁盘不计入总量")
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(.quaternary.opacity(0.55))
+                            .frame(height: 220)
+                    }
+                    .glassSurface(padding: 16)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        SectionHeading("已挂载卷", subtitle: "卷名直接对应底层设备的实时吞吐")
+                        ForEach(0..<previewVolumeCount, id: \.self) { _ in
+                            HStack(spacing: 12) {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(.quaternary)
+                                    .frame(width: 26, height: 26)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    RoundedRectangle(cornerRadius: 2.5)
+                                        .fill(.quaternary.opacity(0.8))
+                                        .frame(width: 120, height: 10)
+                                    RoundedRectangle(cornerRadius: 2)
+                                        .fill(.quaternary.opacity(0.55))
+                                        .frame(width: 90, height: 8)
+                                }
+                                Spacer(minLength: 8)
+                                RoundedRectangle(cornerRadius: 2.5)
+                                    .fill(.quaternary.opacity(0.65))
+                                    .frame(width: 64, height: 10)
+                                RoundedRectangle(cornerRadius: 2.5)
+                                    .fill(.quaternary.opacity(0.65))
+                                    .frame(width: 64, height: 10)
+                                RoundedRectangle(cornerRadius: 5)
+                                    .fill(.quaternary.opacity(0.7))
+                                    .frame(width: 26, height: 26)
+                            }
+                            .frame(height: 52)
+                            Divider()
+                        }
+                    }
+                    .glassSurface(padding: 16)
+                }
+                .padding(InstrumentDesign.Spacing.page)
+            }
         }
         .overlay(alignment: .topTrailing) {
             statusLabel.padding(22)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(sectionLoadingAccessibilityLabel)
     }
 
-    private var previewProcesses: [ProcessPreviewRow] {
-        guard let processes = snapshot?.processes, !processes.isEmpty else {
-            let count = section == .overview
-                ? OverviewLayoutContract.applicationRowLimit
-                : ProcessTableLayoutContract.loadingRowCount
-            return (0..<count).map(ProcessPreviewRow.placeholder)
-        }
-        return processes
-    }
-
-    private var previewVolumes: [VolumePreviewRow] {
-        guard let volumes = snapshot?.volumes, !volumes.isEmpty else {
-            return (0..<liveVolumeCount).map {
-                VolumePreviewRow(
-                    id: "placeholder-\($0)",
-                    name: L10n.text("磁盘"),
-                    readRate: 0,
-                    writeRate: 0
-                )
+    private func diskMetricPlaceholder(_ title: String, symbol: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 22)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L10n.text(title))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(.quaternary)
+                    .frame(width: 84, height: 20)
             }
         }
-        return volumes
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var previewProcessCount: Int {
+        let limit = section == .overview
+            ? OverviewLayoutContract.applicationRowLimit
+            : ProcessTable.appsPageSize
+        return min(limit, max(visibleProcessCount, 1))
+    }
+
+    private var previewVolumeCount: Int {
+        let count = section == .disks ? allVolumeCount : liveVolumeCount
+        return max(count, 1)
     }
 
     private var sectionLoadingAccessibilityLabel: String {
@@ -1270,45 +1387,45 @@ private struct SectionNavigationPlaceholder: View {
             .frame(width: width, alignment: alignment)
     }
 
-    private func previewProcessRow(_ process: ProcessPreviewRow) -> some View {
+    private var previewProcessRow: some View {
         let widths = previewColumnWidths
         return HStack(spacing: 0) {
             HStack(spacing: 9) {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(.quaternary)
                     .frame(width: 26, height: 26)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(process.name).lineLimit(1)
-                    Text(process.subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                VStack(alignment: .leading, spacing: 5) {
+                    RoundedRectangle(cornerRadius: 2.5)
+                        .fill(.quaternary.opacity(0.8))
+                        .frame(width: 110, height: 9)
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(.quaternary.opacity(0.55))
+                        .frame(width: 72, height: 7)
                 }
             }
             .frame(width: widths[.application], alignment: .leading)
             previewColumnGap
-            previewValue(process.cpu, width: widths[.cpu])
+            previewSkeletonValue(width: widths[.cpu])
             previewColumnGap
-            previewValue(process.totalWrite, width: widths[.writeTotal])
+            previewSkeletonValue(width: widths[.writeTotal])
             previewColumnGap
-            previewValue(process.currentWrite, width: widths[.writeCurrent])
+            previewSkeletonValue(width: widths[.writeCurrent])
             previewColumnGap
-            previewValue(process.peakWrite, width: widths[.writePeak])
+            previewSkeletonValue(width: widths[.writePeak])
             previewColumnGap
-            previewValue(process.download, width: widths[.networkDownload])
+            previewSkeletonValue(width: widths[.networkDownload])
             previewColumnGap
-            previewValue(process.upload, width: widths[.networkUpload])
+            previewSkeletonValue(width: widths[.networkUpload])
             previewColumnGap
         }
         .padding(.horizontal, 14)
         .frame(height: ProcessTableLayoutContract.rowHeight)
-        .redacted(reason: snapshot == nil ? .placeholder : [])
     }
 
-    private func previewValue(_ value: String, width: CGFloat) -> some View {
-        Text(value)
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
+    private func previewSkeletonValue(width: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: 2.5)
+            .fill(.quaternary.opacity(0.65))
+            .frame(width: min(44, width), height: 9)
             .frame(width: width, alignment: .trailing)
     }
 
