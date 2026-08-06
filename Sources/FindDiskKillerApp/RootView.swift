@@ -62,6 +62,9 @@ struct RootView: View {
     @State private var sectionSnapshots: [AppSection: SectionPreviewSnapshot] = [:]
     @State private var processSearchText = ""
     @State private var isWindowLiveResizing = false
+    @State private var presentedAuxiliaryPage: AuxiliaryPage?
+    @State private var auxiliarySwitchTask: Task<Void, Never>?
+    @State private var isReturningFromAuxiliary = false
     @Environment(\.visualEffectLevel) private var visualEffectLevel
 
     init(
@@ -162,6 +165,33 @@ struct RootView: View {
         }
         .tint(InstrumentDesign.ColorRole.cpu)
         .environment(\.isWindowLiveResizing, isWindowLiveResizing)
+        .onChange(of: navigation.destination) { _, newValue in
+            switch newValue {
+            case .monitoring:
+                // 从设置/关于页返回时，先显示轻量骨架（高亮当帧只做轻量重绘），
+                // 50ms 后再重建监控页视图树，避免其构建（含 TextField 等）拖累高亮帧。
+                let wasAuxiliary = presentedAuxiliaryPage != nil
+                auxiliarySwitchTask?.cancel()
+                auxiliarySwitchTask = nil
+                presentedAuxiliaryPage = nil
+                if wasAuxiliary {
+                    isReturningFromAuxiliary = true
+                    auxiliarySwitchTask = Task { @MainActor in
+                        do {
+                            try await Task.sleep(for: .milliseconds(50))
+                        } catch {
+                            return
+                        }
+                        guard !Task.isCancelled else { return }
+                        isReturningFromAuxiliary = false
+                    }
+                }
+            case .settings:
+                scheduleAuxiliaryPage(.settings)
+            case .about:
+                scheduleAuxiliaryPage(.about)
+            }
+        }
         .transaction { transaction in
             if isWindowLiveResizing || visualEffectLevel.disablesMotion {
                 transaction.disablesAnimations = true
@@ -174,6 +204,21 @@ struct RootView: View {
                     updateWindowLiveResizeState(isResizing)
                 }
             }
+        }
+    }
+
+    private func scheduleAuxiliaryPage(_ page: AuxiliaryPage) {
+        auxiliarySwitchTask?.cancel()
+        auxiliarySwitchTask = Task { @MainActor in
+            // 让选中高亮在当前帧完成渲染后再构建设置/关于页，
+            // 避免表单（含 TextField）的初始化拖累点击反馈。
+            do {
+                try await Task.sleep(for: .milliseconds(50))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            presentedAuxiliaryPage = page
         }
     }
 
@@ -261,6 +306,9 @@ struct RootView: View {
     }
 
     private func selectSidebarDestination(_ destination: SidebarDestination) {
+        // 选中态与目标页同步提交：骨架屏轻量，高亮与骨架在同一帧完成渲染。
+        // 设置/关于页的真实内容由 onChange(of: navigation.destination) 分帧提交，
+        // 避免其较重的表单构建（含 TextField 等）拖累高亮帧。
         navigation.select(destination)
         guard case .monitoring(let section) = destination,
               section != requestedSection else { return }
@@ -273,16 +321,24 @@ struct RootView: View {
         case .monitoring:
             detail
         case .settings:
-            SettingsPage(
-                store: store,
-                history: history,
-                navigation: navigation,
-                updates: updates,
-                agentStorage: agentStorage,
-                nodeRuntime: claudeNodeRuntime
-            )
+            if presentedAuxiliaryPage == .settings {
+                SettingsPage(
+                    store: store,
+                    history: history,
+                    navigation: navigation,
+                    updates: updates,
+                    agentStorage: agentStorage,
+                    nodeRuntime: claudeNodeRuntime
+                )
+            } else {
+                AuxiliaryPagePlaceholder(title: L10n.text("设置"))
+            }
         case .about:
-            AboutPage(updates: updates)
+            if presentedAuxiliaryPage == .about {
+                AboutPage(updates: updates)
+            } else {
+                AuxiliaryPagePlaceholder(title: L10n.text("关于"))
+            }
         }
     }
 
@@ -297,7 +353,7 @@ struct RootView: View {
     private var detail: some View {
         if requestedSection.navigationPlaceholderKind == nil {
             sectionDetail(requestedSection)
-        } else if requestedSection == loadedSection {
+        } else if requestedSection == loadedSection && !isReturningFromAuxiliary {
             loadedDetail
         } else {
             SectionNavigationPlaceholder(
@@ -305,11 +361,7 @@ struct RootView: View {
                 snapshot: sectionSnapshots[requestedSection],
                 selectedRange: Bindable(store).selectedRange,
                 processSearchText: $processSearchText,
-                liveVolumeCount: store.volumes.filter(\.isLocal).count,
-                cpuCoreCount: max(
-                    store.cpuCoreUsages.count,
-                    ProcessInfo.processInfo.processorCount
-                )
+                liveVolumeCount: store.volumes.filter(\.isLocal).count
             )
         }
     }
@@ -350,16 +402,30 @@ struct RootView: View {
         guard target != loadedSection else { return }
         let departing = loadedSection
 
-        if target == .agentStorage {
-            await Task.yield()
-        } else {
-            do {
-                // Coalesce rapid navigation so only the page the user settles on builds its
-                // charts and scrolling hierarchy. The cached placeholder is already visible.
-                try await Task.sleep(for: .milliseconds(120))
-            } catch {
-                return
+        // Storage Map has no navigation skeleton. Commit it directly so the root
+        // does not keep a second, invisible loading transition alive after the
+        // page is already visible.
+        if target.navigationPlaceholderKind == nil {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                loadedSection = target
             }
+            return
+        }
+
+        // 立即在后台并行捕获离开页面的快照，与合并延迟重叠，
+        // 保证快速来回切换时占位页能尽快显示上一帧的真实数据。
+        let departingSnapshotTask = Task { @MainActor in
+            await SectionPreviewSnapshot.capture(section: departing, store: store)
+        }
+
+        do {
+            // Coalesce rapid navigation so only the page the user settles on builds its
+            // charts and scrolling hierarchy. The cached placeholder is already visible.
+            try await Task.sleep(for: .milliseconds(120))
+        } catch {
+            return
         }
         guard !Task.isCancelled, requestedSection == target else { return }
 
@@ -369,10 +435,8 @@ struct RootView: View {
             loadedSection = target
         }
 
-        let departingSnapshot = await SectionPreviewSnapshot.capture(
-            section: departing,
-            store: store
-        )
+        // 页面切换不被快照构建阻塞；快照完成后再更新缓存，供下次访问使用。
+        let departingSnapshot = await departingSnapshotTask.value
         guard !Task.isCancelled, requestedSection == target else { return }
         sectionSnapshots[departing] = departingSnapshot
 
@@ -388,6 +452,62 @@ struct RootView: View {
         )
         guard !Task.isCancelled, requestedSection == target else { return }
         sectionSnapshots[target] = targetSnapshot
+    }
+}
+
+private enum AuxiliaryPage: Equatable {
+    case settings
+    case about
+}
+
+private struct AuxiliaryPagePlaceholder: View {
+    let title: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(.quaternary)
+                    .frame(width: 56, height: 17)
+                Spacer(minLength: 12)
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(.quaternary)
+                    .frame(width: 260, height: 30)
+            }
+            .padding(.horizontal, InstrumentPageHeaderLayout.horizontalPadding)
+            .padding(.top, InstrumentPageHeaderLayout.topPadding)
+            .padding(.bottom, InstrumentPageHeaderLayout.bottomPadding)
+            .frame(minHeight: InstrumentPageHeaderLayout.minimumHeight)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        VStack(spacing: 0) {
+                            ForEach(0..<3, id: \.self) { _ in
+                                HStack(spacing: 12) {
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(.quaternary)
+                                        .frame(width: 110, height: 11)
+                                    Spacer(minLength: 12)
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(.quaternary.opacity(0.7))
+                                        .frame(width: 90, height: 22)
+                                }
+                                .frame(height: 44)
+                                Divider()
+                            }
+                        }
+                        .glassSurface(padding: 14)
+                    }
+                }
+                .padding(InstrumentDesign.Spacing.page)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(InstrumentCanvas())
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(L10n.format("正在准备%@…", title))
     }
 }
 
@@ -593,7 +713,6 @@ private struct SectionNavigationPlaceholder: View {
     @Binding var selectedRange: SampleRange
     @Binding var processSearchText: String
     let liveVolumeCount: Int
-    let cpuCoreCount: Int
     @State private var processTableWidth: CGFloat = 0
 
     var body: some View {
@@ -655,7 +774,7 @@ private struct SectionNavigationPlaceholder: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .allowsHitTesting(false)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(overviewLoadingAccessibilityLabel)
+        .accessibilityLabel(sectionLoadingAccessibilityLabel)
     }
 
     private var overviewHeaderPlaceholder: some View {
@@ -733,80 +852,27 @@ private struct SectionNavigationPlaceholder: View {
             ),
             spacing: OverviewLayoutContract.metricSpacing
         ) {
-            overviewSkeletonMetric("CPU · 最近 5 秒", symbol: "cpu", accent: InstrumentDesign.ColorRole.cpu) {
-                CPUCoreEnergyBars(cores: skeletonCPUCores)
-            }
-            overviewSkeletonMetric("磁盘写入 · 最近 5 秒", symbol: "internaldrive", accent: InstrumentDesign.ColorRole.diskWrite) {
-                DiskIOSparkline(
-                    read: Array(repeating: 0, count: 12),
-                    write: Array(repeating: 0, count: 12),
-                    capacity: 20
-                )
-            }
-            overviewSkeletonMetric("网络 · 最近 5 秒", symbol: "wifi", accent: InstrumentDesign.ColorRole.read) {
-                BidirectionalNetworkBars(
-                    receive: Array(repeating: 0, count: 18),
-                    send: Array(repeating: 0, count: 18),
-                    capacity: 18
-                )
-            }
-            overviewSkeletonMetric("内存", symbol: "memorychip", accent: InstrumentDesign.ColorRole.memory) {
-                HStack(spacing: 8) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        skeletonLegend("已用")
-                        skeletonLegend("缓存")
-                        skeletonLegend("可用")
+            ForEach(0..<OverviewLayoutContract.metricTileCount, id: \.self) { _ in
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(.quaternary)
+                            .frame(width: 96, height: 10)
+                        Spacer(minLength: 8)
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(.quaternary)
+                            .frame(width: 28, height: 24)
                     }
-                    MemoryDonut(used: 1, total: 3)
-                        .frame(width: 42, height: 42)
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(.quaternary)
+                        .frame(width: 76, height: 20)
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(.quaternary.opacity(0.55))
+                        .frame(height: 48)
                 }
+                .frame(maxWidth: .infinity, minHeight: 158, alignment: .topLeading)
+                .glassSurface(padding: 16)
             }
-            overviewSkeletonMetric("卷容量", symbol: "externaldrive.connected.to.line.below", accent: InstrumentDesign.ColorRole.healthy) {
-                VStack(alignment: .leading, spacing: 6) {
-                    SegmentedEnergyMeter(
-                        fraction: 0.5,
-                        color: InstrumentDesign.ColorRole.healthy,
-                        threshold: 0.9
-                    )
-                    .frame(height: 14)
-                    skeletonMetricRow()
-                    skeletonMetricRow()
-                }
-            }
-            overviewSkeletonMetric("可见应用", symbol: "square.stack.3d.up", accent: InstrumentDesign.ColorRole.memory) {
-                VStack(alignment: .leading, spacing: 8) {
-                    SegmentedEnergyMeter(
-                        fraction: 0.5,
-                        color: InstrumentDesign.ColorRole.memory,
-                        segments: 8
-                    )
-                    .frame(height: 13)
-                    Text(L10n.text("应用"))
-                        .font(.caption.monospacedDigit())
-                        .redacted(reason: .placeholder)
-                }
-            }
-        }
-    }
-
-    private func overviewSkeletonMetric<Visualization: View>(
-        _ title: String,
-        symbol: String,
-        accent: Color,
-        @ViewBuilder visualization: @escaping () -> Visualization
-    ) -> some View {
-        GlassMetricTile(
-            title: title,
-            symbol: symbol,
-            accent: accent,
-            accessibilitySummary: title
-        ) {
-            DataValue(value: "00.0", unit: "MB/s")
-                .redacted(reason: .placeholder)
-        } visualization: {
-            visualization()
-                .saturation(0)
-                .opacity(0.52)
         }
     }
 
@@ -979,42 +1045,6 @@ private struct SectionNavigationPlaceholder: View {
         OverviewDiskLayout(volumeCount: previewVolumes.count)
     }
 
-    private var skeletonCPUCores: [CPUCoreUsage] {
-        (0..<max(cpuCoreCount, 1)).map {
-            CPUCoreUsage(index: UInt32($0), percent: 0)
-        }
-    }
-
-    private func skeletonLegend(_ title: String) -> some View {
-        HStack(spacing: 5) {
-            RoundedRectangle(cornerRadius: 1.5)
-                .fill(Color.secondary.opacity(0.3))
-                .frame(width: 7, height: 7)
-            Text(L10n.text(title))
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 4)
-            Text("00.0 GB")
-                .monospacedDigit()
-                .redacted(reason: .placeholder)
-        }
-        .font(.caption2)
-    }
-
-    private func skeletonMetricRow() -> some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(width: 6, height: 6)
-            Text(L10n.text("个卷"))
-            Spacer(minLength: 6)
-            Text("00.0%")
-                .monospacedDigit()
-        }
-        .font(.caption2)
-        .foregroundStyle(.secondary)
-        .redacted(reason: .placeholder)
-    }
-
     private var overviewApplicationTable: some View {
         ScrollView(.horizontal) {
             VStack(spacing: 0) {
@@ -1045,10 +1075,7 @@ private struct SectionNavigationPlaceholder: View {
 
     private var processPlaceholder: some View {
         VStack(spacing: 0) {
-            ProcessesPageHeader(
-                selectedRange: $selectedRange,
-                searchText: $processSearchText
-            )
+            processHeaderPlaceholder
 
             Group {
                 ScrollView([.horizontal, .vertical]) {
@@ -1087,6 +1114,31 @@ private struct SectionNavigationPlaceholder: View {
             .accessibilityLabel(processLoadingAccessibilityLabel)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var processHeaderPlaceholder: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(.quaternary)
+                    .frame(width: 56, height: 17)
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(.quaternary.opacity(0.7))
+                    .frame(width: 130, height: 9)
+            }
+            Spacer(minLength: 12)
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.quaternary)
+                .frame(width: 260, height: 30)
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.quaternary.opacity(0.7))
+                .frame(width: 240, height: 30)
+        }
+        .padding(.horizontal, InstrumentPageHeaderLayout.horizontalPadding)
+        .padding(.top, InstrumentPageHeaderLayout.topPadding)
+        .padding(.bottom, InstrumentPageHeaderLayout.bottomPadding)
+        .frame(minHeight: InstrumentPageHeaderLayout.minimumHeight)
+        .accessibilityHidden(true)
     }
 
     private var processLoadingAccessibilityLabel: String {
@@ -1175,7 +1227,7 @@ private struct SectionNavigationPlaceholder: View {
         return volumes
     }
 
-    private var overviewLoadingAccessibilityLabel: String {
+    private var sectionLoadingAccessibilityLabel: String {
         guard let snapshot else {
             return L10n.format("正在准备%@…", section.title)
         }

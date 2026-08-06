@@ -45,6 +45,25 @@ struct SettingsPage: View {
     @State private var serviceRefreshRequest: SettingsServiceRefreshRequest?
     @State private var activationRefreshGeneration = 0
     @State private var isTraceHelperStateLoading = true
+    @State private var renderedPane: SettingsPane
+    @State private var paneSwitchTask: Task<Void, Never>?
+
+    init(
+        store: MonitorStore,
+        history: HistoryModel,
+        navigation: AppNavigationCoordinator,
+        updates: UpdateCoordinator,
+        agentStorage: AgentStorageModel,
+        nodeRuntime: ClaudeNodeRuntimeStatusModel
+    ) {
+        self.store = store
+        self.history = history
+        self.navigation = navigation
+        self.updates = updates
+        self.agentStorage = agentStorage
+        self.nodeRuntime = nodeRuntime
+        _renderedPane = State(initialValue: navigation.settingsPane)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -60,7 +79,7 @@ struct SettingsPage: View {
             }
 
             Group {
-                switch navigation.settingsPane {
+                switch renderedPane {
                 case .general:
             Form {
                 Section {
@@ -618,6 +637,21 @@ struct SettingsPage: View {
         }
         .onChange(of: sampleInterval) { _, newValue in
             store.setSamplingInterval(newValue)
+        }
+        .onChange(of: navigation.settingsPane) { _, newValue in
+            guard newValue != renderedPane else { return }
+            // 分段控件的选中态先提交，Form 内容延后一帧重建，
+            // 避免表单（含 TextField）的初始化拖累选中反馈。
+            paneSwitchTask?.cancel()
+            paneSwitchTask = Task { @MainActor in
+                do {
+                    try await Task.sleep(for: .milliseconds(50))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                renderedPane = newValue
+            }
         }
         .onChange(of: menuBarOnlyMode) { _, _ in
             AppActivationPolicy.applyPreferred()
