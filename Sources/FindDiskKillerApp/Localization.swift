@@ -778,6 +778,8 @@ enum L10n {
         "已处理 %d 项 · %@": "%d items processed · %@",
         "已分析来源组成": "Analyzed Source Composition",
         "磁盘空间构成": "Disk Storage Composition",
+        "已识别空间": "Identified Storage",
+        "磁盘空间使用构成": "Disk Space Usage Composition",
         "%d 块磁盘": "%d volumes",
         "文件条目": "File Entries",
         "可重建": "Rebuildable",

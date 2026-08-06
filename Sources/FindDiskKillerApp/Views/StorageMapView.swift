@@ -197,7 +197,7 @@ struct StorageMapView: View {
                                     scopeBar
                                     Divider()
                                 }
-                                .background(.bar)
+                                .background(InstrumentDesign.Palette.canvas)
                             }
                         }
                     }
@@ -209,7 +209,7 @@ struct StorageMapView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(InstrumentDesign.Palette.canvas)
             .animation(
                 reduceMotion ? nil : .easeInOut(duration: 0.24),
                 value: overviewPresentation
@@ -239,21 +239,22 @@ struct StorageMapView: View {
 
     private var scopeBar: some View {
         HStack(spacing: 12) {
-            ViewThatFits(in: .horizontal) {
-                Picker(L10n.text("来源分类"), selection: $scope) {
-                    ForEach(StorageMapScope.allCases) { item in
-                        Text(item.title).tag(item)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+            Text(L10n.text("来源分类"))
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.primary)
 
-                Picker(L10n.text("来源分类"), selection: $scope) {
-                    ForEach(StorageMapScope.allCases) { item in
-                        Text(item.title).tag(item)
-                    }
+            Picker(L10n.text("来源分类"), selection: $scope) {
+                ForEach(StorageMapScope.allCases) { item in
+                    Text(item.title).tag(item)
                 }
-                .frame(maxWidth: 220)
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(width: 156, height: 30, alignment: .leading)
+            .background(Color.primary.opacity(0.075), in: RoundedRectangle(cornerRadius: InstrumentDesign.Radius.control))
+            .overlay {
+                RoundedRectangle(cornerRadius: InstrumentDesign.Radius.control)
+                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: InstrumentDesign.Stroke.hairline)
             }
             Spacer(minLength: 8)
             if model.snapshot != nil {
@@ -267,10 +268,10 @@ struct StorageMapView: View {
                                     .monospacedDigit()
                             }
                             .font(.caption.weight(.medium))
-                            .foregroundStyle(Color.teal)
+                            .foregroundStyle(InstrumentDesign.ColorRole.cleanup)
                             .padding(.horizontal, 9)
                             .frame(height: 28)
-                            .background(Color.teal.opacity(0.11), in: RoundedRectangle(cornerRadius: 6))
+                            .background(InstrumentDesign.ColorRole.cleanup.opacity(0.11), in: RoundedRectangle(cornerRadius: 6))
                         }
                         .buttonStyle(.plain)
                         .help(L10n.text("查看可安全清理的缓存"))
@@ -333,7 +334,9 @@ struct StorageMapView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.18))
+        .glassSurface(padding: 0)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
         .clipped()
     }
 
@@ -1955,8 +1958,7 @@ private struct StorageMapSummaryBand: View {
             }
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .padding(.vertical, 16)
         .accessibilityElement(children: .contain)
     }
 
@@ -1972,7 +1974,7 @@ private struct StorageMapSummaryBand: View {
             }
             Spacer(minLength: 8)
             actionGroup
-                .frame(width: hasSafeCleanup ? 366 : 178)
+                .frame(width: hasSafeCleanup ? 378 : 184, height: 58, alignment: .trailing)
         }
     }
 
@@ -2065,20 +2067,19 @@ private struct StorageMapSummaryBand: View {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .bold))
             }
-            .foregroundStyle(Color.teal)
+            .foregroundStyle(InstrumentDesign.ColorRole.cleanup)
             .padding(.horizontal, 14)
+            .frame(minWidth: 0, idealWidth: 178, maxWidth: 184)
             .frame(
-                minWidth: 0,
-                idealWidth: 178,
-                maxWidth: .infinity,
-                minHeight: 58,
-                maxHeight: 58,
+                width: 184,
+                height: 58,
                 alignment: .leading
             )
-            .background(Color.teal.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+            .frame(minHeight: 58, maxHeight: 58)
+            .background(InstrumentDesign.ColorRole.cleanup.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
             .overlay {
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.teal.opacity(0.34), lineWidth: 1)
+                    .stroke(InstrumentDesign.ColorRole.cleanup.opacity(0.34), lineWidth: 1)
             }
             .contentShape(Rectangle())
         }
@@ -2087,7 +2088,7 @@ private struct StorageMapSummaryBand: View {
         .accessibilityIdentifier("storage-map-safe-cleanup")
         .onHover { isSafeCleanupHovering = $0 }
         .visualEffectShadow(
-            color: Color.teal.opacity(isSafeCleanupHovering ? 0.28 : 0.14),
+            color: InstrumentDesign.ColorRole.cleanup.opacity(isSafeCleanupHovering ? 0.28 : 0.14),
             radius: isSafeCleanupHovering ? 14 : 9,
             y: 0
         )
@@ -2118,15 +2119,14 @@ private struct StorageMapSummaryBand: View {
                         .lineLimit(1)
                 }
             }
+            .padding(.horizontal, 14)
+            .frame(minWidth: 0, idealWidth: 178, maxWidth: 184)
             .frame(
-                minWidth: 0,
-                idealWidth: 178,
-                maxWidth: .infinity,
-                minHeight: 58,
-                maxHeight: 58,
+                width: 184,
+                height: 58,
                 alignment: .leading
             )
-            .padding(.horizontal, 14)
+            .frame(minHeight: 58, maxHeight: 58)
             .foregroundStyle(isAnalysisRunning ? Color.orange : Color.accentColor)
             .background(
                 (isAnalysisRunning ? Color.orange : Color.accentColor)
@@ -2414,18 +2414,14 @@ private struct StorageVolumeComposition: View {
 
             sourceSummary
         }
-        .padding(14)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.72), in: RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.62), lineWidth: 0.5)
-        }
+        .padding(16)
+        .glassSurface(padding: 0)
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .animation(.smooth(duration: 0.34), value: volume)
     }
 
     private var usedPercentage: String {
-        guard volume.totalCapacity > 0 else { return "0%" }
+        guard volume.totalCapacity > 0 else { return L10n.percent(0) }
         return L10n.percent(Double(volume.usedBytes) / Double(volume.totalCapacity))
     }
 
@@ -2575,44 +2571,78 @@ private struct StorageCapacityRibbon: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.primary.opacity(0.055))
-                Rectangle()
-                    .fill(Color.primary.opacity(0.2))
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.12),
+                                Color.primary.opacity(0.10),
+                                Color.black.opacity(0.22)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                Capsule()
+                    .fill(Color.primary.opacity(0.18))
                     .frame(width: proxy.size.width * usedShare)
-                ForEach(identifiedSegments) { segment in
-                    Rectangle()
-                        .fill(segment.color)
-                        .frame(width: max(2.5, proxy.size.width * segment.share - 0.75))
-                        .offset(x: proxy.size.width * segment.offset)
-                        .help("\(segment.title)  \(AgentStorageSizeFormatter.string(segment.bytes))")
-                        .accessibilityLabel(segment.title)
-                        .accessibilityValue(AgentStorageSizeFormatter.string(segment.bytes))
+                if identifiedShare > 0 {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    InstrumentDesign.ColorRole.cpu.opacity(0.96),
+                                    InstrumentDesign.ColorRole.read.opacity(0.72)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: max(4, proxy.size.width * identifiedShare - 1.5))
+                        .padding(.vertical, 1.5)
+                        .help(L10n.text("已识别空间"))
+                        .accessibilityLabel(L10n.text("已识别空间"))
+                        .accessibilityValue(AgentStorageSizeFormatter.string(identifiedBytes))
                 }
-                Rectangle()
-                    .fill(Color.primary.opacity(0.45))
+                Capsule()
+                    .fill(Color.white.opacity(0.42))
                     .frame(width: 1)
                     .offset(x: max(0, proxy.size.width * usedShare - 0.5))
                     .accessibilityHidden(true)
                 LinearGradient(
-                    colors: [Color.white.opacity(0.18), .clear],
+                    colors: [Color.white.opacity(0.22), .clear, Color.black.opacity(0.10)],
                     startPoint: .top,
-                    endPoint: .bottom
+                    endPoint: .bottomTrailing
                 )
                 .allowsHitTesting(false)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .clipShape(Capsule())
             .overlay {
-                RoundedRectangle(cornerRadius: 5)
-                    .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
+                Capsule()
+                    .strokeBorder(Color.primary.opacity(0.18), lineWidth: 0.6)
             }
+            .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
         }
-        .frame(height: 16)
-        .accessibilityElement(children: .contain)
+        .frame(height: 18)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(L10n.text("磁盘空间使用构成"))
+        .accessibilityValue(L10n.percent(Double(usedShare)))
     }
 
     private var identifiedSegments: [StorageCapacitySegment] {
         segments.filter { $0.id != "other" && $0.id != "available" }
+    }
+
+    private var identifiedShare: CGFloat {
+        identifiedSegments.reduce(CGFloat.zero) { partial, segment in
+            partial + segment.share
+        }
+    }
+
+    private var identifiedBytes: UInt64 {
+        identifiedSegments.reduce(UInt64.zero) { partial, segment in
+            partial.addingClamped(segment.bytes)
+        }
     }
 }
 

@@ -127,12 +127,14 @@ struct RootView: View {
                     sidebarStatus
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationSplitViewColumnWidth(min: 220, ideal: 232, max: 260)
         } detail: {
             ZStack {
                 InstrumentCanvas()
                 presentedDetail
             }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .navigationTitle("")
                 .toolbar {
                     if isShowingAuxiliaryPage || requestedSection.showsMonitoringToolbar {
