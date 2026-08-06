@@ -94,9 +94,8 @@ struct RootView: View {
             ZStack {
                 InstrumentDesign.Palette.sidebarTint
                 if visualEffectLevel.usesSurfaceMaterial {
-                    Rectangle()
-                        .fill(.ultraThinMaterial)
-                        .opacity(0.72)
+                    StaticGlassMaterial()
+                        .opacity(0.80)
                 }
 
                 VStack(spacing: 0) {
@@ -264,7 +263,7 @@ struct RootView: View {
         .padding(.vertical, 16)
         .background {
             if visualEffectLevel.usesSurfaceMaterial {
-                Color.clear.background(.ultraThinMaterial)
+                StaticGlassMaterial()
             } else {
                 InstrumentDesign.Palette.canvasRaised
             }

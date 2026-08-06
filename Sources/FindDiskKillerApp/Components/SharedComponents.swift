@@ -125,6 +125,36 @@ enum InstrumentDesign {
     }
 }
 
+/// Static glass surface rendered entirely with shape fills so the composited
+/// color is exact and measurable: the `canvasRaised` base matches the tint
+/// that `ultraThinMaterial` + the legacy overlays produced, and the highlight
+/// gradient keeps the glass sheen. There is no live blur, no tiled texture and
+/// no translucent layering, so content updates never re-blur the backdrop.
+struct StaticGlassMaterial: View {
+    var cornerRadius: CGFloat = 0
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        shape
+            .fill(InstrumentDesign.Palette.canvasRaised)
+            .overlay {
+                shape.fill(
+                    LinearGradient(
+                        colors: colorScheme == .dark
+                            ? [Color.white.opacity(0.045), .clear, Color.black.opacity(0.10)]
+                            : [Color.white.opacity(0.30), .clear, Color.black.opacity(0.025)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            }
+            .clipShape(shape)
+            .accessibilityHidden(true)
+    }
+}
+
 struct InstrumentCanvas: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var colorScheme
@@ -134,11 +164,6 @@ struct InstrumentCanvas: View {
     var body: some View {
         ZStack {
             InstrumentDesign.Palette.canvas
-            if visualEffectLevel.usesCanvasMaterial && !reduceTransparency && !isWindowLiveResizing {
-                Rectangle()
-                    .fill(.ultraThinMaterial)
-                    .opacity(colorScheme == .dark ? 0.46 : 0.34)
-            }
             if visualEffectLevel.usesSurfaceMaterial {
                 LinearGradient(
                     colors: colorScheme == .dark
@@ -205,7 +230,7 @@ struct GlassSurface<Content: View>: View {
             shape.fill(InstrumentDesign.Palette.canvasRaised)
         } else {
             shape
-                .fill(.ultraThinMaterial)
+                .fill(InstrumentDesign.Palette.canvasRaised)
                 .overlay {
                     shape.fill(colorScheme == .dark
                         ? Color.black.opacity(0.16)
@@ -270,11 +295,11 @@ extension View {
     }
 
     func visualEffectMaterialBackground(_ material: Material) -> some View {
-        modifier(VisualEffectMaterialBackgroundModifier(material: material))
+        modifier(VisualEffectMaterialBackgroundModifier())
     }
 
     func visualEffectMaterialBackground<S: Shape>(_ material: Material, in shape: S) -> some View {
-        modifier(VisualEffectShapedMaterialBackgroundModifier(material: material, shape: shape))
+        modifier(VisualEffectShapedMaterialBackgroundModifier(shape: shape))
     }
 
     func visualEffectShadow(
@@ -305,13 +330,12 @@ private struct VisualEffectShadowModifier: ViewModifier {
 }
 
 private struct VisualEffectMaterialBackgroundModifier: ViewModifier {
-    let material: Material
     @Environment(\.visualEffectLevel) private var visualEffectLevel
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if visualEffectLevel.usesSurfaceMaterial {
-            content.background(material)
+            content.background(StaticGlassMaterial())
         } else {
             content.background(InstrumentDesign.Palette.canvasRaised)
         }
@@ -319,14 +343,13 @@ private struct VisualEffectMaterialBackgroundModifier: ViewModifier {
 }
 
 private struct VisualEffectShapedMaterialBackgroundModifier<S: Shape>: ViewModifier {
-    let material: Material
     let shape: S
     @Environment(\.visualEffectLevel) private var visualEffectLevel
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if visualEffectLevel.usesSurfaceMaterial {
-            content.background(material, in: shape)
+            content.background { StaticGlassMaterial().clipShape(shape) }
         } else {
             content.background(InstrumentDesign.Palette.canvasRaised, in: shape)
         }

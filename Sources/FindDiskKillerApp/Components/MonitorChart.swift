@@ -3,6 +3,16 @@ import FindDiskKillerCore
 import Observation
 import SwiftUI
 
+/// Suppresses chart sweep animations while no window of the app is visible on
+/// screen (occluded, minimized or on another Space). Rendering work — and the
+/// system-wide compositing cost of the sweep — only matters when the user can
+/// actually see it, so background updates switch to instant replacements.
+private enum ChartAnimationGate {
+    static var hasVisibleWindow: Bool {
+        NSApp.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) }
+    }
+}
+
 @Observable
 private final class StreamingChartBuffer<Point> {
     var renderedPoints: [Point]
@@ -416,13 +426,18 @@ struct MonitorChart: View {
         }
         .chartHoverSelection($hoverDate, location: $hoverLocation)
         .frame(height: height)
+        .drawingGroup()
         .onChange(of: TimelineUpdateKey(
             timestamps: points.map(\.timestamp),
             windowDuration: windowDuration
         )) { _, _ in
+            let suppressSweep = reduceMotion
+                || visualEffectLevel.disablesMotion
+                || !ChartAnimationGate.hasVisibleWindow
+               
             timeline.update(
                 with: points,
-                reduceMotion: reduceMotion || visualEffectLevel.disablesMotion,
+                reduceMotion: suppressSweep,
                 windowDuration: windowDuration
             )
         }
@@ -579,13 +594,18 @@ struct SystemCPUChart: View {
         .chartPlotStyle { $0.background(Color.secondary.opacity(0.035)) }
         .chartHoverSelection($hoverDate, location: $hoverLocation)
         .frame(height: height)
+        .drawingGroup()
         .onChange(of: TimelineUpdateKey(
             timestamps: points.map(\.timestamp),
             windowDuration: windowDuration
         )) { _, _ in
+            let suppressSweep = reduceMotion
+                || visualEffectLevel.disablesMotion
+                || !ChartAnimationGate.hasVisibleWindow
+               
             timeline.update(
                 with: points,
-                reduceMotion: reduceMotion || visualEffectLevel.disablesMotion,
+                reduceMotion: suppressSweep,
                 windowDuration: windowDuration
             )
         }
@@ -698,13 +718,18 @@ struct SystemNetworkChart: View {
         .chartPlotStyle { $0.background(Color.secondary.opacity(0.035)) }
         .chartHoverSelection($hoverDate, location: $hoverLocation)
         .frame(height: height)
+        .drawingGroup()
         .onChange(of: TimelineUpdateKey(
             timestamps: points.map(\.timestamp),
             windowDuration: windowDuration
         )) { _, _ in
+            let suppressSweep = reduceMotion
+                || visualEffectLevel.disablesMotion
+                || !ChartAnimationGate.hasVisibleWindow
+               
             timeline.update(
                 with: points,
-                reduceMotion: reduceMotion || visualEffectLevel.disablesMotion,
+                reduceMotion: suppressSweep,
                 windowDuration: windowDuration
             )
         }
@@ -803,13 +828,18 @@ struct SystemMemoryChart: View {
         .chartPlotStyle { $0.background(Color.secondary.opacity(0.035)) }
         .chartHoverSelection($hoverDate, location: $hoverLocation)
         .frame(height: height)
+        .drawingGroup()
         .onChange(of: TimelineUpdateKey(
             timestamps: points.map(\.timestamp),
             windowDuration: windowDuration
         )) { _, _ in
+            let suppressSweep = reduceMotion
+                || visualEffectLevel.disablesMotion
+                || !ChartAnimationGate.hasVisibleWindow
+               
             timeline.update(
                 with: points,
-                reduceMotion: reduceMotion || visualEffectLevel.disablesMotion,
+                reduceMotion: suppressSweep,
                 windowDuration: windowDuration
             )
         }
@@ -1108,13 +1138,18 @@ struct ProcessMetricChart: View {
         .chartPlotStyle { $0.background(Color.secondary.opacity(0.035)) }
         .chartHoverSelection($hoverDate, location: $hoverLocation)
         .frame(height: height)
+        .drawingGroup()
         .onChange(of: TimelineUpdateKey(
             timestamps: points.map(\.timestamp),
             windowDuration: windowDuration
         )) { _, _ in
+            let suppressSweep = reduceMotion
+                || visualEffectLevel.disablesMotion
+                || !ChartAnimationGate.hasVisibleWindow
+               
             timeline.update(
                 with: points,
-                reduceMotion: reduceMotion || visualEffectLevel.disablesMotion,
+                reduceMotion: suppressSweep,
                 windowDuration: windowDuration
             )
         }
