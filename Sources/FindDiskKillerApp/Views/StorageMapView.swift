@@ -157,7 +157,6 @@ struct StorageMapView: View {
         .focusedValue(\.agentStorageBackAction, route == .overview ? nil : {
             route = .overview
         })
-        .background(InstrumentCanvas())
     }
 
     private var overview: some View {

@@ -43,6 +43,11 @@ enum SectionNavigationPlaceholderKind: Equatable, Sendable {
     case resources
 }
 
+private enum SidebarLayoutContract {
+    static let brandHeight: CGFloat = 84
+    static let statusHeight: CGFloat = 68
+}
+
 struct RootView: View {
     let store: MonitorStore
     let processDetailWindows: ProcessDetailWindowCoordinator
@@ -91,40 +96,42 @@ struct RootView: View {
                         .opacity(0.72)
                 }
 
-                List {
-                    Section {
-                        ForEach(AppSection.allCases) { section in
+                VStack(spacing: 0) {
+                    sidebarBrand
+                        .frame(height: SidebarLayoutContract.brandHeight)
+                    List {
+                        Section {
+                            ForEach(AppSection.allCases) { section in
+                                sidebarRow(
+                                    title: section.title,
+                                    symbol: section.symbol,
+                                    destination: .monitoring(section)
+                                )
+                            }
+                        }
+
+                        Section {
                             sidebarRow(
-                                title: section.title,
-                                symbol: section.symbol,
-                                destination: .monitoring(section)
+                                title: L10n.text("设置"),
+                                symbol: "gearshape",
+                                destination: .settings
+                            )
+                            sidebarRow(
+                                title: L10n.text("关于"),
+                                symbol: "info.circle",
+                                destination: .about
                             )
                         }
                     }
+                    .navigationTitle("")
+                    .listStyle(.sidebar)
+                    .tint(Color.secondary.opacity(0.74))
+                    .accentColor(Color.secondary.opacity(0.74))
+                    .scrollContentBackground(.hidden)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                    Section {
-                        sidebarRow(
-                            title: L10n.text("设置"),
-                            symbol: "gearshape",
-                            destination: .settings
-                        )
-                        sidebarRow(
-                            title: L10n.text("关于"),
-                            symbol: "info.circle",
-                            destination: .about
-                        )
-                    }
-                }
-                .navigationTitle("")
-                .listStyle(.sidebar)
-                .tint(Color.secondary.opacity(0.74))
-                .accentColor(Color.secondary.opacity(0.74))
-                .scrollContentBackground(.hidden)
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    sidebarBrand
-                }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
                     sidebarStatus
+                        .frame(height: SidebarLayoutContract.statusHeight)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -139,6 +146,14 @@ struct RootView: View {
                 .toolbar {
                     if isShowingAuxiliaryPage || requestedSection.showsMonitoringToolbar {
                         StatusToolbar(store: store)
+                    } else {
+                        // Keep the unified compact toolbar's primary-action slot stable
+                        // while Storage Map owns its actions inside the page.
+                        ToolbarItem(placement: .primaryAction) {
+                            Color.clear
+                                .frame(width: 28, height: 24)
+                                .accessibilityHidden(true)
+                        }
                     }
                 }
                 .task(id: requestedSection) {
@@ -179,6 +194,7 @@ struct RootView: View {
         .padding(.horizontal, 18)
         .padding(.top, 48)
         .padding(.bottom, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var sidebarStatus: some View {
