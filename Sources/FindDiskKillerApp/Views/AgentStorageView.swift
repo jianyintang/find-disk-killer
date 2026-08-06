@@ -247,6 +247,45 @@ struct AgentStorageProjectionRequest: Sendable {
     let chatSortRules: [AgentStorageChatSortRule]
     let globalSortRules: [AgentStorageGlobalSortRule]
     let unattributedSortRules: [AgentStorageUnattributedSortRule]
+    let usesMockTitles: Bool
+
+    init(
+        scope: AgentStorageScope,
+        dataset: AgentStorageProviderDataset,
+        scannedAt: Date,
+        archiveFilter: AgentStorageArchiveFilter,
+        timeRange: AgentStorageTimeRange,
+        selectedProject: String?,
+        selectedGlobalCategory: AgentStorageGlobalCategory?,
+        selectedUnattributedReason: AgentStorageUnattributedReason?,
+        query: String,
+        hidesPrivateDetails: Bool,
+        expandedFamilies: Set<String>,
+        chatPageIndex: Int,
+        chatPageSize: Int,
+        chatSortRules: [AgentStorageChatSortRule],
+        globalSortRules: [AgentStorageGlobalSortRule],
+        unattributedSortRules: [AgentStorageUnattributedSortRule],
+        usesMockTitles: Bool = false
+    ) {
+        self.scope = scope
+        self.dataset = dataset
+        self.scannedAt = scannedAt
+        self.archiveFilter = archiveFilter
+        self.timeRange = timeRange
+        self.selectedProject = selectedProject
+        self.selectedGlobalCategory = selectedGlobalCategory
+        self.selectedUnattributedReason = selectedUnattributedReason
+        self.query = query
+        self.hidesPrivateDetails = hidesPrivateDetails
+        self.expandedFamilies = expandedFamilies
+        self.chatPageIndex = chatPageIndex
+        self.chatPageSize = chatPageSize
+        self.chatSortRules = chatSortRules
+        self.globalSortRules = globalSortRules
+        self.unattributedSortRules = unattributedSortRules
+        self.usesMockTitles = usesMockTitles
+    }
 }
 
 enum AgentStorageProjectionContent: Sendable {
@@ -387,7 +426,8 @@ enum AgentStorageProjectionEngine {
             if index.isMultiple(of: 16) { try Task.checkCancellation() }
             let root = AgentStorageChatRow(
                 family: family,
-                hidesPrivateDetails: request.hidesPrivateDetails
+                hidesPrivateDetails: request.hidesPrivateDetails,
+                usesMockTitles: request.usesMockTitles
             )
             rows.append(root)
             if request.expandedFamilies.contains(root.familyID) {
@@ -504,7 +544,8 @@ enum AgentStorageProjectionEngine {
                         node: child,
                         family: family,
                         parentRowID: child.parentID.flatMap { rowIDByNativeID[$0] } ?? family.id,
-                        hidesPrivateDetails: request.hidesPrivateDetails
+                        hidesPrivateDetails: request.hidesPrivateDetails,
+                        usesMockTitles: request.usesMockTitles
                     )
                 }
                 .sorted { chatRow($0, precedes: $1, rules: request.chatSortRules) }
@@ -541,12 +582,19 @@ enum AgentStorageProjectionEngine {
         _ family: AgentStorageThreadFamily,
         request: AgentStorageProjectionRequest
     ) -> Bool {
+        let visibleTitle = visibleFamilyTitle(
+            family,
+            hidesPrivateDetails: request.hidesPrivateDetails,
+            usesMockTitles: request.usesMockTitles
+        )
+        if visibleTitle.localizedCaseInsensitiveContains(request.query) {
+            return true
+        }
         if request.hidesPrivateDetails {
             return family.provider.displayName.localizedCaseInsensitiveContains(request.query)
                 || family.nativeThreadID.localizedCaseInsensitiveContains(request.query)
         }
-        return family.title.localizedCaseInsensitiveContains(request.query)
-            || family.project.localizedCaseInsensitiveContains(request.query)
+        return family.project.localizedCaseInsensitiveContains(request.query)
             || family.nativeThreadID.localizedCaseInsensitiveContains(request.query)
     }
 
@@ -555,11 +603,19 @@ enum AgentStorageProjectionEngine {
         family: AgentStorageThreadFamily,
         request: AgentStorageProjectionRequest
     ) -> Bool {
+        let visibleTitle = visibleNodeTitle(
+            node,
+            family: family,
+            hidesPrivateDetails: request.hidesPrivateDetails,
+            usesMockTitles: request.usesMockTitles
+        )
+        if visibleTitle.localizedCaseInsensitiveContains(request.query) {
+            return true
+        }
         if request.hidesPrivateDetails {
             return node.nativeID.localizedCaseInsensitiveContains(request.query)
         }
-        return node.title.localizedCaseInsensitiveContains(request.query)
-            || node.nativeID.localizedCaseInsensitiveContains(request.query)
+        return node.nativeID.localizedCaseInsensitiveContains(request.query)
             || family.title.localizedCaseInsensitiveContains(request.query)
     }
 
@@ -592,8 +648,16 @@ enum AgentStorageProjectionEngine {
             switch rule.field {
             case .title:
                 comparison = compare(
-                    visibleFamilyTitle(lhs, hidesPrivateDetails: request.hidesPrivateDetails),
-                    visibleFamilyTitle(rhs, hidesPrivateDetails: request.hidesPrivateDetails)
+                    visibleFamilyTitle(
+                        lhs,
+                        hidesPrivateDetails: request.hidesPrivateDetails,
+                        usesMockTitles: request.usesMockTitles
+                    ),
+                    visibleFamilyTitle(
+                        rhs,
+                        hidesPrivateDetails: request.hidesPrivateDetails,
+                        usesMockTitles: request.usesMockTitles
+                    )
                 )
             case .updatedAt: comparison = compare(lhs.updatedAt, rhs.updatedAt)
             case .subagentCount: comparison = compare(lhs.subagentCount, rhs.subagentCount)
@@ -607,10 +671,34 @@ enum AgentStorageProjectionEngine {
 
     private static func visibleFamilyTitle(
         _ family: AgentStorageThreadFamily,
-        hidesPrivateDetails: Bool
+        hidesPrivateDetails: Bool,
+        usesMockTitles: Bool
     ) -> String {
+        if usesMockTitles {
+            return AgentStorageMockTitleCatalog.title(
+                provider: family.provider,
+                nativeID: family.nativeThreadID,
+                isSubagent: false
+            )
+        }
         guard hidesPrivateDetails else { return family.title }
         return "\(family.provider.displayName) \(L10n.text("聊天")) · \(L10n.date(family.updatedAt, date: .abbreviated, time: .omitted))"
+    }
+
+    private static func visibleNodeTitle(
+        _ node: AgentStorageThreadNode,
+        family: AgentStorageThreadFamily,
+        hidesPrivateDetails: Bool,
+        usesMockTitles: Bool
+    ) -> String {
+        if usesMockTitles {
+            return AgentStorageMockTitleCatalog.title(
+                provider: family.provider,
+                nativeID: node.nativeID,
+                isSubagent: true
+            )
+        }
+        return hidesPrivateDetails ? L10n.text("子代理") : node.title
     }
 
     private static func globalItem(
@@ -664,6 +752,7 @@ struct AgentStorageView: View {
     let providerExitAction: (() -> Void)?
     let cleanupDidAffectProviders: ((Set<AgentStorageProvider>) -> Void)?
     @AppStorage(AgentStoragePreferences.hidePrivateDetailsKey) private var hidesPrivateDetails = false
+    @AppStorage(AgentStoragePreferences.mockTitlesKey) private var usesMockTitles = false
     @State private var selectedProvider: AgentStorageProvider?
     @State private var scope: AgentStorageScope = .chats
     @State private var archiveFilter: AgentStorageArchiveFilter = .all
@@ -818,6 +907,10 @@ struct AgentStorageView: View {
         }
         .onChange(of: hidesPrivateDetails) { _, isHidden in
             if isHidden { selectedProject = nil }
+            scheduleProjection()
+        }
+        .onChange(of: usesMockTitles) { _, _ in
+            resetChatPage()
             scheduleProjection()
         }
         .onChange(of: chatSortOrder) { _, _ in
@@ -2093,7 +2186,8 @@ struct AgentStorageView: View {
             chatPageSize: AgentStorageChatPagination.pageSize,
             chatSortRules: chatSortRules,
             globalSortRules: globalSortRules,
-            unattributedSortRules: unattributedSortRules
+            unattributedSortRules: unattributedSortRules,
+            usesMockTitles: usesMockTitles
         )
         isProjecting = true
 
@@ -2687,6 +2781,7 @@ struct AgentStorageView: View {
 }
 
 private struct AgentStorageInlineCleanupInspector: View {
+    @AppStorage(AgentStoragePreferences.mockTitlesKey) private var usesMockTitles = false
     let provider: AgentStorageProvider?
     let selectedFamilies: [AgentStorageThreadFamily]
     let review: AgentStorageCleanupReview?
@@ -2868,7 +2963,14 @@ private struct AgentStorageInlineCleanupInspector: View {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundStyle(Color.accentColor)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(family.title).font(.callout.weight(.medium)).lineLimit(1)
+                                Text(usesMockTitles
+                                    ? AgentStorageMockTitleCatalog.title(
+                                        provider: family.provider,
+                                        nativeID: family.nativeThreadID,
+                                        isSubagent: false
+                                    )
+                                    : family.title
+                                ).font(.callout.weight(.medium)).lineLimit(1)
                                 Text(family.project).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                             }
                             Spacer(minLength: 8)
@@ -3892,13 +3994,23 @@ struct AgentStorageChatRow: Identifiable, Hashable, Sendable {
     let isFamily: Bool
     let depth: Int
 
-    init(family: AgentStorageThreadFamily, hidesPrivateDetails: Bool) {
+    init(
+        family: AgentStorageThreadFamily,
+        hidesPrivateDetails: Bool,
+        usesMockTitles: Bool = false
+    ) {
         id = family.id
         nativeID = family.nativeThreadID
         parentID = nil
         familyID = family.id
         provider = family.provider
-        title = hidesPrivateDetails
+        title = usesMockTitles
+            ? AgentStorageMockTitleCatalog.title(
+                provider: family.provider,
+                nativeID: family.nativeThreadID,
+                isSubagent: false
+            )
+            : hidesPrivateDetails
             ? "\(family.provider.displayName) \(L10n.text("聊天")) · \(L10n.date(family.updatedAt, date: .abbreviated, time: .omitted))"
             : family.title
         project = hidesPrivateDetails
@@ -3920,14 +4032,21 @@ struct AgentStorageChatRow: Identifiable, Hashable, Sendable {
         node: AgentStorageThreadNode,
         family: AgentStorageThreadFamily,
         parentRowID: String,
-        hidesPrivateDetails: Bool
+        hidesPrivateDetails: Bool,
+        usesMockTitles: Bool = false
     ) {
         id = node.id
         nativeID = node.nativeID
         parentID = parentRowID
         familyID = family.id
         provider = family.provider
-        title = hidesPrivateDetails ? L10n.text("子代理") : node.title
+        title = usesMockTitles
+            ? AgentStorageMockTitleCatalog.title(
+                provider: family.provider,
+                nativeID: node.nativeID,
+                isSubagent: true
+            )
+            : hidesPrivateDetails ? L10n.text("子代理") : node.title
         project = hidesPrivateDetails ? L10n.text("已隐藏项目") : family.title
         updatedAt = node.updatedAt
         subagentCount = 0
@@ -5678,6 +5797,7 @@ private struct AgentStorageTransientDetail: View {
 }
 
 private struct AgentStorageDetailView: View {
+    @AppStorage(AgentStoragePreferences.mockTitlesKey) private var usesMockTitles = false
     let detail: AgentStorageResolvedDetail?
     let hidesPrivateDetails: Bool
 
@@ -5711,7 +5831,13 @@ private struct AgentStorageDetailView: View {
     private func familyDetail(_ family: AgentStorageThreadFamily) -> some View {
         detailHeader(
             provider: family.provider,
-            title: privateTitle(family.title, provider: family.provider, fallback: L10n.text("聊天")),
+            title: privateTitle(
+                family.title,
+                provider: family.provider,
+                nativeID: family.nativeThreadID,
+                isSubagent: false,
+                fallback: L10n.text("聊天")
+            ),
             subtitle: hidesPrivateDetails
                 ? L10n.text("项目已隐藏")
                 : localizedAgentStorageProjectName(family.project),
@@ -5990,7 +6116,13 @@ private struct AgentStorageDetailView: View {
                     in: RoundedRectangle(cornerRadius: 6)
                 )
             VStack(alignment: .leading, spacing: 2) {
-                Text(privateTitle(node.title, provider: provider, fallback: L10n.text("子代理")))
+                Text(privateTitle(
+                    node.title,
+                    provider: provider,
+                    nativeID: node.nativeID,
+                    isSubagent: true,
+                    fallback: L10n.text("子代理")
+                ))
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
                 Text(shortIdentifier(node.nativeID))
@@ -6015,12 +6147,26 @@ private struct AgentStorageDetailView: View {
         _ node: AgentStorageThreadNode,
         family: AgentStorageThreadFamily
     ) -> some View {
+        let parentTitle = privateTitle(
+            family.title,
+            provider: family.provider,
+            nativeID: family.nativeThreadID,
+            isSubagent: false,
+            fallback: L10n.text("聊天")
+        )
+        let childTitle = privateTitle(
+            node.title,
+            provider: family.provider,
+            nativeID: node.nativeID,
+            isSubagent: true,
+            fallback: L10n.text("子代理")
+        )
         detailHeader(
             provider: family.provider,
-            title: privateTitle(node.title, provider: family.provider, fallback: L10n.text("子代理")),
+            title: childTitle,
             subtitle: hidesPrivateDetails
                 ? L10n.text("主聊天 > 子代理")
-                : "\(family.title) > \(node.title)",
+                : "\(parentTitle) > \(childTitle)",
             path: hidesPrivateDetails ? nil : node.path
         )
         detailSection(L10n.text("占用摘要")) {
@@ -6222,9 +6368,18 @@ private struct AgentStorageDetailView: View {
     private func privateTitle(
         _ title: String,
         provider: AgentStorageProvider,
+        nativeID: String,
+        isSubagent: Bool,
         fallback: String
     ) -> String {
-        hidesPrivateDetails ? "\(provider.displayName) \(fallback)" : title
+        if usesMockTitles {
+            return AgentStorageMockTitleCatalog.title(
+                provider: provider,
+                nativeID: nativeID,
+                isSubagent: isSubagent
+            )
+        }
+        return hidesPrivateDetails ? "\(provider.displayName) \(fallback)" : title
     }
 
     private func reveal(_ path: String) {

@@ -725,6 +725,7 @@ final class AgentStorageCleanupSession: ObservableObject, Identifiable {
 }
 
 struct AgentStorageCleanupReviewView: View {
+    @AppStorage(AgentStoragePreferences.mockTitlesKey) private var usesMockTitles = false
     @ObservedObject var session: AgentStorageCleanupSession
     let close: () -> Void
     let didFinish: (AgentStorageCleanupResult) -> Void
@@ -866,7 +867,14 @@ struct AgentStorageCleanupReviewView: View {
         HStack(spacing: 12) {
             Image(systemName: statusSymbol(target)).foregroundStyle(statusColor(target)).frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
-                Text(target.family.title).lineLimit(1)
+                Text(usesMockTitles
+                    ? AgentStorageMockTitleCatalog.title(
+                        provider: target.family.provider,
+                        nativeID: target.family.nativeThreadID,
+                        isSubagent: false
+                    )
+                    : target.family.title
+                ).lineLimit(1)
                 Text(target.family.project).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 12)

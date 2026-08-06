@@ -7,6 +7,21 @@ struct AgentStorageBatchCleanupContext: Identifiable, Sendable {
     let families: [AgentStorageThreadFamily]
     let scannedAt: Date
     let hidesPrivateDetails: Bool
+    let usesMockTitles: Bool
+
+    init(
+        provider: AgentStorageProvider,
+        families: [AgentStorageThreadFamily],
+        scannedAt: Date,
+        hidesPrivateDetails: Bool,
+        usesMockTitles: Bool = false
+    ) {
+        self.provider = provider
+        self.families = families
+        self.scannedAt = scannedAt
+        self.hidesPrivateDetails = hidesPrivateDetails
+        self.usesMockTitles = usesMockTitles
+    }
 }
 
 struct AgentStorageBatchCleanupProjection: Equatable, Sendable {
@@ -23,7 +38,8 @@ enum AgentStorageBatchCleanupEngine {
         selectedProject: String?,
         query: String,
         relativeTo referenceDate: Date,
-        hidesPrivateDetails: Bool
+        hidesPrivateDetails: Bool,
+        usesMockTitles: Bool = false
     ) -> AgentStorageBatchCleanupProjection {
         let oldFamilies = families.filter {
             timeRange != .all && timeRange.includes(updatedAt: $0.updatedAt, relativeTo: referenceDate)
@@ -36,17 +52,44 @@ enum AgentStorageBatchCleanupEngine {
             guard selectedProject == nil || family.project == selectedProject else { return false }
             guard !normalizedQuery.isEmpty else { return true }
             if hidesPrivateDetails {
-                return family.provider.displayName.localizedCaseInsensitiveContains(normalizedQuery)
+                return (usesMockTitles
+                    ? AgentStorageMockTitleCatalog.title(
+                        provider: family.provider,
+                        nativeID: family.nativeThreadID,
+                        isSubagent: false
+                    )
+                    : family.provider.displayName)
+                    .localizedCaseInsensitiveContains(normalizedQuery)
+                    || family.provider.displayName.localizedCaseInsensitiveContains(normalizedQuery)
                     || family.nativeThreadID.localizedCaseInsensitiveContains(normalizedQuery)
                     || family.subagents.contains {
-                        $0.nativeID.localizedCaseInsensitiveContains(normalizedQuery)
+                        (usesMockTitles
+                            ? AgentStorageMockTitleCatalog.title(
+                                provider: family.provider,
+                                nativeID: $0.nativeID,
+                                isSubagent: true
+                            )
+                            : $0.nativeID)
+                            .localizedCaseInsensitiveContains(normalizedQuery)
                     }
             }
-            return family.title.localizedCaseInsensitiveContains(normalizedQuery)
+            return (usesMockTitles
+                ? AgentStorageMockTitleCatalog.title(
+                    provider: family.provider,
+                    nativeID: family.nativeThreadID,
+                    isSubagent: false
+                )
+                : family.title).localizedCaseInsensitiveContains(normalizedQuery)
                 || family.project.localizedCaseInsensitiveContains(normalizedQuery)
                 || family.nativeThreadID.localizedCaseInsensitiveContains(normalizedQuery)
                 || family.subagents.contains {
-                    $0.title.localizedCaseInsensitiveContains(normalizedQuery)
+                    (usesMockTitles
+                        ? AgentStorageMockTitleCatalog.title(
+                            provider: family.provider,
+                            nativeID: $0.nativeID,
+                            isSubagent: true
+                        )
+                        : $0.title).localizedCaseInsensitiveContains(normalizedQuery)
                         || $0.nativeID.localizedCaseInsensitiveContains(normalizedQuery)
                 }
         }.sorted { lhs, rhs in
@@ -514,7 +557,11 @@ struct AgentStorageBatchCleanupSheet: View {
     }
 
     private func threadRow(_ family: AgentStorageThreadFamily) -> some View {
-        let row = AgentStorageChatRow(family: family, hidesPrivateDetails: context.hidesPrivateDetails)
+        let row = AgentStorageChatRow(
+            family: family,
+            hidesPrivateDetails: context.hidesPrivateDetails,
+            usesMockTitles: context.usesMockTitles
+        )
         let artifacts = AgentStorageCleanupValidator.officialArtifacts(for: family)
         let immediateBytes = artifacts.reduce(UInt64.zero) {
             let sum = $0.addingReportingOverflow($1.allocatedBytes)
@@ -813,6 +860,7 @@ struct AgentStorageBatchCleanupSheet: View {
         let currentQuery = query
         let referenceDate = context.scannedAt
         let hidesPrivateDetails = context.hidesPrivateDetails
+        let usesMockTitles = context.usesMockTitles
         isUpdating = true
 
         projectionTask = Task { @MainActor in
@@ -826,7 +874,8 @@ struct AgentStorageBatchCleanupSheet: View {
                         selectedProject: project,
                         query: currentQuery,
                         relativeTo: referenceDate,
-                        hidesPrivateDetails: hidesPrivateDetails
+                        hidesPrivateDetails: hidesPrivateDetails,
+                        usesMockTitles: usesMockTitles
                     )
                 }
                 let result = await worker.value

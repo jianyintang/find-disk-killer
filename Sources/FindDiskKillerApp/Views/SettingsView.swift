@@ -34,6 +34,8 @@ struct SettingsPage: View {
     @AppStorage("openMainWindowAtLogin") private var openMainWindowAtLogin = false
     @AppStorage(AgentStoragePreferences.hidePrivateDetailsKey)
     private var hidesAgentStoragePrivateDetails = false
+    @AppStorage(AgentStoragePreferences.mockTitlesKey)
+    private var usesAgentStorageMockTitles = false
     @State private var loginItem = LoginItemSettingsModel(refreshesImmediately: false)
     @State private var traceHelperState: TraceHelperServiceState = .notRegistered
     @State private var historyWasCleared = false
@@ -247,6 +249,18 @@ struct SettingsPage: View {
 
                 case .dataAndPrivacy:
             Form {
+                Section(L10n.text("录屏保护")) {
+                    Toggle(
+                        L10n.text("录屏时使用模拟聊天标题"),
+                        isOn: $usesAgentStorageMockTitles
+                    )
+
+                    Text(L10n.text("将 Codex、Claude 和 OpenCode 的聊天标题替换为预设英文标题。只影响显示，不会修改本地数据或清理目标。"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 Section(L10n.text("AI Agent 空间")) {
                     if let snapshot = agentStorage.snapshot {
                         HStack(spacing: 0) {

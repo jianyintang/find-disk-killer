@@ -613,6 +613,9 @@
 "配置与索引" = "Configuration et index";
 "附件与图片" = "Pièces jointes et images";
 "隐藏聊天标题和完整路径" = "Masquer les titres et les chemins complets";
+"录屏保护" = "Protection pour l’enregistrement d’écran";
+"录屏时使用模拟聊天标题" = "Utiliser des titres de chat fictifs pendant l’enregistrement";
+"将 Codex、Claude 和 OpenCode 的聊天标题替换为预设英文标题。只影响显示，不会修改本地数据或清理目标。" = "Remplacer les titres des chats Codex, Claude et OpenCode par des titres anglais prédéfinis. Seul l’affichage change ; les données locales et les cibles de nettoyage restent inchangées.";
 "项目" = "Projet";
 "Non-project directory" = "Dossiers hors projet";
 "项目已隐藏" = "Projet masqué";

@@ -110,7 +110,10 @@ enum L10n {
         guard localized == key, resolvedLanguage != .simplifiedChinese else {
             return localized
         }
-        return recentEnglishFallbacks[key]
+        return recordingTraditionalChineseFallbacks[key].flatMap {
+            resolvedLanguage == .traditionalChinese ? $0 : nil
+        }
+            ?? recentEnglishFallbacks[key]
             ?? historyEnglishFallbacks[key]
             ?? storageMapEnglishFallbacks[key]
             ?? visualEffectsEnglishFallbacks[key]
@@ -271,6 +274,9 @@ enum L10n {
     // shipped locale receives a native translation. Non-Chinese interfaces
     // must never fall back to the Simplified Chinese lookup key itself.
     private static let recentEnglishFallbacks: [String: String] = [
+        "录屏保护": "Screen Recording",
+        "录屏时使用模拟聊天标题": "Use Mock Chat Titles While Recording",
+        "将 Codex、Claude 和 OpenCode 的聊天标题替换为预设英文标题。只影响显示，不会修改本地数据或清理目标。": "Replace Codex, Claude, and OpenCode chat titles with preset English titles. Display only; local data and cleanup targets are unchanged.",
         "写入峰值 %@": "Peak write %@",
         "区间总写入 %@": "Total write %@",
         "总计": "Total",
@@ -373,6 +379,12 @@ enum L10n {
         "重新扫描已识别的应用、工具和数据位置": "Rescan recognized apps, tools, and data locations",
         "首次": "First",
         "首次观察": "First Observed"
+    ]
+
+    private static let recordingTraditionalChineseFallbacks: [String: String] = [
+        "录屏保护": "錄影保護",
+        "录屏时使用模拟聊天标题": "錄影時使用模擬聊天標題",
+        "将 Codex、Claude 和 OpenCode 的聊天标题替换为预设英文标题。只影响显示，不会修改本地数据或清理目标。": "將 Codex、Claude 與 OpenCode 的聊天標題替換為預設英文標題。只影響顯示，不會修改本機資料或清理目標。"
     ]
 
     private static let visualEffectsEnglishFallbacks: [String: String] = [

@@ -4,6 +4,116 @@ import Testing
 @testable import FindDiskKillerApp
 @testable import FindDiskKillerCore
 
+@Test func agentStorageMockTitlesAreStableAndRoleSpecific() {
+    let chat = AgentStorageMockTitleCatalog.title(
+        provider: .codex,
+        nativeID: "thread-42",
+        isSubagent: false
+    )
+    let repeated = AgentStorageMockTitleCatalog.title(
+        provider: .codex,
+        nativeID: "thread-42",
+        isSubagent: false
+    )
+    let subagent = AgentStorageMockTitleCatalog.title(
+        provider: .codex,
+        nativeID: "thread-42",
+        isSubagent: true
+    )
+
+    #expect(chat == repeated)
+    #expect(chat != subagent)
+    #expect(chat.rangeOfCharacter(from: .controlCharacters) == nil)
+    #expect(!chat.contains("thread-42"))
+}
+
+@Test func agentStorageMockTitlesPreferenceDefaultsOffAndPersists() throws {
+    let suiteName = "AgentStorageMockTitlesTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    #expect(!defaults.bool(forKey: AgentStoragePreferences.mockTitlesKey))
+    defaults.set(true, forKey: AgentStoragePreferences.mockTitlesKey)
+    #expect(defaults.bool(forKey: AgentStoragePreferences.mockTitlesKey))
+}
+
+@Test func agentStorageProjectionUsesMockTitlesForSearchAndRows() throws {
+    let reference = Date(timeIntervalSince1970: 20_000_000)
+    let family = makeFamily(
+        id: "private-thread",
+        updatedAt: reference.addingTimeInterval(-31 * 24 * 60 * 60),
+        bytes: 10,
+        title: "Sensitive Client Project"
+    )
+    let dataset = AgentStorageProviderDataset(
+        provider: .codex,
+        families: [family],
+        globalItems: [],
+        unattributedItems: []
+    )
+    let mockTitle = AgentStorageMockTitleCatalog.title(
+        provider: .codex,
+        nativeID: family.nativeThreadID,
+        isSubagent: false
+    )
+
+    let result = try AgentStorageProjectionEngine.project(AgentStorageProjectionRequest(
+        scope: .chats,
+        dataset: dataset,
+        scannedAt: reference,
+        archiveFilter: .all,
+        timeRange: .thirtyDays,
+        selectedProject: nil,
+        selectedGlobalCategory: nil,
+        selectedUnattributedReason: nil,
+        query: mockTitle,
+        hidesPrivateDetails: true,
+        expandedFamilies: [],
+        chatPageIndex: 0,
+        chatPageSize: 50,
+        chatSortRules: [AgentStorageChatSortRule(field: .title, isReverse: false)],
+        globalSortRules: [],
+        unattributedSortRules: [],
+        usesMockTitles: true
+    ))
+
+    guard case .chats(let rows, _, _, _) = result.content else {
+        Issue.record("Expected a chat projection")
+        return
+    }
+    #expect(rows.count == 1)
+    #expect(rows[0].title == mockTitle)
+    #expect(rows[0].project == L10n.text("已隐藏项目"))
+    #expect(rows[0].title != family.title)
+}
+
+@Test func agentStorageBatchCleanupSearchUsesMockTitles() {
+    let reference = Date(timeIntervalSince1970: 20_000_000)
+    let family = makeFamily(
+        id: "cleanup-thread",
+        updatedAt: reference.addingTimeInterval(-31 * 24 * 60 * 60),
+        bytes: 10,
+        title: "Private Cleanup Topic"
+    )
+    let mockTitle = AgentStorageMockTitleCatalog.title(
+        provider: .codex,
+        nativeID: family.nativeThreadID,
+        isSubagent: false
+    )
+
+    let result = AgentStorageBatchCleanupEngine.project(
+        families: [family],
+        timeRange: .thirtyDays,
+        selectedProject: nil,
+        query: mockTitle,
+        relativeTo: reference,
+        hidesPrivateDetails: false,
+        usesMockTitles: true
+    )
+
+    #expect(result.families.map(\.id) == [family.id])
+}
+
 @Test func agentStorageInactiveRangesUseStrictClampedCutoffs() throws {
     let calendar = Calendar.current
     let reference = try #require(calendar.date(from: DateComponents(

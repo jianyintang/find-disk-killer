@@ -482,6 +482,7 @@ enum AgentStoragePreferences {
     static let autoScanKey = "agentStorageAutoScan"
     static let analysisConsentKey = "agentStorageAnalysisConsent"
     static let hidePrivateDetailsKey = "agentStorageHidePrivateDetails"
+    static let mockTitlesKey = "agentStorageMockTitles"
     private static let customRootsKey = "agentStorageCustomRoots"
 
     static func customRoots(defaults: UserDefaults = .standard) -> [URL] {
@@ -505,5 +506,77 @@ enum AgentStoragePreferences {
 
     static func recognizedProvider(at url: URL) -> AgentStorageProvider? {
         AgentDataLocationDiscovery.recognizedProvider(at: url)
+    }
+}
+
+enum AgentStorageMockTitleCatalog {
+    private static let chatTitles = [
+        "Refine Storage Dashboard",
+        "Fix Session Indexing",
+        "Improve Search Responsiveness",
+        "Review Cleanup Workflow",
+        "Tune Background Scanning",
+        "Simplify Settings Navigation",
+        "Audit Data Attribution",
+        "Harden Cache Invalidation",
+        "Design Provider Overview",
+        "Investigate Disk Usage",
+        "Update Activity Timeline",
+        "Reduce Memory Overhead",
+        "Verify File Ownership",
+        "Improve Error Recovery",
+        "Refactor Workspace Discovery",
+        "Polish Detail Inspector",
+        "Add Trace Diagnostics",
+        "Consolidate Shared Storage",
+        "Validate Archive Filters",
+        "Optimize History Queries",
+        "Review Localization Coverage",
+        "Stabilize Refresh Scheduling",
+        "Map Session Artifacts",
+        "Improve Empty States",
+        "Test Cleanup Safety",
+        "Clarify Runtime Status",
+        "Streamline Batch Actions",
+        "Inspect Database Records",
+        "Refine Table Sorting",
+        "Prepare Release Checks",
+        "Unify Provider Metadata",
+        "Measure Scan Performance"
+    ]
+
+    private static let subagentTitles = [
+        "Inspect Implementation",
+        "Audit Existing Tests",
+        "Trace Data Flow",
+        "Compare Provider Behavior",
+        "Validate Edge Cases",
+        "Review Error Paths",
+        "Measure Runtime Cost",
+        "Check Accessibility",
+        "Document Findings",
+        "Prototype Safer Flow",
+        "Verify File Identity",
+        "Confirm Cleanup Scope",
+        "Reproduce the Failure",
+        "Simplify the Helper",
+        "Test Cancellation",
+        "Review the Final Diff"
+    ]
+
+    static func title(
+        provider: AgentStorageProvider,
+        nativeID: String,
+        isSubagent: Bool
+    ) -> String {
+        let role = isSubagent ? "subagent" : "chat"
+        let source = "\(provider.rawValue)|\(role)|\(nativeID)"
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in source.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1_099_511_628_211
+        }
+        let titles = isSubagent ? subagentTitles : chatTitles
+        return L10n.text(titles[Int(hash % UInt64(titles.count))], language: .english)
     }
 }

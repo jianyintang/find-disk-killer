@@ -11,6 +11,11 @@ import Testing
     )
     #expect(L10n.text("Simulators", language: .simplifiedChinese) == "模拟器")
     #expect(L10n.text("Git Workspaces", language: .simplifiedChinese) == "Git 工作区")
+    #expect(L10n.text("录屏保护", language: .english) == "Screen Recording")
+    #expect(L10n.text("录屏时使用模拟聊天标题", language: .english) == "Use Mock Chat Titles While Recording")
+    #expect(
+        L10n.text("录屏保护", language: .traditionalChinese) == "錄影保護"
+    )
 }
 
 @Test func appChineseStringLiteralsResolveWithoutChineseInEnglish() throws {
