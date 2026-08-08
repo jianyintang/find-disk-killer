@@ -978,7 +978,7 @@ import Testing
     #expect(compactRow.contains("frame(minWidth: 0, maxWidth: .infinity"))
     #expect(compactRow.contains("activityContent"))
     #expect(!compactRow.contains("stateBadge"))
-    #expect(compactRow.contains(".clipped()"))
+    #expect(!compactRow.contains(".clipped()"))
     #expect(overview.contains(".frame(maxWidth: .infinity, maxHeight: .infinity)"))
     #expect(overview.contains(".clipped()"))
 }
@@ -1180,12 +1180,33 @@ import Testing
     )
 
     #expect(row.contains("Button(action: requestOpen)"))
-    #expect(row.contains(".overlay(alignment: .trailing)"))
+    #expect(row.contains("Button(action: requestOpen) {\n                HStack(spacing: 10)"))
+    #expect(row.contains("reanalysisControl\n                .frame(width: 48, height: 30, alignment: .trailing)"))
+    #expect(!row.contains(".overlay(alignment: .trailing)"))
+    #expect(row.contains(".frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)"))
     #expect(row.contains("await Task.yield()"))
     #expect(row.contains("presentAccessFeedback(unavailableMessage)"))
     #expect(row.contains("accessibilityHint(openAvailability.canPresent"))
     #expect(row.components(separatedBy: ".allowsHitTesting(false)").count >= 3)
     #expect(!row.contains(".disabled(isOpening)"))
+}
+
+@Test func storageMapPreservesStorageValuesInNarrowLayouts() throws {
+    let source = try storageMapViewSource()
+    let row = try #require(
+        source.split(separator: "private struct StorageSourceWorkbenchRow", maxSplits: 1).last?
+            .split(separator: "private struct StorageSourceBrandIcon", maxSplits: 1).first
+    )
+    let volume = try #require(
+        source.split(separator: "private struct StorageVolumeComposition", maxSplits: 1).last?
+            .split(separator: "private struct StorageCapacityRibbon", maxSplits: 1).first
+    )
+
+    #expect(row.contains("ViewThatFits(in: .horizontal)"))
+    #expect(row.contains("metricValues(horizontal: false)"))
+    #expect(!row.contains(".clipped()"))
+    #expect(volume.contains("LazyVGrid("))
+    #expect(volume.components(separatedBy: ".fixedSize(horizontal: true, vertical: false)").count >= 3)
 }
 
 @Test func storageMapSourceCategoryUsesSharedSegmentedTabs() throws {

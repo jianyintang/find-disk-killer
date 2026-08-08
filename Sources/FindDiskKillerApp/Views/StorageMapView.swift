@@ -1024,48 +1024,45 @@ private struct StorageSourceWorkbenchRow: View {
     @State private var feedbackTask: Task<Void, Never>?
 
     var body: some View {
-        Button(action: requestOpen) {
-            HStack(spacing: 10) {
-                Group {
-                    if usesCompactLayout {
-                        compactContent
-                    } else {
-                        wideContent
+        HStack(spacing: 18) {
+            Button(action: requestOpen) {
+                HStack(spacing: 10) {
+                    Group {
+                        if usesCompactLayout {
+                            compactContent
+                        } else {
+                            wideContent
+                        }
                     }
-                }
-                .contentShape(Rectangle())
-                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                .clipped()
+                    .contentShape(Rectangle())
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
-                Color.clear
-                    .frame(width: 28, height: 28)
-                    .accessibilityHidden(true)
-
-                Group {
-                    if isOpening {
-                        ProgressView().controlSize(.mini)
-                    } else {
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.tertiary)
+                    Group {
+                        if isOpening {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
                     }
+                    .frame(width: 12, height: 16)
                 }
-                .frame(width: 12, height: 16)
             }
-            .padding(.horizontal, 14)
-            .frame(minHeight: usesCompactLayout ? 94 : 76)
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityHint(openAvailability.canPresent
-            ? L10n.text("查看专属分析")
-            : unavailableMessage)
-        .background(rowBackground)
-        .overlay(alignment: .trailing) {
+            .buttonStyle(.plain)
+            .accessibilityHint(openAvailability.canPresent
+                ? L10n.text("查看专属分析")
+                : unavailableMessage)
+            .frame(minWidth: 0, maxWidth: .infinity)
+
             reanalysisControl
-                .padding(.trailing, 36)
+                .frame(width: 48, height: 30, alignment: .trailing)
         }
+        .padding(.horizontal, 14)
+        .frame(minHeight: usesCompactLayout ? 94 : 76)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .background(rowBackground)
         .onHover { isHovering = $0 }
         .onChange(of: openAvailability) { _, access in
             if access.canPresent {
@@ -1086,11 +1083,12 @@ private struct StorageSourceWorkbenchRow: View {
     private var wideContent: some View {
         HStack(spacing: 18) {
             identity
-                .frame(minWidth: 185, idealWidth: 220, maxWidth: 260, alignment: .leading)
+                .frame(minWidth: 160, idealWidth: 220, maxWidth: 260, alignment: .leading)
             activityContent
-                .frame(minWidth: 260, maxWidth: .infinity, alignment: .leading)
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             metrics
-                .frame(width: 300, alignment: .trailing)
+                .frame(minWidth: 150, idealWidth: 240, maxWidth: 300, alignment: .trailing)
+                .layoutPriority(1)
         }
     }
 
@@ -1099,10 +1097,10 @@ private struct StorageSourceWorkbenchRow: View {
             HStack(spacing: 12) {
                 identity
                     .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                    .layoutPriority(1)
-                Spacer(minLength: 10)
+                Spacer(minLength: 8)
                 metrics
                     .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
             }
             HStack(alignment: .top, spacing: 12) {
                 activityContent
@@ -1111,7 +1109,6 @@ private struct StorageSourceWorkbenchRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .clipped()
     }
 
     private var identity: some View {
@@ -1187,10 +1184,22 @@ private struct StorageSourceWorkbenchRow: View {
     }
 
     private var metrics: some View {
-        HStack(spacing: 18) {
+        ViewThatFits(in: .horizontal) {
+            metricValues(horizontal: true)
+            metricValues(horizontal: false)
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    @ViewBuilder
+    private func metricValues(horizontal: Bool) -> some View {
+        let layout = horizontal ? AnyLayout(HStackLayout(spacing: 18)) : AnyLayout(VStackLayout(spacing: 3))
+        layout {
             Text(AgentStorageSizeFormatter.string(displayBytes))
                 .font(.system(.callout, design: .monospaced, weight: .semibold))
                 .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .contentTransition(.numericText())
                 .animation(.smooth(duration: 0.28), value: displayBytes)
             if safeCleanupBytes > 0 {
@@ -1200,9 +1209,10 @@ private struct StorageSourceWorkbenchRow: View {
                 ))
                 .font(.caption.weight(.medium).monospacedDigit())
                 .foregroundStyle(Color.teal)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
     @ViewBuilder
@@ -2484,12 +2494,24 @@ private struct StorageVolumeComposition: View {
                 usedShare: capacityShare(volume.usedBytes)
             )
 
-            HStack(spacing: 0) {
-                spaceFact(L10n.text("已识别"), volume.analyzedBytes, color: .accentColor)
-                factDivider
-                spaceFact(L10n.text("其它"), volume.otherBytes, color: .secondary)
-                factDivider
-                spaceFact(L10n.text("可用空间"), volume.availableCapacity, color: .primary)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 0) {
+                    spaceFact(L10n.text("已识别"), volume.analyzedBytes, color: .accentColor)
+                    factDivider
+                    spaceFact(L10n.text("其它"), volume.otherBytes, color: .secondary)
+                    factDivider
+                    spaceFact(L10n.text("可用空间"), volume.availableCapacity, color: .primary)
+                }
+
+                LazyVGrid(
+                    columns: [GridItem(.flexible()), GridItem(.flexible())],
+                    alignment: .leading,
+                    spacing: 10
+                ) {
+                    spaceFact(L10n.text("已识别"), volume.analyzedBytes, color: .accentColor)
+                    spaceFact(L10n.text("其它"), volume.otherBytes, color: .secondary)
+                    spaceFact(L10n.text("可用空间"), volume.availableCapacity, color: .primary)
+                }
             }
 
             sourceSummary
@@ -2523,6 +2545,7 @@ private struct StorageVolumeComposition: View {
                 .font(.system(.caption, design: .rounded, weight: .semibold))
                 .monospacedDigit()
                 .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .contentTransition(.numericText())
         }
         .padding(.horizontal, 12)
@@ -2578,6 +2601,7 @@ private struct StorageVolumeComposition: View {
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .contentTransition(.numericText())
         }
         .frame(maxWidth: .infinity, alignment: .leading)
