@@ -131,7 +131,7 @@ struct HistoryReportView: View {
 
     private func reportContent(_ report: HistoryReport) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: InstrumentDesign.Spacing.section) {
                 reportHeader(report)
                     .glassSurface(padding: 18)
 
@@ -444,7 +444,7 @@ private struct HistoryReportLoadingToolbar: View {
 private struct HistoryReportLoadingContent: View {
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: InstrumentDesign.Spacing.section) {
                 header
                     .glassSurface(padding: 18)
 

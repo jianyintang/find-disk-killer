@@ -16,6 +16,11 @@ Selected at build time from `glincker/thesvg` commit
 | `xcode.svg` | `xcode` | CC0-1.0 |
 | `docker.svg` | `docker` | CC0-1.0 |
 | `chrome.svg` | `google-chrome` | CC0-1.0 |
+| `gradle.svg` | `gradle` | CC0-1.0 |
+| `flutter.svg` | `flutter` | CC0-1.0 |
+| `cocoapods.svg` | `cocoapods` | CC-BY-NC-4.0 |
+| `homebrew.svg` | `homebrew` | CC0-1.0 |
+| `rust.svg` | `rust` | CC-BY-SA-4.0 |
 
 The adjacent PNG files are 192 px rasterizations of those pinned SVG sources,
 used to avoid parsing third-party SVG at runtime.

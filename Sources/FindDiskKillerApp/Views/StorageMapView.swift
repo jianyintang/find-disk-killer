@@ -328,30 +328,36 @@ struct StorageMapView: View {
                 ($0.id, $0.totalBytes)
             }
         )
-        return LazyVStack(spacing: 0) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                if index > 0 { Divider().padding(.leading, 72) }
-                let openAvailability = resultAccess(for: item.id)
-                StorageSourceWorkbenchRow(
-                    item: item,
-                    activity: item.activity,
-                    displayBytes: item.displayBytes,
-                    safeCleanupBytes: safeBytesBySource[item.id] ?? 0,
-                    usesCompactLayout: width < 820,
-                    canReanalyze: canReanalyze(item.id),
-                    openAvailability: openAvailability,
-                    unavailableMessage: unavailableMessage(
-                        for: item.id,
-                        access: openAvailability
-                    ),
-                    open: { openSource(item.id) },
-                    reanalyze: { reanalyze(item.id) }
-                )
+        return Group {
+            if items.isEmpty {
+                filteredSourceEmptyState
+            } else {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                        if index > 0 { Divider().padding(.leading, 72) }
+                        let openAvailability = resultAccess(for: item.id)
+                        StorageSourceWorkbenchRow(
+                            item: item,
+                            activity: item.activity,
+                            displayBytes: item.displayBytes,
+                            safeCleanupBytes: safeBytesBySource[item.id] ?? 0,
+                            usesCompactLayout: width < 820,
+                            canReanalyze: canReanalyze(item.id),
+                            openAvailability: openAvailability,
+                            unavailableMessage: unavailableMessage(
+                                for: item.id,
+                                access: openAvailability
+                            ),
+                            open: { openSource(item.id) },
+                            reanalyze: { reanalyze(item.id) }
+                        )
+                    }
+                }
             }
         }
         .animation(
             .snappy(duration: 0.42, extraBounce: 0),
-            value: items.map(\.id)
+            value: displayedSourceOrder
         )
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -360,6 +366,16 @@ struct StorageMapView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
         .clipped()
+    }
+
+    private var filteredSourceEmptyState: some View {
+        ContentUnavailableView {
+            Label(L10n.text("此分类暂无来源"), systemImage: "line.3.horizontal.decrease.circle")
+        } description: {
+            Text(L10n.text("切换到其他来源分类查看已发现的应用与工具。"))
+        }
+        .frame(maxWidth: .infinity, minHeight: 180)
+        .accessibilityIdentifier("storage-map-filter-empty-state")
     }
 
     private var detectorLoading: some View {
@@ -1302,13 +1318,39 @@ private struct StorageSourceBrandIcon: View {
             } else {
                 Image(systemName: fallbackSymbol)
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(fallbackColor)
                     .padding(8)
             }
         }
         .frame(width: 40, height: 40)
-        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 7))
+        .background(iconBackgroundColor, in: RoundedRectangle(cornerRadius: 7))
         .accessibilityHidden(true)
+    }
+
+    private var fallbackColor: Color {
+        switch sourceID {
+        case .gradle: Color(red: 0.10, green: 0.53, blue: 0.46)
+        case .androidSDK: Color(red: 0.24, green: 0.72, blue: 0.36)
+        case .cursor: Color(red: 0.48, green: 0.40, blue: 0.95)
+        case .flutter: Color(red: 0.16, green: 0.62, blue: 0.88)
+        case .cocoaPods: Color(red: 0.86, green: 0.20, blue: 0.25)
+        case .homebrew: Color(red: 0.91, green: 0.60, blue: 0.12)
+        case .rust: Color(red: 0.72, green: 0.29, blue: 0.14)
+        case .toolCaches: Color(red: 0.32, green: 0.48, blue: 0.64)
+        default: .secondary
+        }
+    }
+
+    private var iconBackgroundColor: Color {
+        guard Self.images[sourceID] != nil else {
+            return fallbackColor.opacity(0.12)
+        }
+        switch sourceID {
+        case .gradle: return Color.white.opacity(0.92)
+        case .rust: return fallbackColor
+        default: return Color.primary.opacity(0.045)
+        }
     }
 
     private static let images: [StorageSourceID: NSImage] = {
@@ -1325,6 +1367,19 @@ private struct StorageSourceBrandIcon: View {
             bundleIdentifiers: ["com.microsoft.VSCode"],
             paths: ["/Applications/Visual Studio Code.app"]
         )
+        values[.cursor] = applicationIcon(
+            bundleIdentifiers: ["com.todesktop.230313mzl4w4u92"],
+            paths: ["/Applications/Cursor.app"]
+        )
+        values[.androidSDK] = applicationIcon(
+            bundleIdentifiers: ["com.google.android.studio"],
+            paths: ["/Applications/Android Studio.app"]
+        )
+        values[.gradle] = resourceImage("gradle")
+        values[.flutter] = resourceImage("flutter")
+        values[.cocoaPods] = resourceImage("cocoapods")
+        values[.homebrew] = resourceImage("homebrew")
+        values[.rust] = resourceImage("rust")
         values[.simulators] = applicationIcon(
             bundleIdentifiers: ["com.apple.iphonesimulator"],
             paths: ["/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app"]
@@ -1355,7 +1410,10 @@ private struct StorageSourceBrandIcon: View {
         bundleIdentifiers: [String],
         paths: [String]
     ) -> NSImage? {
-        for identifier in bundleIdentifiers {
+        let detectedIdentifiers = paths.compactMap { path in
+            Bundle(path: path)?.bundleIdentifier
+        }
+        for identifier in detectedIdentifiers + bundleIdentifiers where !identifier.isEmpty {
             if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier) {
                 return NSWorkspace.shared.icon(forFile: url.path)
             }
@@ -1960,7 +2018,7 @@ private struct StorageMapSummaryBand: View {
                     volumes: volumes,
                     sourceTitles: Dictionary(
                         uniqueKeysWithValues: model.candidates.map {
-                            ($0.id, $0.descriptor.title)
+                            ($0.id, L10n.text($0.descriptor.title))
                         }
                     )
                 )
@@ -2573,8 +2631,16 @@ private struct StorageVolumeComposition: View {
         case .pnpm: .teal
         case .bun: .yellow
         case .pip: .blue
+        case .gradle: .green
+        case .androidSDK: Color(red: 0.25, green: 0.70, blue: 0.38)
+        case .flutter: Color(red: 0.20, green: 0.67, blue: 0.90)
+        case .cocoaPods: Color(red: 0.86, green: 0.24, blue: 0.38)
+        case .homebrew: Color(red: 0.82, green: 0.56, blue: 0.22)
+        case .rust: Color(red: 0.74, green: 0.32, blue: 0.18)
+        case .toolCaches: Color(red: 0.40, green: 0.52, blue: 0.66)
         case .xcode: .indigo
         case .vscode: Color(red: 0.13, green: 0.56, blue: 0.82)
+        case .cursor: Color(red: 0.48, green: 0.46, blue: 0.90)
         case .simulators: .purple
         case .docker: .orange
         case .podman: .brown

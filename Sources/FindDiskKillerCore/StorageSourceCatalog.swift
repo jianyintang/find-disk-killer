@@ -9,8 +9,16 @@ public enum StorageSourceCatalog {
         .init(id: .pnpm, title: "pnpm", family: .developerTools, symbol: "square.grid.3x3", cleanupCapability: .analysisOnly),
         .init(id: .bun, title: "Bun", family: .developerTools, symbol: "bolt", cleanupCapability: .analysisOnly),
         .init(id: .pip, title: "Python / pip", family: .developerTools, symbol: "chevron.left.forwardslash.chevron.right", cleanupCapability: .analysisOnly),
+        .init(id: .gradle, title: "Gradle", family: .developerTools, symbol: "building.columns", cleanupCapability: .analysisOnly),
+        .init(id: .androidSDK, title: "Android SDK", family: .developerTools, symbol: "apps.iphone", cleanupCapability: .analysisOnly),
+        .init(id: .flutter, title: "Flutter / Dart", family: .developerTools, symbol: "square.stack.3d.up", cleanupCapability: .analysisOnly),
+        .init(id: .cocoaPods, title: "CocoaPods", family: .developerTools, symbol: "shippingbox.circle", cleanupCapability: .analysisOnly),
+        .init(id: .homebrew, title: "Homebrew", family: .developerTools, symbol: "mug", cleanupCapability: .officialTool),
+        .init(id: .rust, title: "Rust / Cargo", family: .developerTools, symbol: "gearshape.2", cleanupCapability: .officialTool),
+        .init(id: .toolCaches, title: "开发工具缓存", family: .developerTools, symbol: "externaldrive.badge.timemachine", cleanupCapability: .analysisOnly),
         .init(id: .xcode, title: "Xcode", family: .developerTools, symbol: "hammer", cleanupCapability: .analysisOnly),
         .init(id: .vscode, title: "VS Code", family: .developerTools, symbol: "chevron.left.forwardslash.chevron.right", cleanupCapability: .verifiedFiles),
+        .init(id: .cursor, title: "Cursor", family: .developerTools, symbol: "cursorarrow.rays", cleanupCapability: .verifiedFiles),
         .init(id: .simulators, title: "Simulators", family: .developerTools, symbol: "iphone.gen3", cleanupCapability: .openOfficialManager),
         .init(id: .docker, title: "Docker Desktop", family: .containers, symbol: "shippingbox.and.arrow.backward", cleanupCapability: .analysisOnly),
         .init(id: .podman, title: "Podman", family: .containers, symbol: "cube.transparent", cleanupCapability: .analysisOnly),
@@ -34,6 +42,7 @@ public enum StorageSourceCatalog {
             home: home,
             workspaceRoots: configuration.workspaceRoots,
             repositories: [],
+            environment: configuration.environment,
             fileManager: fileManager
         )
         let agentLocations = configuration.agentDataLocations ?? AgentDataLocationDiscovery(
@@ -101,6 +110,7 @@ public enum StorageSourceCatalog {
             home: home,
             workspaceRoots: configuration.workspaceRoots,
             repositories: repositories,
+            environment: configuration.environment,
             fileManager: fileManager
         )[.workspace]
         if let descriptor = descriptor(for: .workspace),
@@ -139,6 +149,7 @@ public enum StorageSourceCatalog {
         home: URL,
         workspaceRoots: [URL],
         repositories: [CodeRepositoryLocation],
+        environment: [String: String],
         fileManager: FileManager
     ) -> [StorageSourceID: [StorageSourceRoot]] {
         func root(
@@ -323,6 +334,79 @@ public enum StorageSourceCatalog {
             root(.vscode, "update-cache", "VS Code 更新缓存", "Library/Caches/com.microsoft.VSCode.ShipIt", "更新缓存", .rebuildableCache)
         ]
 
+        let cursorBundleIdentifier = applicationBundleIdentifier(
+            at: "/Applications/Cursor.app",
+            fallback: "com.todesktop.230313mzl4w4u92"
+        )
+        let cursorRoots: [StorageSourceRoot] = [
+            root(
+                .cursor,
+                "application-support",
+                "Cursor 用户与工作区数据",
+                "Library/Application Support/Cursor",
+                "编辑器用户与工作区数据",
+                .protectedUserData,
+                protected: true
+            ),
+            root(
+                .cursor,
+                "extensions-and-cli",
+                "Cursor 扩展与 CLI",
+                ".cursor",
+                "已安装扩展与 CLI",
+                .environmentOrRuntime,
+                protected: true
+            ),
+            root(.cursor, "cached-data", "Cursor 编辑器缓存", "Library/Application Support/Cursor/CachedData", "编辑器缓存", .rebuildableCache),
+            root(.cursor, "cached-extension-vsixs", "Cursor 扩展安装包缓存", "Library/Application Support/Cursor/CachedExtensionVSIXs", "扩展安装包缓存", .rebuildableCache),
+            root(.cursor, "web-cache", "Cursor Web 缓存", "Library/Application Support/Cursor/Cache", "编辑器缓存", .rebuildableCache),
+            root(.cursor, "code-cache", "Cursor 代码缓存", "Library/Application Support/Cursor/Code Cache", "编辑器缓存", .rebuildableCache),
+            root(.cursor, "gpu-cache", "Cursor 图形缓存", "Library/Application Support/Cursor/GPUCache", "图形缓存", .rebuildableCache),
+            root(.cursor, "dawn-cache", "Cursor Dawn 缓存", "Library/Application Support/Cursor/DawnCache", "图形缓存", .rebuildableCache),
+            root(.cursor, "dawn-graphite-cache", "Cursor Graphite 缓存", "Library/Application Support/Cursor/DawnGraphiteCache", "图形缓存", .rebuildableCache),
+            root(.cursor, "dawn-webgpu-cache", "Cursor WebGPU 缓存", "Library/Application Support/Cursor/DawnWebGPUCache", "图形缓存", .rebuildableCache),
+            root(.cursor, "cached-profiles", "Cursor Profile 缓存", "Library/Application Support/Cursor/CachedProfilesData", "编辑器缓存", .rebuildableCache),
+            root(.cursor, "cached-configurations", "Cursor 配置缓存", "Library/Application Support/Cursor/CachedConfigurations", "编辑器缓存", .rebuildableCache),
+            root(.cursor, "logs", "Cursor 日志", "Library/Application Support/Cursor/logs", "编辑器日志", .rebuildableCache),
+            root(.cursor, "crash-reports", "Cursor 崩溃报告", "Library/Application Support/Cursor/Crashpad", "崩溃报告", .rebuildableCache),
+            root(.cursor, "system-cache", "Cursor 系统缓存", "Library/Caches/\(cursorBundleIdentifier)", "编辑器缓存", .rebuildableCache),
+            root(.cursor, "update-cache", "Cursor 更新缓存", "Library/Caches/\(cursorBundleIdentifier).ShipIt", "更新缓存", .rebuildableCache)
+        ]
+
+        let gradleRoots = makeGradleRoots(
+            home: home,
+            environment: environment,
+            fileManager: fileManager
+        )
+        let androidSDKRoots = makeAndroidSDKRoots(
+            home: home,
+            environment: environment,
+            fileManager: fileManager
+        )
+        let flutterRoots = makeFlutterRoots(
+            home: home,
+            environment: environment,
+            fileManager: fileManager
+        )
+        let cocoaPodsRoots = makeCocoaPodsRoots(
+            home: home,
+            fileManager: fileManager
+        )
+        let homebrewRoots = makeHomebrewRoots(
+            home: home,
+            environment: environment,
+            fileManager: fileManager
+        )
+        let rustRoots = makeRustRoots(
+            home: home,
+            environment: environment,
+            fileManager: fileManager
+        )
+        let toolCacheRoots = makeToolCacheRoots(
+            home: home,
+            environment: environment
+        )
+
         return [
             .chrome: chromeRoots,
             .go: [
@@ -348,12 +432,20 @@ public enum StorageSourceCatalog {
                 root(.bun, "global", "Bun global packages", ".bun/install/global", "全局包", .environmentOrRuntime)
             ],
             .pip: [root(.pip, "cache", "pip cache", "Library/Caches/pip", "包缓存", .rebuildableCache)],
+            .gradle: gradleRoots,
+            .androidSDK: androidSDKRoots,
+            .flutter: flutterRoots,
+            .cocoaPods: cocoaPodsRoots,
+            .homebrew: homebrewRoots,
+            .rust: rustRoots,
+            .toolCaches: toolCacheRoots,
             .xcode: [
                 root(.xcode, "derived-data", "DerivedData", "Library/Developer/Xcode/DerivedData", "构建中间产物", .sharedOrExpensive),
                 root(.xcode, "archives", "Archives", "Library/Developer/Xcode/Archives", "归档", .protectedUserData, protected: true),
                 root(.xcode, "device-support", "Device Support", "Library/Developer/Xcode/iOS DeviceSupport", "真机支持文件", .sharedOrExpensive)
             ],
             .vscode: vscodeRoots,
+            .cursor: cursorRoots,
             .simulators: simulatorRoots,
             .docker: [
                 root(.docker, "raw", "Docker virtual disk", "Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw", "Docker 虚拟磁盘", .environmentOrRuntime, protected: true, kind: .file),
@@ -365,6 +457,669 @@ public enum StorageSourceCatalog {
             ],
             .workspace: workspaces
         ]
+    }
+
+    private static func makeGradleRoots(
+        home: URL,
+        environment: [String: String],
+        fileManager: FileManager
+    ) -> [StorageSourceRoot] {
+        let defaultHome = home.appending(path: ".gradle", directoryHint: .isDirectory)
+        let homes = configuredDirectories(
+            defaultURL: defaultHome,
+            environmentKeys: ["GRADLE_USER_HOME"],
+            environment: environment,
+            home: home
+        )
+        return homes.flatMap { gradleHome in
+            let suffix = gradleHome.standardizedFileURL.path == defaultHome.standardizedFileURL.path
+                ? ""
+                : ".\(stablePathHash(gradleHome.standardizedFileURL.path))"
+            func gradleRoot(
+                _ id: String,
+                _ name: String,
+                _ relativePath: String,
+                _ category: String,
+                _ risk: StorageRiskLevel
+            ) -> StorageSourceRoot {
+                StorageSourceRoot(
+                    id: "gradle.\(id)\(suffix)",
+                    sourceID: .gradle,
+                    displayName: name,
+                    path: gradleHome.appending(path: relativePath).standardizedFileURL.path,
+                    defaultCategory: category,
+                    defaultRisk: risk,
+                    isProtected: true
+                )
+            }
+
+            var roots = [
+                gradleRoot("wrapper", "Gradle Wrapper distributions", "wrapper/dists", "Wrapper 发行版", .environmentOrRuntime),
+                gradleRoot("jdks", "Gradle-managed JDKs", "jdks", "Gradle 管理的 JDK", .environmentOrRuntime),
+                gradleRoot("daemon", "Gradle daemon state", "daemon", "Daemon 状态与日志", .sharedOrExpensive),
+                gradleRoot("native", "Gradle native cache", "native", "本机组件缓存", .rebuildableCache)
+            ]
+            let caches = gradleHome.appending(path: "caches", directoryHint: .isDirectory)
+            let children = (try? fileManager.contentsOfDirectory(
+                at: caches,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+            for child in children.sorted(by: {
+                $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
+            }) {
+                guard (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
+                    continue
+                }
+                let name = child.lastPathComponent
+                let lower = name.lowercased()
+                let category: String
+                let risk: StorageRiskLevel
+                if lower.hasPrefix("build-cache-") {
+                    category = "本机构建缓存"
+                    risk = .rebuildableCache
+                } else if lower.hasPrefix("transforms-") {
+                    category = "Artifact 转换缓存"
+                    risk = .rebuildableCache
+                } else if lower.hasPrefix("modules-") {
+                    category = "依赖下载与元数据"
+                    risk = .sharedOrExpensive
+                } else if lower.first?.isNumber == true {
+                    category = "版本化构建状态"
+                    risk = .sharedOrExpensive
+                } else {
+                    category = "Gradle 其它缓存"
+                    risk = .rebuildableCache
+                }
+                roots.append(gradleRoot(
+                    "cache.\(stablePathHash(name))",
+                    name,
+                    "caches/\(name)",
+                    category,
+                    risk
+                ))
+            }
+            return roots
+        }
+    }
+
+    private static func makeAndroidSDKRoots(
+        home: URL,
+        environment: [String: String],
+        fileManager: FileManager
+    ) -> [StorageSourceRoot] {
+        let defaultSDK = home.appending(path: "Library/Android/sdk", directoryHint: .isDirectory)
+        let homes = configuredDirectories(
+            defaultURL: defaultSDK,
+            environmentKeys: ["ANDROID_SDK_ROOT", "ANDROID_HOME"],
+            environment: environment,
+            home: home
+        )
+        let versionedDefinitions: [(String, String, String, Int, String, StorageRiskLevel)] = [
+            ("system-images", "Android System Image", "system-images", 3, "Android 系统镜像", .environmentOrRuntime),
+            ("ndk", "Android NDK", "ndk", 1, "Android NDK", .environmentOrRuntime),
+            ("platforms", "Android Platform", "platforms", 1, "Android 平台", .environmentOrRuntime),
+            ("build-tools", "Android Build Tools", "build-tools", 1, "Android 构建工具", .environmentOrRuntime),
+            ("sources", "Android Sources", "sources", 1, "Android SDK 源码", .sharedOrExpensive),
+            ("cmdline-tools", "Android Command-line Tools", "cmdline-tools", 1, "Android 命令行工具", .environmentOrRuntime),
+            ("cmake", "Android CMake", "cmake", 1, "Android CMake", .environmentOrRuntime)
+        ]
+        let aggregateDefinitions: [(String, String, String, String, StorageRiskLevel)] = [
+            ("emulator", "Android Emulator", "emulator", "Android 模拟器", .environmentOrRuntime),
+            ("platform-tools", "Android Platform Tools", "platform-tools", "Android 平台工具", .environmentOrRuntime),
+            ("extras", "Android SDK Extras", "extras", "Android SDK 扩展", .environmentOrRuntime)
+        ]
+        return homes.flatMap { sdkHome in
+            let suffix = sdkHome.standardizedFileURL.path == defaultSDK.standardizedFileURL.path
+                ? ""
+                : ".\(stablePathHash(sdkHome.standardizedFileURL.path))"
+            var roots = aggregateDefinitions.map { id, name, relativePath, category, risk in
+                StorageSourceRoot(
+                    id: "androidSDK.\(id)\(suffix)",
+                    sourceID: .androidSDK,
+                    displayName: name,
+                    path: sdkHome.appending(path: relativePath).standardizedFileURL.path,
+                    defaultCategory: category,
+                    defaultRisk: risk,
+                    isProtected: true
+                )
+            }
+            for definition in versionedDefinitions {
+                let baseURL = sdkHome.appending(path: definition.2, directoryHint: .isDirectory)
+                let packages = descendantDirectories(
+                    at: baseURL,
+                    depth: definition.3,
+                    fileManager: fileManager
+                )
+                if packages.isEmpty {
+                    roots.append(StorageSourceRoot(
+                        id: "androidSDK.\(definition.0)\(suffix)",
+                        sourceID: .androidSDK,
+                        displayName: definition.1,
+                        path: baseURL.standardizedFileURL.path,
+                        defaultCategory: definition.4,
+                        defaultRisk: definition.5,
+                        isProtected: true
+                    ))
+                    continue
+                }
+                for package in packages {
+                    let relative = package.path.replacingOccurrences(
+                        of: baseURL.path + "/",
+                        with: ""
+                    )
+                    roots.append(StorageSourceRoot(
+                        id: "androidSDK.\(definition.0).\(stablePathHash(relative))\(suffix)",
+                        sourceID: .androidSDK,
+                        displayName: "\(definition.1) · \(relative.replacingOccurrences(of: "/", with: " · "))",
+                        path: package.standardizedFileURL.path,
+                        defaultCategory: definition.4,
+                        defaultRisk: definition.5,
+                        isProtected: true
+                    ))
+                }
+            }
+            return roots
+        }
+    }
+
+    private static func makeFlutterRoots(
+        home: URL,
+        environment: [String: String],
+        fileManager: FileManager
+    ) -> [StorageSourceRoot] {
+        let defaultPubCache = home.appending(path: ".pub-cache", directoryHint: .isDirectory)
+        let pubCaches = configuredDirectories(
+            defaultURL: defaultPubCache,
+            environmentKeys: ["PUB_CACHE"],
+            environment: environment,
+            home: home
+        )
+        let pubDefinitions: [(String, String, String, String, StorageRiskLevel)] = [
+            ("hosted", "Pub Hosted packages", "hosted", "Pub Hosted 包", .sharedOrExpensive),
+            ("git", "Pub Git packages", "git", "Pub Git 包", .sharedOrExpensive),
+            ("bin", "Dart global commands", "bin", "Dart 全局命令", .environmentOrRuntime),
+            ("hosted-hashes", "Pub hosted metadata", "hosted-hashes", "Pub 索引元数据", .rebuildableCache),
+            ("temp", "Pub temporary downloads", "_temp", "Pub 临时下载", .rebuildableCache),
+            ("logs", "Pub logs", "log", "Pub 日志", .rebuildableCache)
+        ]
+        var roots = pubCaches.flatMap { pubCache in
+            let suffix = pubCache.standardizedFileURL.path == defaultPubCache.standardizedFileURL.path
+                ? ""
+                : ".\(stablePathHash(pubCache.standardizedFileURL.path))"
+            return pubDefinitions.map { id, name, relativePath, category, risk in
+                StorageSourceRoot(
+                    id: "flutter.pub.\(id)\(suffix)",
+                    sourceID: .flutter,
+                    displayName: name,
+                    path: pubCache.appending(path: relativePath).standardizedFileURL.path,
+                    defaultCategory: category,
+                    defaultRisk: risk,
+                    isProtected: true
+                )
+            }
+        }
+
+        let defaultFVMHome = home.appending(path: "fvm", directoryHint: .isDirectory)
+        var fvmHomes = configuredDirectories(
+            defaultURL: defaultFVMHome,
+            environmentKeys: ["FVM_HOME", "FVM_CACHE_PATH"],
+            environment: environment,
+            home: home
+        )
+        fvmHomes.append(home.appending(path: ".fvm", directoryHint: .isDirectory))
+        fvmHomes.append(home.appending(path: "Library/Application Support/fvm", directoryHint: .isDirectory))
+        var seenFVMPaths = Set<String>()
+        fvmHomes = fvmHomes.filter {
+            seenFVMPaths.insert($0.resolvingSymlinksInPath().standardizedFileURL.path).inserted
+        }
+        for fvmHome in fvmHomes {
+            let suffix = fvmHome.standardizedFileURL.path == defaultFVMHome.standardizedFileURL.path
+                ? ""
+                : ".\(stablePathHash(fvmHome.standardizedFileURL.path))"
+            let versionsURL = fvmHome.appending(path: "versions", directoryHint: .isDirectory)
+            let versions = descendantDirectories(at: versionsURL, depth: 1, fileManager: fileManager)
+            if versions.isEmpty {
+                roots.append(StorageSourceRoot(
+                    id: "flutter.fvm.versions\(suffix)",
+                    sourceID: .flutter,
+                    displayName: "FVM Flutter SDK versions",
+                    path: versionsURL.standardizedFileURL.path,
+                    defaultCategory: "Flutter SDK 版本",
+                    defaultRisk: .environmentOrRuntime,
+                    isProtected: true
+                ))
+            } else {
+                for version in versions {
+                    roots.append(StorageSourceRoot(
+                        id: "flutter.fvm.version.\(stablePathHash(version.lastPathComponent))\(suffix)",
+                        sourceID: .flutter,
+                        displayName: "Flutter \(version.lastPathComponent)",
+                        path: version.standardizedFileURL.path,
+                        defaultCategory: "Flutter SDK 版本",
+                        defaultRisk: .environmentOrRuntime,
+                        isProtected: true
+                    ))
+                }
+            }
+            roots.append(StorageSourceRoot(
+                id: "flutter.fvm.repository\(suffix)",
+                sourceID: .flutter,
+                displayName: "FVM Flutter repository",
+                path: fvmHome.appending(path: "cache.git").standardizedFileURL.path,
+                defaultCategory: "FVM Flutter 仓库",
+                defaultRisk: .sharedOrExpensive,
+                isProtected: true
+            ))
+        }
+        return roots
+    }
+
+    private static func makeCocoaPodsRoots(
+        home: URL,
+        fileManager: FileManager
+    ) -> [StorageSourceRoot] {
+        let repositoriesURL = home.appending(path: ".cocoapods/repos", directoryHint: .isDirectory)
+        let repositories = descendantDirectories(
+            at: repositoriesURL,
+            depth: 1,
+            fileManager: fileManager
+        )
+        var roots = repositories.map { repository in
+            StorageSourceRoot(
+                id: "cocoaPods.repository.\(stablePathHash(repository.lastPathComponent))",
+                sourceID: .cocoaPods,
+                displayName: repository.lastPathComponent,
+                path: repository.standardizedFileURL.path,
+                defaultCategory: "CocoaPods Specs 仓库",
+                defaultRisk: .sharedOrExpensive,
+                isProtected: true
+            )
+        }
+        if repositories.isEmpty {
+            roots.append(StorageSourceRoot(
+                id: "cocoaPods.repositories",
+                sourceID: .cocoaPods,
+                displayName: "CocoaPods Specs repositories",
+                path: repositoriesURL.standardizedFileURL.path,
+                defaultCategory: "CocoaPods Specs 仓库",
+                defaultRisk: .sharedOrExpensive,
+                isProtected: true
+            ))
+        }
+        roots.append(StorageSourceRoot(
+            id: "cocoaPods.cache",
+            sourceID: .cocoaPods,
+            displayName: "CocoaPods cache",
+            path: home.appending(path: "Library/Caches/CocoaPods", directoryHint: .isDirectory)
+                .standardizedFileURL.path,
+            defaultCategory: "CocoaPods 下载与构建缓存",
+            defaultRisk: .rebuildableCache,
+            isProtected: true
+        ))
+        return roots
+    }
+
+    private static func makeHomebrewRoots(
+        home: URL,
+        environment: [String: String],
+        fileManager: FileManager
+    ) -> [StorageSourceRoot] {
+        let currentHome = FileManager.default.homeDirectoryForCurrentUser
+            .resolvingSymlinksInPath().standardizedFileURL.path
+        let scansCurrentHome = home.resolvingSymlinksInPath().standardizedFileURL.path == currentHome
+        var cellarURLs: [URL] = []
+        if let configuredCellar = absoluteDirectory(
+            environment["HOMEBREW_CELLAR"],
+            home: home
+        ) {
+            cellarURLs.append(configuredCellar)
+        }
+        if let configuredPrefix = absoluteDirectory(
+            environment["HOMEBREW_PREFIX"],
+            home: home
+        ) {
+            cellarURLs.append(configuredPrefix.appending(path: "Cellar", directoryHint: .isDirectory))
+        }
+        if scansCurrentHome {
+            cellarURLs.append(URL(fileURLWithPath: "/opt/homebrew/Cellar", isDirectory: true))
+            cellarURLs.append(URL(fileURLWithPath: "/usr/local/Cellar", isDirectory: true))
+        }
+        var seenCellars = Set<String>()
+        cellarURLs = cellarURLs.filter {
+            seenCellars.insert($0.resolvingSymlinksInPath().standardizedFileURL.path).inserted
+        }
+
+        var roots: [StorageSourceRoot] = []
+        for cellar in cellarURLs {
+            let prefix = cellar.deletingLastPathComponent()
+            let formulae = descendantDirectories(at: cellar, depth: 1, fileManager: fileManager)
+            for formula in formulae {
+                let versions = descendantDirectories(at: formula, depth: 1, fileManager: fileManager)
+                let optURL = prefix.appending(path: "opt/\(formula.lastPathComponent)")
+                let linkedKeg = fileManager.fileExists(atPath: optURL.path)
+                    ? optURL.resolvingSymlinksInPath().standardizedFileURL.path
+                    : nil
+                let currentKeg = linkedKeg ?? versions.max {
+                    $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent)
+                        == .orderedAscending
+                }?.resolvingSymlinksInPath().standardizedFileURL.path
+                for version in versions {
+                    let versionPath = version.resolvingSymlinksInPath().standardizedFileURL.path
+                    let isOldVersion = versions.count > 1 && versionPath != currentKeg
+                    let installedOnRequest = homebrewInstalledOnRequest(
+                        at: version.appending(path: "INSTALL_RECEIPT.json"),
+                        fileManager: fileManager
+                    )
+                    let category: String
+                    if isOldVersion {
+                        category = "Homebrew 旧版本 Formula"
+                    } else if installedOnRequest == true {
+                        category = "Homebrew 显式安装 Formula"
+                    } else {
+                        category = "Homebrew 依赖 Formula"
+                    }
+                    roots.append(StorageSourceRoot(
+                        id: "homebrew.formula.\(stablePathHash(versionPath))",
+                        sourceID: .homebrew,
+                        displayName: "\(formula.lastPathComponent) · \(version.lastPathComponent)",
+                        path: version.standardizedFileURL.path,
+                        defaultCategory: category,
+                        defaultRisk: .environmentOrRuntime,
+                        isProtected: true
+                    ))
+                }
+            }
+
+            let caskroom = prefix.appending(path: "Caskroom", directoryHint: .isDirectory)
+            for cask in descendantDirectories(at: caskroom, depth: 1, fileManager: fileManager) {
+                let versions = descendantDirectories(at: cask, depth: 1, fileManager: fileManager)
+                if versions.isEmpty {
+                    roots.append(StorageSourceRoot(
+                        id: "homebrew.cask.\(stablePathHash(cask.path))",
+                        sourceID: .homebrew,
+                        displayName: cask.lastPathComponent,
+                        path: cask.standardizedFileURL.path,
+                        defaultCategory: "Homebrew Cask",
+                        defaultRisk: .environmentOrRuntime,
+                        isProtected: true
+                    ))
+                    continue
+                }
+                for version in versions {
+                    roots.append(StorageSourceRoot(
+                        id: "homebrew.cask.\(stablePathHash(version.path))",
+                        sourceID: .homebrew,
+                        displayName: "\(cask.lastPathComponent) · \(version.lastPathComponent)",
+                        path: version.standardizedFileURL.path,
+                        defaultCategory: "Homebrew Cask",
+                        defaultRisk: .environmentOrRuntime,
+                        isProtected: true
+                    ))
+                }
+            }
+        }
+
+        let defaultCache = home.appending(path: "Library/Caches/Homebrew", directoryHint: .isDirectory)
+        for cache in configuredDirectories(
+            defaultURL: defaultCache,
+            environmentKeys: ["HOMEBREW_CACHE"],
+            environment: environment,
+            home: home
+        ) {
+            roots.append(StorageSourceRoot(
+                id: "homebrew.cache.\(stablePathHash(cache.path))",
+                sourceID: .homebrew,
+                displayName: "Homebrew cache",
+                path: cache.standardizedFileURL.path,
+                defaultCategory: "Homebrew 下载与元数据缓存",
+                defaultRisk: .rebuildableCache,
+                isProtected: true
+            ))
+        }
+        roots.append(StorageSourceRoot(
+            id: "homebrew.logs",
+            sourceID: .homebrew,
+            displayName: "Homebrew logs",
+            path: home.appending(path: "Library/Logs/Homebrew", directoryHint: .isDirectory)
+                .standardizedFileURL.path,
+            defaultCategory: "Homebrew 日志",
+            defaultRisk: .rebuildableCache,
+            isProtected: true
+        ))
+        return roots
+    }
+
+    private static func homebrewInstalledOnRequest(
+        at receiptURL: URL,
+        fileManager: FileManager
+    ) -> Bool? {
+        guard fileManager.fileExists(atPath: receiptURL.path),
+              let data = try? Data(contentsOf: receiptURL),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let installedOnRequest = object["installed_on_request"] as? Bool {
+            return installedOnRequest
+        }
+        return (object["installed_as_dependency"] as? Bool).map(!)
+    }
+
+    private static func makeRustRoots(
+        home: URL,
+        environment: [String: String],
+        fileManager: FileManager
+    ) -> [StorageSourceRoot] {
+        let defaultRustupHome = home.appending(path: ".rustup", directoryHint: .isDirectory)
+        let rustupHomes = configuredDirectories(
+            defaultURL: defaultRustupHome,
+            environmentKeys: ["RUSTUP_HOME"],
+            environment: environment,
+            home: home
+        )
+        var roots: [StorageSourceRoot] = []
+        for rustupHome in rustupHomes {
+            let suffix = rustupHome.standardizedFileURL.path == defaultRustupHome.standardizedFileURL.path
+                ? ""
+                : ".\(stablePathHash(rustupHome.standardizedFileURL.path))"
+            let toolchainsURL = rustupHome.appending(path: "toolchains", directoryHint: .isDirectory)
+            let toolchains = descendantDirectories(
+                at: toolchainsURL,
+                depth: 1,
+                fileManager: fileManager
+            )
+            if toolchains.isEmpty {
+                roots.append(StorageSourceRoot(
+                    id: "rust.rustup.toolchains\(suffix)",
+                    sourceID: .rust,
+                    displayName: "Rust toolchains",
+                    path: toolchainsURL.standardizedFileURL.path,
+                    defaultCategory: "Rust 工具链",
+                    defaultRisk: .environmentOrRuntime,
+                    isProtected: true
+                ))
+            } else {
+                for toolchain in toolchains {
+                    roots.append(StorageSourceRoot(
+                        id: "rust.rustup.toolchain.\(stablePathHash(toolchain.lastPathComponent))\(suffix)",
+                        sourceID: .rust,
+                        displayName: toolchain.lastPathComponent,
+                        path: toolchain.standardizedFileURL.path,
+                        defaultCategory: "Rust 工具链",
+                        defaultRisk: .environmentOrRuntime,
+                        isProtected: true
+                    ))
+                }
+            }
+            roots.append(StorageSourceRoot(
+                id: "rust.rustup.downloads\(suffix)",
+                sourceID: .rust,
+                displayName: "rustup downloads",
+                path: rustupHome.appending(path: "downloads").standardizedFileURL.path,
+                defaultCategory: "rustup 下载缓存",
+                defaultRisk: .rebuildableCache,
+                isProtected: true
+            ))
+            roots.append(StorageSourceRoot(
+                id: "rust.rustup.temp\(suffix)",
+                sourceID: .rust,
+                displayName: "rustup temporary files",
+                path: rustupHome.appending(path: "tmp").standardizedFileURL.path,
+                defaultCategory: "rustup 临时文件",
+                defaultRisk: .rebuildableCache,
+                isProtected: true
+            ))
+        }
+
+        let defaultCargoHome = home.appending(path: ".cargo", directoryHint: .isDirectory)
+        let cargoHomes = configuredDirectories(
+            defaultURL: defaultCargoHome,
+            environmentKeys: ["CARGO_HOME"],
+            environment: environment,
+            home: home
+        )
+        let cargoDefinitions: [(String, String, String, String, StorageRiskLevel)] = [
+            ("registry.archives", "Cargo crate archives", "registry/cache", "Cargo Crate 下载", .rebuildableCache),
+            ("registry.sources", "Cargo registry sources", "registry/src", "Cargo Registry 源码", .sharedOrExpensive),
+            ("registry.index", "Cargo registry index", "registry/index", "Cargo Registry 索引", .sharedOrExpensive),
+            ("git.database", "Cargo Git databases", "git/db", "Cargo Git 仓库缓存", .sharedOrExpensive),
+            ("git.checkouts", "Cargo Git checkouts", "git/checkouts", "Cargo Git 检出", .sharedOrExpensive),
+            ("bin", "Cargo installed commands", "bin", "Cargo 已安装命令", .environmentOrRuntime)
+        ]
+        for cargoHome in cargoHomes {
+            let suffix = cargoHome.standardizedFileURL.path == defaultCargoHome.standardizedFileURL.path
+                ? ""
+                : ".\(stablePathHash(cargoHome.standardizedFileURL.path))"
+            roots.append(contentsOf: cargoDefinitions.map { id, name, relativePath, category, risk in
+                StorageSourceRoot(
+                    id: "rust.cargo.\(id)\(suffix)",
+                    sourceID: .rust,
+                    displayName: name,
+                    path: cargoHome.appending(path: relativePath).standardizedFileURL.path,
+                    defaultCategory: category,
+                    defaultRisk: risk,
+                    isProtected: true
+                )
+            })
+        }
+        return roots
+    }
+
+    private static func makeToolCacheRoots(
+        home: URL,
+        environment: [String: String]
+    ) -> [StorageSourceRoot] {
+        let defaultCacheHome = home.appending(path: ".cache", directoryHint: .isDirectory)
+        let cacheHomes = configuredDirectories(
+            defaultURL: defaultCacheHome,
+            environmentKeys: ["XDG_CACHE_HOME"],
+            environment: environment,
+            home: home
+        )
+        let definitions: [(String, String, String, String, StorageRiskLevel)] = [
+            ("uv", "uv package cache", "uv", "uv 包与环境缓存", .sharedOrExpensive),
+            ("frida", "Frida runtime cache", "frida", "Frida 运行时缓存", .environmentOrRuntime),
+            ("chrome-devtools-mcp", "Chrome DevTools MCP profiles", "chrome-devtools-mcp", "MCP 浏览器档案", .protectedUserData),
+            ("codex-runtimes", "Codex tool runtimes", "codex-runtimes", "Codex 工具运行时", .environmentOrRuntime)
+        ]
+        var roots = cacheHomes.flatMap { cacheHome in
+            let suffix = cacheHome.standardizedFileURL.path == defaultCacheHome.standardizedFileURL.path
+                ? ""
+                : ".\(stablePathHash(cacheHome.standardizedFileURL.path))"
+            return definitions.map { id, name, relativePath, category, risk in
+                StorageSourceRoot(
+                    id: "toolCaches.\(id)\(suffix)",
+                    sourceID: .toolCaches,
+                    displayName: name,
+                    path: cacheHome.appending(path: relativePath).standardizedFileURL.path,
+                    defaultCategory: category,
+                    defaultRisk: risk,
+                    isProtected: true
+                )
+            }
+        }
+        if let uvCache = absoluteDirectory(environment["UV_CACHE_DIR"], home: home) {
+            roots.append(StorageSourceRoot(
+                id: "toolCaches.uv.\(stablePathHash(uvCache.path))",
+                sourceID: .toolCaches,
+                displayName: "uv package cache",
+                path: uvCache.standardizedFileURL.path,
+                defaultCategory: "uv 包与环境缓存",
+                defaultRisk: .sharedOrExpensive,
+                isProtected: true
+            ))
+        }
+        return roots
+    }
+
+    private static func absoluteDirectory(_ value: String?, home: URL) -> URL? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        if value == "~" { return home.standardizedFileURL }
+        if value.hasPrefix("~/") {
+            return home.appending(path: String(value.dropFirst(2))).standardizedFileURL
+        }
+        guard value.hasPrefix("/") else { return nil }
+        return URL(fileURLWithPath: value, isDirectory: true).standardizedFileURL
+    }
+
+    private static func descendantDirectories(
+        at root: URL,
+        depth: Int,
+        fileManager: FileManager
+    ) -> [URL] {
+        guard depth > 0 else { return [root] }
+        var current = [root]
+        for _ in 0..<depth {
+            current = current.flatMap { parent in
+                ((try? fileManager.contentsOfDirectory(
+                    at: parent,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles]
+                )) ?? []).filter {
+                    (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                }
+            }
+            if current.isEmpty { break }
+        }
+        return current.sorted {
+            $0.path.localizedStandardCompare($1.path) == .orderedAscending
+        }
+    }
+
+    private static func configuredDirectories(
+        defaultURL: URL,
+        environmentKeys: [String],
+        environment: [String: String],
+        home: URL
+    ) -> [URL] {
+        var urls = [defaultURL.standardizedFileURL]
+        for key in environmentKeys {
+            guard let value = environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else { continue }
+            let url: URL
+            if value == "~" {
+                url = home
+            } else if value.hasPrefix("~/") {
+                url = home.appending(path: String(value.dropFirst(2)))
+            } else if value.hasPrefix("/") {
+                url = URL(fileURLWithPath: value, isDirectory: true)
+            } else {
+                continue
+            }
+            urls.append(url.standardizedFileURL)
+        }
+        var paths = Set<String>()
+        return urls.filter { paths.insert($0.resolvingSymlinksInPath().path).inserted }
+    }
+
+    private static func applicationBundleIdentifier(at path: String, fallback: String) -> String {
+        guard let identifier = Bundle(path: path)?.bundleIdentifier?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !identifier.isEmpty else {
+            return fallback
+        }
+        return identifier
     }
 
     private static func stablePathHash(_ path: String) -> String {

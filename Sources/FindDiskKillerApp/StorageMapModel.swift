@@ -912,7 +912,7 @@ final class StorageMapModel {
     nonisolated private static var defaultCacheURL: URL? {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
             .appending(path: "FindDiskKiller", directoryHint: .isDirectory)
-            .appending(path: "storage-map-v7.json", directoryHint: .notDirectory)
+            .appending(path: "storage-map-v10.json", directoryHint: .notDirectory)
     }
 
     nonisolated private static func loadSnapshot(from url: URL?) async -> StorageAnalysisSnapshot? {
