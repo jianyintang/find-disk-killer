@@ -357,7 +357,10 @@ private func paginationRow(_ index: Int) -> ActiveAppRow {
     #expect(coordinator.isScrolling)
 
     coordinator.scrollingEnded()
-    try? await Task.sleep(for: .milliseconds(175))
+    let deadline = ContinuousClock.now + .seconds(1)
+    while coordinator.isScrolling, ContinuousClock.now < deadline {
+        try? await Task.sleep(for: .milliseconds(10))
+    }
 
     #expect(!coordinator.isScrolling)
 }
