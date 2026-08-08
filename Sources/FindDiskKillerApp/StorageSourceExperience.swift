@@ -446,6 +446,76 @@ struct StorageSourceDetailProfile {
                 summary: L10n.text("pip 缓存主要用于避免重复下载和构建，不代表当前 Python 环境中已经安装的包。"),
                 detail: L10n.text("HTTP 缓存和 Wheel 缓存均可重建，但下一次安装可能需要重新下载或编译；虚拟环境在工作区分析中单独汇总。")
             )
+        case .gradle:
+            .init(
+                headline: L10n.text("区分构建缓存、依赖、Wrapper 与 JDK"),
+                summary: L10n.text("Gradle 用户目录同时保存可重建的构建产物、跨项目共享依赖、Wrapper 发行版和工具链，不应整体视为缓存。"),
+                compositionTitle: L10n.text("Gradle 开发资产"),
+                compositionDetail: L10n.text("按缓存类型与版本聚合目录分配，不逐个建立 Artifact 文件模型。"),
+                managementTitle: L10n.text("保留项目所需环境"),
+                managementDetail: L10n.text("构建缓存可以重新生成，但依赖、Wrapper 与 JDK 的恢复需要网络或再次安装。当前仅提供只读分析。"),
+                officialAction: nil
+            )
+        case .androidSDK:
+            .init(
+                headline: L10n.text("看清系统镜像、NDK、平台与构建工具"),
+                summary: L10n.text("Android SDK 由多个可独立安装的开发包组成；系统镜像、NDK 与历史平台通常是主要占用。"),
+                compositionTitle: L10n.text("Android SDK 组件"),
+                compositionDetail: L10n.text("按 SDK Manager 的组件边界聚合本机物理分配，不读取项目源码。"),
+                managementTitle: L10n.text("通过 SDK Manager 管理"),
+                managementDetail: L10n.text("SDK 组件可能被现有项目和模拟器引用。请在 Android Studio 的 SDK Manager 中确认版本后处理。"),
+                officialAction: nil
+            )
+        case .flutter:
+            .init(
+                headline: L10n.text("区分 SDK 版本、FVM 仓库与 Pub 包"),
+                summary: L10n.text("Flutter 开发环境同时包含多个 SDK 版本、FVM 的 Flutter 仓库、共享 Pub 包和全局 Dart 命令。"),
+                compositionTitle: L10n.text("Flutter 与 Dart 开发资产"),
+                compositionDetail: L10n.text("按 Flutter SDK 版本、Pub 来源和工具用途聚合物理分配，不读取项目源码。"),
+                managementTitle: L10n.text("保留项目固定的 SDK"),
+                managementDetail: L10n.text("FVM SDK 版本可能被项目固定引用，Pub 包重建需要网络。当前仅提供只读分析，请通过 FVM 与 Dart 官方命令管理。"),
+                officialAction: nil
+            )
+        case .cocoaPods:
+            .init(
+                headline: L10n.text("区分 Specs 仓库与 Pod 缓存"),
+                summary: L10n.text("CocoaPods Specs 仓库用于解析依赖版本，下载与构建缓存则保存可重新获取的 Pod 内容。"),
+                compositionTitle: L10n.text("CocoaPods 开发资产"),
+                compositionDetail: L10n.text("每个 Specs 源单独展示，Pod 缓存独立聚合，不扫描项目中的 Pods 目录。"),
+                managementTitle: L10n.text("通过 CocoaPods 管理"),
+                managementDetail: L10n.text("Specs 仓库重新同步可能很慢，不应当作普通缓存删除。当前仅提供只读分析。"),
+                officialAction: nil
+            )
+        case .homebrew:
+            .init(
+                headline: L10n.text("区分显式安装、依赖、旧版本与 Cask"),
+                summary: L10n.text("Homebrew 软件包具有依赖关系和版本语义，Cellar 占用不能直接等同于可清理空间。"),
+                compositionTitle: L10n.text("Homebrew 安装与缓存"),
+                compositionDetail: L10n.text("读取本地安装回执区分显式安装和依赖 Formula，并按 keg 版本、Cask、缓存与日志展示。"),
+                managementTitle: L10n.text("使用 brew cleanup 管理"),
+                managementDetail: L10n.text("旧版本和下载缓存应由 Homebrew 根据依赖关系处理。请先使用 brew cleanup --dry-run 检查候选项。"),
+                officialAction: nil
+            )
+        case .rust:
+            .init(
+                headline: L10n.text("区分工具链、Crate 下载、源码与 Git 缓存"),
+                summary: L10n.text("Rust 开发环境同时保存 rustup 工具链、Cargo Registry 内容、Git 依赖和已安装命令。"),
+                compositionTitle: L10n.text("Rust 与 Cargo 开发资产"),
+                compositionDetail: L10n.text("按 toolchain 版本、Registry 存储层、Git 存储层和已安装命令分别聚合。"),
+                managementTitle: L10n.text("通过 rustup 与 Cargo 管理"),
+                managementDetail: L10n.text("工具链可能被项目固定，Registry 源码和 Git 依赖重建需要网络。当前仅提供只读分析。"),
+                officialAction: nil
+            )
+        case .toolCaches:
+            .init(
+                headline: L10n.text("识别工具缓存中的运行时与会话数据"),
+                summary: L10n.text(".cache 下的内容并不都能直接删除：uv 保存共享包与环境，Frida 和 Codex 保存运行时，MCP 还可能保存浏览器会话。"),
+                compositionTitle: L10n.text("开发工具缓存"),
+                compositionDetail: L10n.text("按提供者聚合 uv、Frida、Chrome DevTools MCP 与 Codex 运行时，不读取浏览器档案内容。"),
+                managementTitle: L10n.text("保护运行环境与登录状态"),
+                managementDetail: L10n.text("MCP 浏览器档案始终按用户数据保护；工具运行时可重新下载，但只应通过对应工具管理。"),
+                officialAction: nil
+            )
         case .xcode:
             .init(
                 headline: L10n.text("区分构建产物、源码包与开发归档"),
@@ -464,6 +534,16 @@ struct StorageSourceDetailProfile {
                 compositionDetail: L10n.text("按编辑器缓存、扩展安装包缓存、已安装扩展、用户与工作区状态、日志和备份分别统计。"),
                 managementTitle: L10n.text("只清理可重建内容"),
                 managementDetail: L10n.text("缓存、日志与崩溃报告可以重新生成；扩展、设置、工作区状态、本地历史和未保存备份始终保持受保护。"),
+                officialAction: nil
+            )
+        case .cursor:
+            .init(
+                headline: L10n.text("区分编辑器缓存、扩展与 AI 状态"),
+                summary: L10n.text("Cursor 除了可重建的版本与图形缓存，还保存设置、扩展状态、工作区记录和 AI 功能数据。"),
+                compositionTitle: L10n.text("Cursor 空间构成"),
+                compositionDetail: L10n.text("缓存、扩展、用户与工作区状态分别统计；不会打开数据库或读取会话内容。"),
+                managementTitle: L10n.text("保护用户与 AI 数据"),
+                managementDetail: L10n.text("仅独立缓存、日志与崩溃报告可进入安全清理；globalStorage、数据库、历史和扩展始终受保护。"),
                 officialAction: nil
             )
         case .simulators:
@@ -562,8 +642,47 @@ struct StorageSourceDetailProfile {
         case "用户设置与扩展状态": L10n.text("包含设置、快捷键、代码片段以及扩展的全局状态。")
         case "本地历史与未保存备份": L10n.text("可能包含尚未写回项目的内容或本地编辑历史，始终受保护。")
         case "扩展与 Web 状态": L10n.text("扩展 WebView、认证和本地会话使用的数据，清除可能导致状态丢失。")
-        case "编辑器状态数据", "编辑器用户与工作区数据": L10n.text("VS Code 保存的运行状态和用户数据，未验证为缓存时一律受保护。")
+        case "编辑器状态数据", "编辑器用户与工作区数据": L10n.text("编辑器保存的运行状态和用户数据，未验证为缓存时一律受保护。")
         case "已安装扩展与 CLI": L10n.text("已安装扩展、命令行组件与启动配置，不作为普通缓存处理。")
+        case "本机构建缓存": L10n.text("Gradle 本地构建缓存可重新生成，但会增加后续构建时间。")
+        case "Artifact 转换缓存": L10n.text("Gradle 为依赖转换生成的结果，可重建但重新处理可能耗时。")
+        case "依赖下载与元数据": L10n.text("多个 Gradle 项目共享的依赖与元数据，恢复需要网络。")
+        case "版本化构建状态": L10n.text("特定 Gradle 版本保存的文件哈希、执行历史与编译状态。")
+        case "Gradle 其它缓存", "本机组件缓存": L10n.text("Gradle 生成的辅助缓存，当前只读展示。")
+        case "Wrapper 发行版": L10n.text("项目 Wrapper 下载的 Gradle 发行版，可能被多个项目继续使用。")
+        case "Gradle 管理的 JDK": L10n.text("Gradle 自动配置或下载的 Java 工具链，移除后相关构建可能不可用。")
+        case "Daemon 状态与日志": L10n.text("Gradle 后台进程的状态与日志；运行中的构建可能正在使用。")
+        case "Android 系统镜像": L10n.text("Android 模拟设备使用的系统镜像，应通过 SDK Manager 管理。")
+        case "Android NDK": L10n.text("原生 Android 构建工具链，项目可能固定使用特定版本。")
+        case "Android 平台": L10n.text("编译 Android 应用使用的平台 API 文件。")
+        case "Android 模拟器": L10n.text("Android Emulator 程序与运行组件。")
+        case "Android 构建工具": L10n.text("aapt、d8 等按版本安装的 Android 构建程序。")
+        case "Android SDK 源码": L10n.text("用于源码浏览和调试的 Android 平台源码。")
+        case "Android 命令行工具", "Android 平台工具", "Android CMake", "Android SDK 扩展": L10n.text("Android SDK 的开发工具组件，应通过 SDK Manager 管理。")
+        case "Flutter SDK 版本": L10n.text("完整的 Flutter 工具链与引擎资产，项目可能固定使用特定版本。")
+        case "FVM Flutter 仓库": L10n.text("FVM 用于获取和创建 Flutter SDK 版本的共享仓库。")
+        case "Pub Hosted 包", "Pub Git 包": L10n.text("多个 Flutter 与 Dart 项目共享的包内容，恢复需要网络或 Git 源。")
+        case "Dart 全局命令": L10n.text("用户主动激活的 Dart 命令，移除后相关工具将不可用。")
+        case "Pub 索引元数据", "Pub 临时下载", "Pub 日志": L10n.text("Pub 生成的辅助数据，可重建但当前仅作只读展示。")
+        case "CocoaPods Specs 仓库": L10n.text("依赖版本索引的本地副本，重新同步可能需要较长时间。")
+        case "CocoaPods 下载与构建缓存": L10n.text("CocoaPods 保存的 Pod 下载和构建副本，应通过 CocoaPods 命令管理。")
+        case "Homebrew 显式安装 Formula": L10n.text("用户主动安装的 Formula 版本，移除会使对应工具不可用。")
+        case "Homebrew 依赖 Formula": L10n.text("其他软件包安装的依赖，应由 Homebrew 根据当前引用关系判断。")
+        case "Homebrew 旧版本 Formula": L10n.text("同一 Formula 保留的非当前 keg，只能在 Homebrew 确认无引用后清理。")
+        case "Homebrew Cask": L10n.text("Homebrew 管理的 macOS 应用或大型软件包。")
+        case "Homebrew 下载与元数据缓存": L10n.text("Homebrew 的下载和 API 元数据，应使用 brew cleanup 管理。")
+        case "Homebrew 日志": L10n.text("Homebrew 构建与安装记录，可用于诊断近期失败。")
+        case "Rust 工具链": L10n.text("rustup 安装的完整 Rust 编译器、标准库和相关工具，项目可能固定使用特定版本。")
+        case "rustup 下载缓存", "rustup 临时文件": L10n.text("rustup 安装和更新工具链时生成的临时或下载内容。")
+        case "Cargo Crate 下载": L10n.text("Cargo 下载的 Crate 压缩包，可重新获取但依赖网络。")
+        case "Cargo Registry 源码": L10n.text("已解压的 Crate 源码，多个 Rust 项目共享。")
+        case "Cargo Registry 索引": L10n.text("Cargo 用于解析 Crate 版本和来源的本地索引。")
+        case "Cargo Git 仓库缓存", "Cargo Git 检出": L10n.text("Git 依赖的本地仓库和源码检出，恢复需要访问原始仓库。")
+        case "Cargo 已安装命令": L10n.text("cargo install 安装的可执行工具，移除后对应命令将不可用。")
+        case "uv 包与环境缓存": L10n.text("uv 共享的包、构建结果和工具环境，应通过 uv 管理。")
+        case "Frida 运行时缓存": L10n.text("Frida 下载或生成的 Agent 与 Helper 运行组件。")
+        case "MCP 浏览器档案": L10n.text("Chrome DevTools MCP 使用的浏览器 Profile，可能包含登录与会话状态。")
+        case "Codex 工具运行时": L10n.text("Codex 插件和文档工具使用的本地依赖与运行时。")
         case "模拟器运行时": L10n.text("可从 Xcode 重新下载的系统运行时，体积大且重建依赖网络。")
         case "模拟器设备": L10n.text("模拟设备的状态与配置，删除设备会连同其中数据一起移除。")
         case "模拟器应用数据": L10n.text("测试应用在模拟器中的文档、数据库与状态，应按用户数据判断。")

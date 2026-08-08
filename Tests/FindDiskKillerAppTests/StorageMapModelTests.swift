@@ -744,6 +744,7 @@ import Testing
     #expect(codex.workDetail.contains("128"))
 }
 
+@MainActor
 @Test func completedStorageRowsDescribeLargestMeasuredComponents() {
     let descriptor = storageMapCandidate().descriptor
     func component(_ id: String, _ title: String, _ bytes: UInt64) -> StorageComponent {
@@ -782,6 +783,7 @@ import Testing
     ].joined(separator: L10n.text("、")))
 }
 
+@MainActor
 @Test func completedAgentRowsDescribeAttributedStorageComposition() {
     let summary = AgentStorageProviderSummary(
         provider: .codex,
@@ -889,7 +891,7 @@ import Testing
     let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
     #expect(source.contains("id: \\.element.id"))
-    #expect(source.contains("value: items.map(\\.id)"))
+    #expect(source.contains("value: displayedSourceOrder"))
     #expect(source.contains("@State private var displayedSourceOrder"))
     #expect(source.contains("if isRunning {\n                stabilizeDisplayedOrder()"))
     #expect(source.contains("synchronizeDisplayedOrder(animated: wasRunning)"))

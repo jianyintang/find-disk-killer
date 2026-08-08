@@ -14,6 +14,21 @@ pinned at commit `0d98403375efc0700fdbc89c0627b02da7376e28`:
 - `xcode` (CC0-1.0)
 - `docker` (CC0-1.0)
 - `google-chrome` (CC0-1.0)
+- `gradle` (CC0-1.0)
+- `flutter` (CC0-1.0)
+- `cocoapods` (CC-BY-NC-4.0)
+- `homebrew` (CC0-1.0)
+- `rust` (CC-BY-SA-4.0)
+
+The CocoaPods mark is attributed to Andy Myers and the CocoaPods Dev team and
+is available under the Creative Commons Attribution-NonCommercial 4.0
+International license: https://creativecommons.org/licenses/by-nc/4.0/
+
+The Rust mark is available under the Creative Commons Attribution-ShareAlike
+4.0 International license: https://creativecommons.org/licenses/by-sa/4.0/
+
+The PNG files distributed by FindDiskKiller are rasterized from the pinned SVG
+sources without altering their artwork.
 
 The MIT License
 

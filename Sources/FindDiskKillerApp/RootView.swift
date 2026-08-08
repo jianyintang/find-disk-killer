@@ -149,12 +149,14 @@ struct RootView: View {
                     if isShowingAuxiliaryPage || requestedSection.showsMonitoringToolbar {
                         StatusToolbar(store: store)
                     } else {
-                        // Keep the unified compact toolbar's primary-action slot stable
-                        // while Storage Map owns its actions inside the page.
-                        ToolbarItem(placement: .primaryAction) {
-                            Color.clear
-                                .frame(width: 28, height: 24)
-                                .accessibilityHidden(true)
+                        if #available(macOS 26.0, *) {
+                            ToolbarSpacer(.fixed, placement: .primaryAction)
+                        } else {
+                            ToolbarItem(placement: .primaryAction) {
+                                Color.clear
+                                    .frame(width: 28, height: 24)
+                                    .accessibilityHidden(true)
+                            }
                         }
                     }
                 }

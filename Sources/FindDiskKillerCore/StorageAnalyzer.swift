@@ -307,7 +307,11 @@ public actor StorageAnalyzer {
             totalWorkCount: totalRootCount
         )
         do {
-            if candidate.id == .go || candidate.id == .workspace {
+            if candidate.id == .go || candidate.id == .workspace
+                || candidate.id == .gradle || candidate.id == .androidSDK
+                || candidate.id == .flutter || candidate.id == .cocoaPods
+                || candidate.id == .homebrew || candidate.id == .rust
+                || candidate.id == .toolCaches {
                 try measureDirectoryAggregate(
                     root: root,
                     excludingNames: root.id.hasSuffix(".module-cache") ? ["cache"] : [],
@@ -1851,7 +1855,7 @@ private enum StoragePathClassifier {
             if lower.contains("build/intermediates.noindex") { return .init(category: "构建中间产物", risk: .rebuildableCache, isProtected: false) }
             if lower.contains("build/products") { return .init(category: "构建产品", risk: .sharedOrExpensive, isProtected: false) }
             if root.id.contains("archives") { return .init(category: "归档", risk: .protectedUserData, isProtected: true) }
-        case .vscode:
+        case .vscode, .cursor:
             if root.id.hasSuffix(".cached-extension-vsixs") {
                 return .init(category: "扩展安装包缓存", risk: .rebuildableCache, isProtected: false)
             }
