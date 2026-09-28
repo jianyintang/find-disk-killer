@@ -97,6 +97,7 @@ struct ContainerEngineDetailView: View {
     @State private var filterOption = FilterOption.all
     @State private var presentedRows: [EngineRowModel] = []
     @State private var isPhysicalStorageExpanded = false
+    @State private var rowUpdateTask: Task<Void, Never>?
 
     init(
         engineTitle: String,
@@ -137,6 +138,8 @@ struct ContainerEngineDetailView: View {
         .onChange(of: sortOption) { _, _ in rebuildRows() }
         .onChange(of: filterOption) { _, _ in rebuildRows() }
         .onChange(of: projection.id) { _, _ in rebuildRows() }
+        .onChange(of: pendingSynchronizationIDs) { _, _ in rebuildRows() }
+        .onDisappear { rowUpdateTask?.cancel() }
     }
 
     // MARK: - Section model
@@ -180,16 +183,21 @@ struct ContainerEngineDetailView: View {
     // MARK: - Row model building
 
     private func rebuildRows() {
-        presentedRows = Self.makeRows(
-            nodes: nodes,
-            projection: projection,
-            section: section,
-            query: query,
-            sortOption: sortOption,
-            filterOption: filterOption,
-            prefix: engineIDPrefix,
-            pendingIDs: pendingSynchronizationIDs
-        )
+        rowUpdateTask?.cancel()
+        rowUpdateTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            presentedRows = Self.makeRows(
+                nodes: nodes,
+                projection: projection,
+                section: section,
+                query: query,
+                sortOption: sortOption,
+                filterOption: filterOption,
+                prefix: engineIDPrefix,
+                pendingIDs: pendingSynchronizationIDs
+            )
+        }
     }
 
     private static func makeRows(

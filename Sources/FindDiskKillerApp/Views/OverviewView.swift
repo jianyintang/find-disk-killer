@@ -179,12 +179,53 @@ private func maxFinite(_ current: Double?, _ next: Double?) -> Double? {
     return values.max()
 }
 
+/// Owns one volume summary and one chart, including across the responsive breakpoint.
+private struct OverviewActivityLayout: Layout {
+    private let spacing: CGFloat = 18
+    private let minimumWideWidth: CGFloat = 737
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard subviews.count == 3 else { return .zero }
+        let width = proposal.width ?? minimumWideWidth
+        if width >= minimumWideWidth {
+            let volumeWidth = min(340, max(270, width - spacing * 2 - 1 - 430))
+            let left = subviews[0].sizeThatFits(.init(width: volumeWidth, height: nil))
+            let right = subviews[2].sizeThatFits(.init(width: width - volumeWidth - spacing * 2 - 1, height: nil))
+            return CGSize(width: width, height: max(left.height, right.height))
+        }
+        let left = subviews[0].sizeThatFits(.init(width: width, height: nil))
+        let right = subviews[2].sizeThatFits(.init(width: width, height: nil))
+        return CGSize(width: width, height: left.height + 29 + right.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 3 else { return }
+        if bounds.width >= minimumWideWidth {
+            let volumeWidth = min(340, max(270, bounds.width - spacing * 2 - 1 - 430))
+            subviews[0].place(at: bounds.origin, anchor: .topLeading,
+                              proposal: .init(width: volumeWidth, height: bounds.height))
+            subviews[1].place(at: CGPoint(x: bounds.minX + volumeWidth + spacing, y: bounds.minY),
+                              anchor: .topLeading, proposal: .init(width: 1, height: bounds.height))
+            subviews[2].place(at: CGPoint(x: bounds.minX + volumeWidth + spacing * 2 + 1, y: bounds.minY),
+                              anchor: .topLeading,
+                              proposal: .init(width: bounds.width - volumeWidth - spacing * 2 - 1, height: bounds.height))
+        } else {
+            let left = subviews[0].sizeThatFits(.init(width: bounds.width, height: nil))
+            subviews[0].place(at: bounds.origin, anchor: .topLeading,
+                              proposal: .init(width: bounds.width, height: left.height))
+            subviews[1].place(at: CGPoint(x: bounds.minX, y: bounds.minY + left.height + 14),
+                              anchor: .topLeading, proposal: .init(width: bounds.width, height: 1))
+            subviews[2].place(at: CGPoint(x: bounds.minX, y: bounds.minY + left.height + 29),
+                              anchor: .topLeading, proposal: .init(width: bounds.width, height: nil))
+        }
+    }
+}
+
 struct OverviewView: View {
     let store: MonitorStore
     let processDetailWindows: ProcessDetailWindowCoordinator
     @Environment(\.openWindow) private var openWindow
     @State private var selectedProcessID: ProcessActivity.ID?
-    @State private var selectedMetric: OverviewMetric = .disk
     @State private var frozenAt: Date?
     @State private var frozenProcesses: [ProcessActivity] = []
     @State private var frozenSystemLayerActivity: SystemLayerActivity?
@@ -193,10 +234,15 @@ struct OverviewView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: OverviewLayoutContract.contentSpacing) {
-                overviewHeader
-                metricStrip
-                diskActivitySection
-                applicationSection
+                OverviewHeader(store: store, toggleLiveFollowing: toggleLiveFollowing)
+                OverviewMetricStrip(store: store, frozenAt: frozenAt)
+                OverviewDiskActivitySection(store: store, frozenAt: frozenAt)
+                OverviewApplicationSection(
+                    store: store, frozenProcesses: frozenProcesses,
+                    frozenSystemLayerActivity: frozenSystemLayerActivity,
+                    selectedProcessID: selectedProcessID,
+                    processHoverCoordinator: processHoverCoordinator, onSelect: presentProcess
+                )
             }
             .padding(.horizontal, InstrumentDesign.Spacing.page)
             .padding(.top, OverviewLayoutContract.pageTopPadding)
@@ -204,89 +250,56 @@ struct OverviewView: View {
         }
     }
 
-    private var overviewHeader: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center, spacing: 18) {
-                diagnosticIdentity
-                Spacer(minLength: 12)
-                rangeControl
-                liveControls
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                diagnosticIdentity
-                HStack(spacing: 12) {
-                    rangeControl
-                    Spacer(minLength: 4)
-                    liveControls
-                }
-            }
-        }
-        .frame(minHeight: 62)
-    }
-
-    private var diagnosticIdentity: some View {
-        HStack(alignment: .center, spacing: 26) {
-            Text(L10n.text("诊断"))
-                .font(.system(size: 26, weight: .semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(headerTitle)
-                    .font(.system(size: 15, weight: .medium))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.78)
-                Text(headerSubtitle)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .minimumScaleFactor(0.72)
-                if store.selectedCoverage < 0.999 {
-                    EvidenceLabel(
-                        text: L10n.format("已观测 %d%%", Int(store.selectedCoverage * 100)),
-                        symbol: "clock.badge.exclamationmark"
-                    )
-                }
-            }
-        }
-        .frame(width: InstrumentDesign.Layout.diagnosticIdentityWidth, alignment: .leading)
-    }
-
-    private var rangeControl: some View {
-        GlassSegmentedControl("时间范围", selection: Bindable(store).selectedRange) {
-            ForEach(SampleRange.allCases) { range in
-                Text(range.localizedTitle).tag(range)
-            }
-        }
-        .frame(width: 224)
-    }
-
-    private var liveControls: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(healthColor.opacity(0.90))
-                    .frame(width: 7, height: 7)
-                    .overlay {
-                        Circle().stroke(healthColor.opacity(0.24), lineWidth: 4)
-                    }
-                    .accessibilityHidden(true)
-                Text(L10n.text("现在"))
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            Button {
-                toggleLiveFollowing()
-            } label: {
-                Image(systemName: store.isFollowingLive ? "pause.fill" : "play.fill")
-            }
-            .buttonStyle(AppIconButtonStyle(size: 32))
-            .help(L10n.text(store.isFollowingLive ? "暂停实时跟随" : "返回实时"))
+    private func presentProcess(_ process: ProcessActivity) {
+        selectedProcessID = process.id
+        processHoverCoordinator.clearForSelection()
+        let presentation = ProcessDetailPresentation(
+            process: process,
+            updatesLive: store.isFollowingLive
+        )
+        processDetailWindows.present(presentation)
+        openWindow(id: "process-detail", value: process.id)
+        processDetailWindows.activate(presentation)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(220))
+            if selectedProcessID == process.id { selectedProcessID = nil }
         }
     }
 
-    private var metricStrip: some View {
+    private func toggleLiveFollowing() {
+        if store.isFollowingLive {
+            frozenAt = Date()
+            frozenProcesses = store.processes
+            frozenSystemLayerActivity = store.systemLayerActivity
+            store.isFollowingLive = false
+        } else {
+            frozenAt = nil
+            frozenProcesses = []
+            frozenSystemLayerActivity = nil
+            store.isFollowingLive = true
+        }
+    }
+
+}
+
+private func formattedNumber(_ value: Double, fractionDigits: Int) -> String {
+    L10n.decimal(value, fractionDigits: fractionDigits)
+}
+
+private func formattedDataValue(_ formatted: String, size: CGFloat = 36) -> DataValue {
+    let parts = formatted.split(separator: " ", maxSplits: 1).map(String.init)
+    return DataValue(
+        value: parts.first ?? formatted,
+        unit: parts.count > 1 ? parts[1] : nil,
+        size: size
+    )
+}
+
+private struct OverviewMetricStrip: View {
+    let store: MonitorStore
+    let frozenAt: Date?
+
+    var body: some View {
         metricGrid(columnCount: OverviewLayoutContract.metricColumnCount)
     }
 
@@ -307,15 +320,20 @@ struct OverviewView: View {
 
     @ViewBuilder
     private var metricCards: some View {
-        cpuMetric
-        diskMetric
-        networkMetric
-        memoryMetric
-        volumeMetric
-        applicationMetric
+        OverviewCPUMetric(store: store)
+        OverviewDiskMetric(store: store, frozenAt: frozenAt)
+        OverviewNetworkMetric(store: store, frozenAt: frozenAt)
+        OverviewMemoryMetric(store: store)
+        OverviewVolumeMetric(store: store)
+        OverviewApplicationMetric(store: store)
     }
 
-    private var cpuMetric: some View {
+}
+
+private struct OverviewCPUMetric: View {
+    let store: MonitorStore
+
+    var body: some View {
         GlassMetricTile(
             title: "CPU · 最近 5 秒",
             symbol: "cpu",
@@ -335,7 +353,13 @@ struct OverviewView: View {
         }
     }
 
-    private var diskMetric: some View {
+}
+
+private struct OverviewDiskMetric: View {
+    let store: MonitorStore
+    let frozenAt: Date?
+
+    var body: some View {
         GlassMetricTile(
             title: "磁盘写入 · 最近 5 秒",
             symbol: "internaldrive",
@@ -358,7 +382,32 @@ struct OverviewView: View {
         }
     }
 
-    private var networkMetric: some View {
+    private var visibleDiskPoints: [ThroughputPoint] {
+        downsampledChartPoints(visibleDiskSourcePoints, segment: { $0.segment }) {
+            [$0.readBytesPerSecond, $0.writeBytesPerSecond]
+        }
+    }
+
+    private var metricTimelineCapacity: Int {
+        min(
+            360,
+            max(2, Int(ceil(store.selectedRange.seconds / store.samplingInterval)) + 1)
+        )
+    }
+
+    private var visibleDiskSourcePoints: [ThroughputPoint] {
+        let end = frozenAt ?? store.points.last?.timestamp ?? Date()
+        let cutoff = end.addingTimeInterval(-store.selectedRange.seconds)
+        return store.points.filter { $0.timestamp >= cutoff && $0.timestamp <= end }
+    }
+
+}
+
+private struct OverviewNetworkMetric: View {
+    let store: MonitorStore
+    let frozenAt: Date?
+
+    var body: some View {
         GlassMetricTile(
             title: "网络 · 最近 5 秒",
             symbol: "wifi",
@@ -388,7 +437,29 @@ struct OverviewView: View {
         }
     }
 
-    private var memoryMetric: some View {
+    private var networkMetricBuckets: [NetworkBarBucket] {
+        let points = store.systemPoints
+        let end = frozenAt ?? points.last?.timestamp ?? Date()
+        return networkBarBuckets(
+            samples: points.map {
+                NetworkBarSample(
+                    timestamp: $0.timestamp,
+                    receive: $0.networkReceiveBytesPerSecond,
+                    send: $0.networkSendBytesPerSecond
+                )
+            },
+            endingAt: end,
+            windowDuration: store.selectedRange.seconds,
+            bucketCount: OverviewLayoutContract.networkMetricBarCount
+        )
+    }
+
+}
+
+private struct OverviewMemoryMetric: View {
+    let store: MonitorStore
+
+    var body: some View {
         GlassMetricTile(
             title: "内存",
             symbol: "memorychip",
@@ -409,7 +480,55 @@ struct OverviewView: View {
         }
     }
 
-    private var volumeMetric: some View {
+    private var memoryAccessibilitySummary: String {
+        guard let memory = store.systemMemory else { return L10n.text("内存采样缺口") }
+        return L10n.format(
+            "内存已用 %@，总计 %@，压缩 %@",
+            ByteRateFormatter.bytes(memory.usedBytes),
+            ByteRateFormatter.bytes(memory.totalBytes),
+            ByteRateFormatter.bytes(memory.compressedBytes)
+        )
+    }
+
+    private func memoryLegend(_ title: String, _ bytes: UInt64?, _ color: Color) -> some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(color.opacity(0.78))
+                .frame(width: 7, height: 7)
+                .accessibilityHidden(true)
+            Text(L10n.text(title))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 6)
+            Text(bytes.map(ByteRateFormatter.bytes) ?? L10n.text("采样缺口"))
+                .monospacedDigit()
+        }
+        .font(.caption2)
+    }
+
+    private func memoryVisualization(donutSize: CGFloat) -> some View {
+        HStack(spacing: donutSize > 50 ? 14 : 7) {
+            VStack(alignment: .leading, spacing: 3) {
+                memoryLegend("已用", store.systemMemory?.usedBytes, InstrumentDesign.ColorRole.memory)
+                memoryLegend("缓存", store.systemMemory?.cachedBytes, .secondary)
+                memoryLegend("可用", store.systemMemory?.availableBytes, .secondary)
+            }
+            .minimumScaleFactor(0.68)
+            MemoryDonut(
+                used: store.currentMemoryUsedBytes,
+                total: store.systemMemory?.totalBytes ?? 0,
+                color: InstrumentDesign.ColorRole.read
+            )
+            .frame(width: donutSize, height: donutSize)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+}
+
+private struct OverviewVolumeMetric: View {
+    let store: MonitorStore
+
+    var body: some View {
         GlassMetricTile(
             title: "卷容量",
             symbol: "externaldrive.connected.to.line.below",
@@ -444,7 +563,16 @@ struct OverviewView: View {
         }
     }
 
-    private var applicationMetric: some View {
+    private var visibleVolumes: [VolumeInfo] {
+        store.volumes.filter(\.isLocal)
+    }
+
+}
+
+private struct OverviewApplicationMetric: View {
+    let store: MonitorStore
+
+    var body: some View {
         GlassMetricTile(
             title: "可见应用",
             symbol: "square.stack.3d.up",
@@ -473,7 +601,14 @@ struct OverviewView: View {
         }
     }
 
-    private var diskActivitySection: some View {
+}
+
+private struct OverviewDiskActivitySection: View {
+    let store: MonitorStore
+    let frozenAt: Date?
+    @State private var selectedMetric: OverviewMetric = .disk
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             SectionHeading("磁盘活动", subtitle: "最近 5 秒的设备读写，按挂载卷名称展示") {
                 GlassSegmentedControl("资源", selection: $selectedMetric) {
@@ -484,56 +619,13 @@ struct OverviewView: View {
                 .frame(width: OverviewLayoutContract.resourceControlWidth)
             }
 
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 18) {
-                    volumeColumn
-                        .frame(minWidth: 270, idealWidth: 310, maxWidth: 340)
-
-                    Divider()
-
-                    trendChart
-                        .frame(minWidth: 430, maxWidth: .infinity)
-                }
-
-                VStack(alignment: .leading, spacing: 14) {
-                    volumeColumn
-                    Divider()
-                    trendChart
-                }
+            OverviewActivityLayout {
+                volumeColumn
+                Rectangle().fill(.separator)
+                trendChart
             }
         }
         .overviewPanel()
-    }
-
-    private var applicationSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(L10n.text("正在活动的应用"))
-                        .font(.headline)
-                    Text(L10n.text("应用与系统层的磁盘、CPU 与网络活动汇总在同一处"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text(L10n.text("点击表头排序 · 显示前 12 个"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.bottom, 8)
-
-            ProcessTable(
-                processes: displayedProcesses,
-                systemLayerActivity: displayedSystemLayerActivity,
-                contentRevision: ProcessTableRevision(sample: store.processSummaryRevision),
-                selectedProcessID: selectedProcessID,
-                limit: 12,
-                hoverCoordinator: processHoverCoordinator,
-                onSelect: presentProcess,
-                isLoading: store.lastUpdatedAt == nil
-            )
-        }
-        .overviewPanel(horizontalPadding: 16, verticalPadding: 14)
     }
 
     private var volumeList: some View {
@@ -624,15 +716,8 @@ struct OverviewView: View {
         }
     }
 
-    private var metricTimelineCapacity: Int {
-        min(
-            360,
-            max(2, Int(ceil(store.selectedRange.seconds / store.samplingInterval)) + 1)
-        )
-    }
-
     private var visibleDiskSourcePoints: [ThroughputPoint] {
-        let end = frozenAt ?? Date()
+        let end = frozenAt ?? store.points.last?.timestamp ?? Date()
         let cutoff = end.addingTimeInterval(-store.selectedRange.seconds)
         return store.points.filter { $0.timestamp >= cutoff && $0.timestamp <= end }
     }
@@ -657,134 +742,13 @@ struct OverviewView: View {
     }
 
     private var visibleSystemSourcePoints: [SystemResourcePoint] {
-        let end = frozenAt ?? Date()
+        let end = frozenAt ?? store.systemPoints.last?.timestamp ?? Date()
         let cutoff = end.addingTimeInterval(-store.selectedRange.seconds)
         return store.systemPoints.filter { $0.timestamp >= cutoff && $0.timestamp <= end }
     }
 
-    private var networkMetricBuckets: [NetworkBarBucket] {
-        let points = store.systemPoints
-        let end = frozenAt ?? points.last?.timestamp ?? Date()
-        return networkBarBuckets(
-            samples: points.map {
-                NetworkBarSample(
-                    timestamp: $0.timestamp,
-                    receive: $0.networkReceiveBytesPerSecond,
-                    send: $0.networkSendBytesPerSecond
-                )
-            },
-            endingAt: end,
-            windowDuration: store.selectedRange.seconds,
-            bucketCount: OverviewLayoutContract.networkMetricBarCount
-        )
-    }
-
-    private var cpuSparklineValues: [Double?] {
-        downsampledChartPoints(visibleSystemSourcePoints, segment: { $0.cpuSegment }) {
-            [$0.cpuPercent]
-        }
-        .map(\.cpuPercent)
-    }
-
-    private var networkSparklineValues: [Double?] {
-        downsampledChartPoints(visibleSystemSourcePoints, segment: { $0.networkSegment }) {
-            [$0.networkReceiveBytesPerSecond, $0.networkSendBytesPerSecond]
-        }
-        .map { point in
-            guard let receive = point.networkReceiveBytesPerSecond,
-                  let send = point.networkSendBytesPerSecond
-            else { return nil }
-            return receive + send
-        }
-    }
-
-    private var displayedProcesses: [ProcessActivity] {
-        let source = store.isFollowingLive ? store.processes : frozenProcesses
-        return source.filter { $0.memberCount > 0 }
-    }
-
-    private var displayedSystemLayerActivity: SystemLayerActivity? {
-        store.isFollowingLive ? store.systemLayerActivity : frozenSystemLayerActivity
-    }
-
-    private func presentProcess(_ process: ProcessActivity) {
-        selectedProcessID = process.id
-        processHoverCoordinator.clearForSelection()
-        let presentation = ProcessDetailPresentation(
-            process: process,
-            updatesLive: store.isFollowingLive
-        )
-        processDetailWindows.present(presentation)
-        openWindow(id: "process-detail", value: process.id)
-        processDetailWindows.activate(presentation)
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(220))
-            if selectedProcessID == process.id { selectedProcessID = nil }
-        }
-    }
-
     private var visibleVolumes: [VolumeInfo] {
         store.volumes.filter(\.isLocal)
-    }
-
-    private var volumeNames: String {
-        visibleVolumes.map(\.name).joined(separator: " · ")
-    }
-
-    private var memoryAccessibilitySummary: String {
-        guard let memory = store.systemMemory else { return L10n.text("内存采样缺口") }
-        return L10n.format(
-            "内存已用 %@，总计 %@，压缩 %@",
-            ByteRateFormatter.bytes(memory.usedBytes),
-            ByteRateFormatter.bytes(memory.totalBytes),
-            ByteRateFormatter.bytes(memory.compressedBytes)
-        )
-    }
-
-    private func formattedNumber(_ value: Double, fractionDigits: Int) -> String {
-        L10n.decimal(value, fractionDigits: fractionDigits)
-    }
-
-    private func formattedDataValue(_ formatted: String, size: CGFloat = 36) -> DataValue {
-        let parts = formatted.split(separator: " ", maxSplits: 1).map(String.init)
-        return DataValue(
-            value: parts.first ?? formatted,
-            unit: parts.count > 1 ? parts[1] : nil,
-            size: size
-        )
-    }
-
-    private func memoryLegend(_ title: String, _ bytes: UInt64?, _ color: Color) -> some View {
-        HStack(spacing: 5) {
-            RoundedRectangle(cornerRadius: 1.5)
-                .fill(color.opacity(0.78))
-                .frame(width: 7, height: 7)
-                .accessibilityHidden(true)
-            Text(L10n.text(title))
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 6)
-            Text(bytes.map(ByteRateFormatter.bytes) ?? L10n.text("采样缺口"))
-                .monospacedDigit()
-        }
-        .font(.caption2)
-    }
-
-    private func memoryVisualization(donutSize: CGFloat) -> some View {
-        HStack(spacing: donutSize > 50 ? 14 : 7) {
-            VStack(alignment: .leading, spacing: 3) {
-                memoryLegend("已用", store.systemMemory?.usedBytes, InstrumentDesign.ColorRole.memory)
-                memoryLegend("缓存", store.systemMemory?.cachedBytes, .secondary)
-                memoryLegend("可用", store.systemMemory?.availableBytes, .secondary)
-            }
-            .minimumScaleFactor(0.68)
-            MemoryDonut(
-                used: store.currentMemoryUsedBytes,
-                total: store.systemMemory?.totalBytes ?? 0,
-                color: InstrumentDesign.ColorRole.read
-            )
-            .frame(width: donutSize, height: donutSize)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func physicalDisks(for volume: VolumeInfo) -> [DiskActivity] {
@@ -801,26 +765,93 @@ struct OverviewView: View {
         }
     }
 
-    private var trendSubtitle: String {
-        switch selectedMetric {
-        case .disk: L10n.text("物理设备吞吐，读取实线、写入虚线")
-        case .cpu: L10n.text("整机 CPU 使用率")
-        case .network: L10n.text("物理外部接口，下载实线、上传虚线")
-        case .memory: L10n.text("整机已用内存与压缩内存")
+}
+
+// Process summaries arrive separately from host samples. Keep their observation
+// within these sections so they do not invalidate the live metric and plot trees.
+private struct OverviewHeader: View {
+    let store: MonitorStore
+    let toggleLiveFollowing: () -> Void
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 18) {
+                diagnosticIdentity
+                Spacer(minLength: 12)
+                rangeControl
+                liveControls
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                diagnosticIdentity
+                HStack(spacing: 12) {
+                    rangeControl
+                    Spacer(minLength: 4)
+                    liveControls
+                }
+            }
         }
+        .frame(minHeight: 62)
     }
 
-    private func toggleLiveFollowing() {
-        if store.isFollowingLive {
-            frozenAt = Date()
-            frozenProcesses = store.processes
-            frozenSystemLayerActivity = store.systemLayerActivity
-            store.isFollowingLive = false
-        } else {
-            frozenAt = nil
-            frozenProcesses = []
-            frozenSystemLayerActivity = nil
-            store.isFollowingLive = true
+    private var diagnosticIdentity: some View {
+        HStack(alignment: .center, spacing: 26) {
+            Text(L10n.text("诊断"))
+                .font(.system(size: 26, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(headerTitle)
+                    .font(.system(size: 15, weight: .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                Text(headerSubtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .minimumScaleFactor(0.72)
+                if store.selectedCoverage < 0.999 {
+                    EvidenceLabel(
+                        text: L10n.format("已观测 %d%%", Int(store.selectedCoverage * 100)),
+                        symbol: "clock.badge.exclamationmark"
+                    )
+                }
+            }
+        }
+        .frame(width: InstrumentDesign.Layout.diagnosticIdentityWidth, alignment: .leading)
+    }
+
+    private var rangeControl: some View {
+        GlassSegmentedControl("时间范围", selection: Bindable(store).selectedRange) {
+            ForEach(SampleRange.allCases) { range in
+                Text(range.localizedTitle).tag(range)
+            }
+        }
+        .frame(width: 224)
+    }
+
+    private var liveControls: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(healthColor.opacity(0.90))
+                    .frame(width: 7, height: 7)
+                    .overlay {
+                        Circle().stroke(healthColor.opacity(0.24), lineWidth: 4)
+                    }
+                    .accessibilityHidden(true)
+                Text(L10n.text("现在"))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            Button {
+                toggleLiveFollowing()
+            } label: {
+                Image(systemName: store.isFollowingLive ? "pause.fill" : "play.fill")
+            }
+            .buttonStyle(AppIconButtonStyle(size: 32))
+            .help(L10n.text(store.isFollowingLive ? "暂停实时跟随" : "返回实时"))
         }
     }
 
@@ -871,6 +902,56 @@ struct OverviewView: View {
         case .unavailable: "exclamationmark.triangle.fill"
         }
     }
+}
+
+private struct OverviewApplicationSection: View {
+    let store: MonitorStore
+    let frozenProcesses: [ProcessActivity]
+    let frozenSystemLayerActivity: SystemLayerActivity?
+    let selectedProcessID: ProcessActivity.ID?
+    let processHoverCoordinator: ProcessHoverCoordinator
+    let onSelect: (ProcessActivity) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.text("正在活动的应用"))
+                        .font(.headline)
+                    Text(L10n.text("应用与系统层的磁盘、CPU 与网络活动汇总在同一处"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(L10n.text("点击表头排序 · 显示前 12 个"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.bottom, 8)
+
+            ProcessTable(
+                processes: displayedProcesses,
+                systemLayerActivity: displayedSystemLayerActivity,
+                contentRevision: ProcessTableRevision(sample: store.processSummaryRevision),
+                selectedProcessID: selectedProcessID,
+                limit: 12,
+                hoverCoordinator: processHoverCoordinator,
+                onSelect: onSelect,
+                isLoading: store.lastUpdatedAt == nil
+            )
+        }
+        .overviewPanel(horizontalPadding: 16, verticalPadding: 14)
+    }
+
+    private var displayedProcesses: [ProcessActivity] {
+        let source = store.isFollowingLive ? store.processes : frozenProcesses
+        return source.filter { $0.memberCount > 0 }
+    }
+
+    private var displayedSystemLayerActivity: SystemLayerActivity? {
+        store.isFollowingLive ? store.systemLayerActivity : frozenSystemLayerActivity
+    }
+
 }
 
 private struct OverviewMetricCard: View {

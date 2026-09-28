@@ -7,6 +7,26 @@ struct StorageCleanupRequest: Identifiable, Hashable, Sendable {
     let title: String
     let displayBytes: UInt64
     let target: StorageResourceCleanupTarget
+
+    var movesToTrash: Bool {
+        switch target {
+        case .removePathContents, .trashRepository, .simulatorRuntimeAsset: true
+        default: false
+        }
+    }
+
+    var actionDescription: String {
+        switch target {
+        case .removePathContents: L10n.text("可重建缓存 · 移入废纸篓后自动重建目录")
+        case .dockerImage: L10n.text("Docker 镜像 · 通过 Docker 命令删除")
+        case .podmanImage: L10n.text("Podman 镜像 · 通过 Podman 命令删除")
+        default: L10n.text("通过官方工具清理")
+        }
+    }
+
+    static func actionTitle(for requests: [Self]) -> String {
+        requests.allSatisfy(\.movesToTrash) ? L10n.text("移到废纸篓") : L10n.text("清理所选项目")
+    }
 }
 
 struct StorageCleanupOutcome: Identifiable, Sendable {
@@ -180,6 +200,22 @@ enum StorageSafeCleanupProjection {
             return nil
         case .simulatorDevice, .simulatorRuntime, .simulatorRuntimeAsset:
             return nil
+        }
+    }
+
+    static func independentRequests(_ requests: [StorageCleanupRequest]) -> [StorageCleanupRequest] {
+        func contentPath(_ target: StorageResourceCleanupTarget) -> String? {
+            switch target {
+            case .removePathContents(let path, _, _, _), .goModuleCache(let path, _): path
+            default: nil
+            }
+        }
+        return requests.filter { request in
+            guard let path = contentPath(request.target) else { return true }
+            return !requests.contains { other in
+                guard other.id != request.id, let parent = contentPath(other.target) else { return false }
+                return path != parent && VolumePathResolver.contains(path: path, in: parent)
+            }
         }
     }
 

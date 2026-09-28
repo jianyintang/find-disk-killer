@@ -210,12 +210,11 @@ public struct StorageScanConfiguration: Sendable {
     public let includesPrivacyProtectedRepositoryLocations: Bool
     public let providerInventoryEnabled: Bool
     public let discoversCodeRepositories: Bool
-    /// Measures package-manager roots as aggregate entries for the interactive
-    /// storage map, avoiding per-file classification in very large caches.
+    /// Groups package-manager entries by root category. Files are still measured
+    /// individually so counts, sparse allocation and hard-link deduplication stay exact.
     public let packageManagerRootsAggregationOnly: Bool
-    /// Uses one aggregate measurement for AI roots when a dedicated agent scan
-    /// is running in parallel. Detailed attribution remains the agent scanner's
-    /// responsibility while ordinary callers retain the full tree behavior.
+    /// Groups AI entries by root category when a dedicated agent scan runs in
+    /// parallel, while retaining individual physical identities for accounting.
     public let agentRootsAggregationOnly: Bool
     /// Limits concurrent source workers for production scans. Nil preserves the
     /// legacy unbounded behavior used by deterministic tests and injected callers.
@@ -257,6 +256,7 @@ public struct StorageScanConfiguration: Sendable {
 }
 
 public struct StorageScanProgress: Equatable, Sendable {
+    public let sequence: UInt64
     public let phase: StorageScanPhase
     public let sourceID: StorageSourceID?
     public let completedSourceCount: Int
@@ -273,6 +273,7 @@ public struct StorageScanProgress: Equatable, Sendable {
 
     public init(
         phase: StorageScanPhase,
+        sequence: UInt64 = 0,
         sourceID: StorageSourceID? = nil,
         completedSourceCount: Int = 0,
         totalSourceCount: Int = 0,
@@ -287,6 +288,7 @@ public struct StorageScanProgress: Equatable, Sendable {
         volumes: [StorageVolumeSnapshot] = []
     ) {
         self.phase = phase
+        self.sequence = sequence
         self.sourceID = sourceID
         self.completedSourceCount = completedSourceCount
         self.totalSourceCount = totalSourceCount
@@ -534,7 +536,8 @@ public struct StorageSourceResult: Identifiable, Codable, Equatable, Sendable {
     }
 
     public var isComplete: Bool {
-        availability == .available && skippedEntryCount == 0 && unstableEntryCount == 0
+        availability == .available && skippedEntryCount == 0
+            && unstableEntryCount == 0 && inventoryDiagnostic == nil
     }
 }
 
@@ -544,6 +547,9 @@ public struct StorageAnalysisSnapshot: Codable, Equatable, Sendable {
     public let results: [StorageSourceResult]
     public let totalAllocatedBytes: UInt64
     public let conflictBytes: UInt64
+    public let includesRetainedSources: Bool
+    public let accountingSessionID: UUID?
+    public let accountingRevision: UInt64?
     public let measuredEntryCount: Int
     public let skippedEntryCount: Int
     public let volumes: [StorageVolumeSnapshot]
@@ -556,8 +562,14 @@ public struct StorageAnalysisSnapshot: Codable, Equatable, Sendable {
         conflictBytes: UInt64,
         measuredEntryCount: Int,
         skippedEntryCount: Int,
-        volumes: [StorageVolumeSnapshot] = []
+        volumes: [StorageVolumeSnapshot] = [],
+        includesRetainedSources: Bool = false,
+        accountingSessionID: UUID? = nil,
+        accountingRevision: UInt64? = nil
     ) {
+        self.accountingSessionID = accountingSessionID
+        self.accountingRevision = accountingRevision
+        self.includesRetainedSources = includesRetainedSources
         self.id = id
         self.scannedAt = scannedAt
         self.results = results
@@ -578,6 +590,9 @@ public struct StorageAnalysisSnapshot: Codable, Equatable, Sendable {
         case results
         case totalAllocatedBytes
         case conflictBytes
+        case includesRetainedSources
+        case accountingSessionID
+        case accountingRevision
         case measuredEntryCount
         case skippedEntryCount
         case volumes
@@ -590,6 +605,9 @@ public struct StorageAnalysisSnapshot: Codable, Equatable, Sendable {
         results = try container.decode([StorageSourceResult].self, forKey: .results)
         totalAllocatedBytes = try container.decode(UInt64.self, forKey: .totalAllocatedBytes)
         conflictBytes = try container.decode(UInt64.self, forKey: .conflictBytes)
+        accountingSessionID = try container.decodeIfPresent(UUID.self, forKey: .accountingSessionID)
+        accountingRevision = try container.decodeIfPresent(UInt64.self, forKey: .accountingRevision)
+        includesRetainedSources = try container.decodeIfPresent(Bool.self, forKey: .includesRetainedSources) ?? false
         measuredEntryCount = try container.decode(Int.self, forKey: .measuredEntryCount)
         skippedEntryCount = try container.decode(Int.self, forKey: .skippedEntryCount)
         volumes = try container.decodeIfPresent(

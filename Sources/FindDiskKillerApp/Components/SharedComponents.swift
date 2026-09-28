@@ -429,10 +429,7 @@ struct DataValue: View {
     var color: Color = .primary
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            valueLine(size: size)
-            valueLine(size: max(23, size * 0.74))
-        }
+        valueLine(size: size)
         .foregroundStyle(color)
         .accessibilityElement(children: .combine)
     }
@@ -444,12 +441,15 @@ struct DataValue: View {
                 .monospacedDigit()
                 .contentTransition(.numericText())
                 .lineLimit(1)
-                .minimumScaleFactor(0.68)
+                // One text tree scales continuously instead of measuring two copies
+                // of every live number and its numeric transition on each sample.
+                .minimumScaleFactor(0.50)
             if let unit, !unit.isEmpty {
                 Text(unit)
                     .font(.system(size: max(11, size * 0.32), weight: .regular))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
         }
         .lineLimit(1)
@@ -533,91 +533,145 @@ struct MicroHistogram: View {
 
 struct CPUCoreEnergyBars: View {
     let cores: [CPUCoreUsage]
-
-    var body: some View {
-        GeometryReader { geometry in
-            let count = max(cores.count, 1)
-            let gap = min(
-                CGFloat(4),
-                max(InstrumentDesign.Energy.coreGap, geometry.size.width / 90)
-            )
-            let barWidth = max(
-                3,
-                (geometry.size.width - gap * CGFloat(count - 1)) / CGFloat(count)
-            )
-            HStack(alignment: .bottom, spacing: gap) {
-                ForEach(cores) { core in
-                    CPUCoreEnergyBar(percent: core.percent)
-                        .frame(width: barWidth)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-        }
-        .accessibilityHidden(true)
-    }
-}
-
-private struct CPUCoreEnergyBar: View {
-    let percent: Double
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.visualEffectLevel) private var visualEffectLevel
 
     var body: some View {
-        GeometryReader { geometry in
-            let fraction = min(1, max(0, percent / 100))
-            let segments = InstrumentDesign.Energy.cpuSegments
-            let gap = InstrumentDesign.Energy.segmentGap
-            let segmentHeight = max(
-                1.5,
-                (geometry.size.height - gap * CGFloat(segments - 1)) / CGFloat(segments)
-            )
-            VStack(spacing: gap) {
-                ForEach((0..<segments).reversed(), id: \.self) { index in
-                    let activation = min(
-                        1,
-                        max(0, fraction * Double(segments) - Double(index))
-                    )
-                    CPUCoreEnergySegment(
-                        activation: activation,
-                        color: fillColor,
-                        cornerRadius: min(
-                            1.35,
-                            segmentHeight * 0.28,
-                            geometry.size.width * 0.18
-                        )
-                    )
-                    .frame(height: segmentHeight)
-                    .animation(
-                        reduceMotion ? nil : .easeInOut(duration: 0.48),
-                        value: activation
-                    )
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        }
-    }
-
-    private var fillColor: Color {
-        percent > 80 ? InstrumentDesign.ColorRole.warning : InstrumentDesign.ColorRole.cpu
+        CPUCoreLayerGrid(cores: cores, animates: !reduceMotion && !visualEffectLevel.disablesMotion)
+            .accessibilityHidden(true)
     }
 }
 
-private struct CPUCoreEnergySegment: View {
-    let activation: Double
-    let color: Color
-    let cornerRadius: CGFloat
+private struct CPUCoreLayerGrid: NSViewRepresentable {
+    let cores: [CPUCoreUsage]
+    let animates: Bool
 
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        ZStack(alignment: .bottom) {
-            shape.fill(Color.secondary.opacity(0.12))
-            shape
-                .fill(color.opacity(0.78))
-                .scaleEffect(y: activation, anchor: .bottom)
+    func makeNSView(context: Context) -> CPUCoreGridView { CPUCoreGridView() }
+    func updateNSView(_ view: CPUCoreGridView, context: Context) {
+        view.update(cores: cores, animates: animates)
+    }
+}
+
+/// The fixed grid is drawn once; only per-cell layer transforms change at each sample.
+/// Core Animation interpolates them without rebuilding hundreds of SwiftUI nodes.
+private final class CPUCoreGridView: NSView {
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    private let backgroundGrid = CAShapeLayer()
+    private var cells: [CAShapeLayer] = []
+    private var cores: [CPUCoreUsage] = []
+    private var renderedSize = CGSize.zero
+    private var renderedCount = -1
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        layer?.addSublayer(backgroundGrid)
+        setAccessibilityElement(false)
+    }
+    required init?(coder: NSCoder) { nil }
+
+    func update(cores: [CPUCoreUsage], animates: Bool) {
+        let changed = self.cores.map(\.percent) != cores.map(\.percent)
+        self.cores = cores
+        if renderedSize != bounds.size || renderedCount != cores.count { rebuildGrid() }
+        else if changed { updateLevels(animates: animates) }
+        if !animates { cells.forEach { $0.removeAllAnimations() } }
+    }
+
+    override func layout() {
+        super.layout()
+        if renderedSize != bounds.size { rebuildGrid() }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        rebuildGrid()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        rebuildGrid()
+    }
+
+    private func rebuildGrid() {
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        renderedSize = bounds.size
+        renderedCount = cores.count
+        let segments = InstrumentDesign.Energy.cpuSegments
+        let count = max(cores.count, 1)
+        let columnGap = min(CGFloat(4), max(InstrumentDesign.Energy.coreGap, bounds.width / 90))
+        let width = max(3, (bounds.width - columnGap * CGFloat(count - 1)) / CGFloat(count))
+        let rowGap = InstrumentDesign.Energy.segmentGap
+        let height = max(1.5, (bounds.height - rowGap * CGFloat(segments - 1)) / CGFloat(segments))
+        let radius = min(1.35, height * 0.28, width * 0.18)
+        let shape = CGPath(roundedRect: CGRect(x: 0, y: 0, width: width, height: height),
+                           cornerWidth: radius, cornerHeight: radius, transform: nil)
+        let grid = CGMutablePath()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        backgroundGrid.contentsScale = window?.backingScaleFactor ?? 2
+        while cells.count < cores.count * segments {
+            let cell = CAShapeLayer()
+            cell.anchorPoint = CGPoint(x: 0.5, y: 1)
+            layer?.addSublayer(cell)
+            cells.append(cell)
         }
-        .overlay {
-            shape.strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.5)
+        while cells.count > cores.count * segments { cells.removeLast().removeFromSuperlayer() }
+        for column in cores.indices {
+            for row in 0..<segments {
+                let rect = CGRect(x: CGFloat(column) * (width + columnGap),
+                                  y: bounds.height - height - CGFloat(row) * (height + rowGap),
+                                  width: width, height: height)
+                grid.addRoundedRect(in: rect, cornerWidth: radius, cornerHeight: radius)
+                let cell = cells[column * segments + row]
+                cell.contentsScale = window?.backingScaleFactor ?? 2
+                cell.bounds = CGRect(origin: .zero, size: rect.size)
+                cell.position = CGPoint(x: rect.midX, y: rect.maxY)
+                cell.path = shape
+                cell.removeAllAnimations()
+            }
         }
-        .clipped()
+        backgroundGrid.path = grid
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            backgroundGrid.fillColor = NSColor.secondaryLabelColor.withAlphaComponent(0.12).cgColor
+            backgroundGrid.strokeColor = NSColor.labelColor.withAlphaComponent(0.09).cgColor
+        }
+        backgroundGrid.lineWidth = 0.5
+        CATransaction.commit()
+        updateLevels(animates: false)
+    }
+
+    private func updateLevels(animates: Bool) {
+        let segments = InstrumentDesign.Energy.cpuSegments
+        guard cells.count == cores.count * segments else { return }
+        let animate = animates && window?.occlusionState.contains(.visible) == true
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            for (column, core) in cores.enumerated() {
+                let fraction = core.percent.isFinite ? min(1, max(0, core.percent / 100)) : 0
+                let color = NSColor(core.percent > 80 ? InstrumentDesign.ColorRole.warning : InstrumentDesign.ColorRole.cpu)
+                    .withAlphaComponent(0.78).cgColor
+                for row in 0..<segments {
+                    let cell = cells[column * segments + row]
+                    let activation = min(1, max(0, fraction * Double(segments) - Double(row)))
+                    let oldScale = cell.presentation()?.transform.m22 ?? cell.transform.m22
+                    cell.transform = CATransform3DMakeScale(1, activation, 1)
+                    cell.fillColor = color
+                    if animate, abs(oldScale - activation) > 0.0001 {
+                        let animation = CABasicAnimation(keyPath: "transform.scale.y")
+                        animation.fromValue = oldScale
+                        animation.toValue = activation
+                        animation.duration = 0.48
+                        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                        cell.add(animation, forKey: "activation")
+                    }
+                }
+            }
+        }
+        CATransaction.commit()
     }
 }
 

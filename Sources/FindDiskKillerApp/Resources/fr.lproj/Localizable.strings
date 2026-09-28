@@ -1345,3 +1345,23 @@
 "Docker 构建缓存 · 通过 docker builder prune 清理全部未使用缓存" = "Docker build cache · remove all unused cache with docker builder prune";
 "Go 模块缓存 · 通过 go clean -modcache 删除" = "Go module cache · remove with go clean -modcache";
 "清空整个模块缓存（含下载缓存）；执行前会再次核对 GOMODCACHE 路径" = "Clears the entire module cache (including the download cache) after re-verifying the GOMODCACHE path";
+
+"通过官方工具清理" = "Clean up using the official tool";
+"清理所选项目" = "Clean Up Selected Items";
+"大小为所选项目的参考占用，不保证立即释放。移入废纸篓的内容仍占用磁盘，需清空废纸篓后才可能释放。" = "Sizes describe the selected items, not guaranteed space savings. Items in Trash still occupy disk space until Trash is emptied.";
+"文件缓存移入废纸篓；容器镜像通过官方工具删除，无法从废纸篓恢复。" = "File caches move to Trash. Container images are deleted using the official tool and cannot be restored from Trash.";
+"统计已识别来源的文件分配空间，不代表整个磁盘的已用空间。" = "Measured allocation covers recognized sources, not all used space on the disk.";
+"%@ 共享占用无法唯一归属，已在总量中计入一次。" = "%@ of shared storage cannot be assigned to one source and is counted once in the total.";
+"扫描中占用（待核对）" = "Scanning (provisional)";
+"文件系统条目" = "File System Entries";
+"按文件身份去重，包含文件、目录和符号链接。" = "Deduplicated by file identity; includes files, folders, and symbolic links.";
+"可清理项目占用" = "Cleanup Item Size";
+"展示前 5 个来源 · 共 %d 个" = "Showing top 5 of %d sources";
+"卡片面积兼顾文字可读性；占比以标注的百分比为准。" = "Card sizes accommodate readable text. Use the labeled percentages for precise shares.";
+"系统报告的当前可用空间；共享块、快照和可清除空间会影响实际释放量。" = "Current available space reported by the system. Shared blocks, snapshots, and purgeable space affect actual savings.";
+
+"正在结束当前分析，请稍候。" = "Arrêt de l’analyse en cours. Veuillez patienter.";
+
+"文件扫描：已完成 %d / %d 个来源" = "Analyse des fichiers : %d sources sur %d terminées";
+
+"正在核对共享占用" = "Vérification du stockage partagé";

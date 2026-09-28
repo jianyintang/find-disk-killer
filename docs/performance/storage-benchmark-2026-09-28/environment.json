@@ -1,0 +1,5 @@
+{
+  "swift": "Apple Swift version 6.3.1 (swiftlang-6.3.1.1.2 clang-2100.0.123.102)\nTarget: arm64-apple-macosx26.0",
+  "macos": "ProductName:\t\tmacOS\nProductVersion:\t\t26.5.2\nBuildVersion:\t\t25F84",
+  "hardware": "hw.model: Mac17,8\nhw.memsize: 68719476736"
+}

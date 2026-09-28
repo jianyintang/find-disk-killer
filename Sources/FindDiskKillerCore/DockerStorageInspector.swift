@@ -390,8 +390,10 @@ struct DockerStorageInspector: Sendable {
         case "tib": multiplier = 1_099_511_627_776
         default: return nil
         }
-        guard number >= 0, number * multiplier <= Double(UInt64.max) else { return nil }
-        return UInt64(number * multiplier)
+        let bytes = number * multiplier
+        // Double(UInt64.max) rounds up to 2^64, which is not convertible to UInt64.
+        guard bytes.isFinite, bytes >= 0, bytes < Double(UInt64.max) else { return nil }
+        return UInt64(bytes)
     }
 
     private static func formatBytes(_ bytes: UInt64) -> String {

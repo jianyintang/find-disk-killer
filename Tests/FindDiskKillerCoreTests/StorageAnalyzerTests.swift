@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import FindDiskKillerCore
@@ -226,10 +227,11 @@ struct StorageAnalyzerTests {
         let aggregateCodex = try #require(aggregate.result(for: .codex))
 
         #expect(aggregateCodex.allocatedBytes == exactCodex.allocatedBytes)
-        #expect(aggregateCodex.entryCount == 2)
+        #expect(aggregateCodex.entryCount == exactCodex.entryCount)
+        #expect(aggregateCodex.logicalBytes == exactCodex.logicalBytes)
     }
 
-    @Test func packageManagerAggregateModeKeepsBytesWithoutPerFileEntries() async throws {
+    @Test func packageManagerAggregateModePreservesPhysicalEntries() async throws {
         let fixture = try StorageFixture()
         defer { fixture.remove() }
         try fixture.writeFile(".npm/cache/package.tgz", byteCount: 16_384)
@@ -245,7 +247,173 @@ struct StorageAnalyzerTests {
         let aggregateNPM = try #require(aggregate.result(for: .npm))
 
         #expect(aggregateNPM.allocatedBytes == exactNPM.allocatedBytes)
-        #expect(aggregateNPM.entryCount == 1)
+        #expect(aggregateNPM.entryCount == exactNPM.entryCount)
+        #expect(aggregateNPM.logicalBytes == exactNPM.logicalBytes)
+    }
+
+    @Test func aggregateModeMeasuresSparseLogicalSizeAndDeduplicatesCrossRootHardlinks() async throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        let cache = try fixture.createDirectory(".codex/cache")
+        let sparse = cache.appending(path: "sparse.bin")
+        FileManager.default.createFile(atPath: sparse.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: sparse)
+        try handle.truncate(atOffset: 64 * 1_024 * 1_024)
+        try handle.close()
+        try FileManager.default.linkItem(at: sparse, to: fixture.home.appending(path: ".codex/shared.bin"))
+        let configuration = StorageScanConfiguration(homeDirectory: fixture.home, agentRootsAggregationOnly: true)
+        let snapshot = try await StorageAnalyzer(configuration: configuration).scan()
+        let result = try #require(snapshot.result(for: .codex))
+        let expected = try physicalMeasurement(at: fixture.home.appending(path: ".codex"))
+        #expect(result.entryCount == expected.count)
+        #expect(result.allocatedBytes == expected.allocated)
+        #expect(result.logicalBytes == expected.logical)
+        #expect(result.logicalBytes >= 64 * 1_024 * 1_024)
+        #expect(result.logicalBytes > result.allocatedBytes)
+        #expect(snapshot.totalAllocatedBytes == expected.allocated)
+    }
+
+    @Test func overlappingAggregateWorkspaceAndCacheConservePhysicalBytes() async throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        try fixture.writeFile(".npm/cache.bin", byteCount: 32_768)
+        let snapshot = try await StorageAnalyzer(configuration: .init(
+            homeDirectory: fixture.home,
+            workspaceRoots: [fixture.home.appending(path: ".npm")],
+            packageManagerRootsAggregationOnly: true
+        )).scan()
+        let expected = try physicalMeasurement(at: fixture.home.appending(path: ".npm"))
+        #expect(snapshot.totalAllocatedBytes == expected.allocated)
+        #expect(snapshot.measuredEntryCount == expected.count)
+        #expect(snapshot.result(for: .npm)?.allocatedBytes == expected.allocated)
+        #expect(snapshot.result(for: .workspace)?.allocatedBytes == 0)
+    }
+
+    @Test func sessionReconcilesHardlinksAgainAfterOnlyOneSourceIsRefreshed() async throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        try fixture.writeFile(".npm/package.bin", byteCount: 32_768)
+        let pnpm = try fixture.createDirectory("Library/pnpm/store")
+        try FileManager.default.linkItem(
+            at: fixture.home.appending(path: ".npm/package.bin"),
+            to: pnpm.appending(path: "shared.bin")
+        )
+        let session = StorageAnalysisSession()
+        let configuration = StorageScanConfiguration(homeDirectory: fixture.home, packageManagerRootsAggregationOnly: true)
+        let initial = try await StorageAnalyzer(configuration: configuration, session: session).scan()
+        let refreshed = try await StorageAnalyzer(configuration: configuration, session: session).scan(sourceID: .npm)
+        #expect(refreshed.includesRetainedSources)
+        #expect(refreshed.totalAllocatedBytes == initial.totalAllocatedBytes)
+        #expect(refreshed.conflictBytes == initial.conflictBytes)
+        #expect(refreshed.measuredEntryCount == initial.measuredEntryCount)
+        try FileManager.default.removeItem(at: fixture.home.appending(path: ".npm/package.bin"))
+        let afterRemoval = try await StorageAnalyzer(configuration: configuration, session: session).scan(sourceID: .npm)
+        #expect(afterRemoval.result(for: .pnpm)?.allocatedBytes == (try physicalMeasurement(at: pnpm)).allocated)
+        #expect(afterRemoval.conflictBytes == 0)
+    }
+
+    @Test func unreadableDirectoryDoesNotDiscardReadableSiblingMeasurements() async throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        try fixture.writeFile(".npm/a-denied/hidden.bin", byteCount: 4_096)
+        try fixture.writeFile(".npm/z-readable.bin", byteCount: 32_768)
+        let denied = fixture.home.appending(path: ".npm/a-denied")
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: denied.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: denied.path) }
+        let result = try #require(try await StorageAnalyzer(configuration: .init(
+            homeDirectory: fixture.home, packageManagerRootsAggregationOnly: true
+        )).scan().result(for: .npm))
+        #expect(result.allocatedBytes >= 32_768)
+        #expect(!result.isComplete)
+        #expect(result.skippedEntryCount > 0)
+    }
+
+    @Test func sessionRefreshRemeasuresOverlappingWorkspaceAfterCacheCleanup() async throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        try fixture.writeFile(".npm/cache.bin", byteCount: 32_768)
+        let session = StorageAnalysisSession()
+        let configuration = StorageScanConfiguration(
+            homeDirectory: fixture.home,
+            workspaceRoots: [fixture.home.appending(path: ".npm")],
+            packageManagerRootsAggregationOnly: true
+        )
+        _ = try await StorageAnalyzer(configuration: configuration, session: session).scan()
+        try FileManager.default.removeItem(at: fixture.home.appending(path: ".npm/cache.bin"))
+        let after = try await StorageAnalyzer(configuration: configuration, session: session).scan(sourceID: .npm)
+        #expect(after.totalAllocatedBytes == (try physicalMeasurement(at: fixture.home.appending(path: ".npm"))).allocated)
+        #expect(after.result(for: .workspace)?.allocatedBytes == 0)
+        #expect(after.measuredEntryCount == 1)
+    }
+
+    @Test func sourceThatDisappearsReturnsAnExplicitEmptyResult() async throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        let result = try #require(try await StorageAnalyzer(configuration: .init(
+            homeDirectory: fixture.home
+        )).scan(sourceID: .npm).result(for: .npm))
+        #expect(result.isComplete)
+        #expect(result.allocatedBytes == 0)
+        #expect(result.entryCount == 0)
+    }
+
+    @Test func goCleanupTreeIncludesDownloadsInTheOfficialOperation() async throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        try fixture.writeFile("go/pkg/mod/cache/download/module.zip", byteCount: 16_384)
+        try fixture.writeFile("go/pkg/mod/module/source.go", byteCount: 8_192)
+        let result = try #require(try await StorageAnalyzer(configuration: .init(
+            homeDirectory: fixture.home
+        )).scan(sourceID: .go).result(for: .go))
+        let module = try #require(result.resourceTree.first { $0.id == "go.module-cache" })
+        #expect(module.allocatedBytes == result.allocatedBytes)
+        #expect(module.children.contains { $0.id == "go.module-download-cache" })
+        #expect(!result.resourceTree.contains { $0.id == "go.module-download-cache" })
+    }
+
+    @Test func sharedCacheDoesNotOfferAnIncompleteCleanupScope() async throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        try fixture.writeFile(".codex/state.bin", byteCount: 8_192)
+        let cache = try fixture.createDirectory(".codex/cache")
+        try FileManager.default.linkItem(at: fixture.home.appending(path: ".codex/state.bin"),
+                                        to: cache.appending(path: "shared.bin"))
+        let result = try #require(try await StorageAnalyzer(configuration: .init(
+            homeDirectory: fixture.home, agentRootsAggregationOnly: true
+        )).scan(sourceID: .codex).result(for: .codex))
+        #expect(result.resourceTree.allSatisfy { $0.cleanupTarget == nil })
+    }
+
+    @Test func dockerSizeParserRejectsOutOfRangeNumbersWithoutTrapping() {
+        #expect(DockerStorageInspector.parseSize("18446744073709551616B") == nil)
+        #expect(DockerStorageInspector.parseSize("1e999GB") == nil)
+        #expect(DockerStorageInspector.parseSize("-1GB") == nil)
+        #expect(DockerStorageInspector.parseSize("1.5GiB") == 1_610_612_736)
+        #expect(DockerStorageInspector.parseSize("1.5GB") == 1_500_000_000)
+    }
+
+    @Test func largeAggregateCacheKeepsCountsAndPhysicalBytesExact() async throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        let root = try fixture.createDirectory(".npm")
+        let fileCount = 10_000
+        let first = root.appending(path: "original.bin")
+        try Data(repeating: 0x4A, count: 4_096).write(to: first)
+        for index in 1..<fileCount {
+            try FileManager.default.linkItem(at: first, to: root.appending(path: "link-\(index).bin"))
+        }
+        let clock = ContinuousClock()
+        let start = clock.now
+        let snapshot = try await StorageAnalyzer(configuration: .init(
+            homeDirectory: fixture.home, packageManagerRootsAggregationOnly: true
+        )).scan(sourceID: .npm)
+        let elapsed = start.duration(to: clock.now)
+        let expected = try physicalMeasurement(at: root)
+        #expect(snapshot.totalAllocatedBytes == expected.allocated)
+        #expect(snapshot.measuredEntryCount == 2)
+        // A broad guard catches accidental quadratic traversal without a fragile benchmark threshold.
+        #expect(elapsed < .seconds(15))
+        print("Storage fixture: \(fileCount) paths, \(elapsed)")
     }
 
     @Test func catalogDetectsVSCodeAsADeveloperToolWithSeparatedStorageRoots() throws {
@@ -583,11 +751,11 @@ struct StorageAnalyzerTests {
         )).scan(sourceID: .workspace)
         let workspace = try #require(snapshot.result(for: .workspace))
 
-        #expect(workspace.entryCount == 1)
+        #expect(workspace.entryCount == 7)
         #expect(workspace.resourceTree.count == 1)
-        #expect(workspace.resourceTree.first?.entryCount == 1)
+        #expect(workspace.resourceTree.first?.entryCount == 7)
         #expect(workspace.resourceTree.first?.children.count == 1)
-        #expect(workspace.resourceTree.first?.children.first?.entryCount == 1)
+        #expect(workspace.resourceTree.first?.children.first?.entryCount == 7)
         #expect(workspace.allocatedBytes > 0)
     }
 
@@ -1090,7 +1258,53 @@ struct StorageAnalyzerTests {
 
         #expect(barrier.didOpen)
         #expect(barrier.startedRootIDs.count == 2)
-        #expect(snapshot.result(for: .go)?.entryCount == 2)
+        #expect(snapshot.result(for: .go)?.entryCount == 4)
+    }
+
+    @Test func scanKeepsRootExclusionsAndTraversalOnTheSameCanonicalTarget() async throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        let original = try fixture.createDirectory("original")
+        let nested = try fixture.createDirectory("original/nested")
+        let replacement = try fixture.createDirectory("replacement")
+        try fixture.writeFile("original/outer.bin")
+        try fixture.writeFile("original/nested/package.bin")
+        try fixture.writeFile("replacement/nested/other.bin")
+        try fixture.writeFile("replacement/additional.bin")
+        try fixture.writeFile("replacement/extra.bin")
+        let parentLink = fixture.home.appending(path: "Library/pnpm/store")
+        let childLink = fixture.home.appending(path: ".local/share/pnpm/store")
+        let manager = FileManager.default
+        for link in [parentLink, childLink] {
+            try manager.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        try manager.createSymbolicLink(at: parentLink, withDestinationURL: original)
+        try manager.createSymbolicLink(at: childLink, withDestinationURL: nested)
+        let configuration = StorageScanConfiguration(homeDirectory: fixture.home)
+        let baseline = try await StorageAnalyzer(configuration: configuration).scan(sourceID: .pnpm)
+        let expected = try #require(baseline.result(for: .pnpm))
+
+        let analyzer = StorageAnalyzer(
+            configuration: configuration,
+            sourceStartHook: { _ in },
+            rootStartHook: { sourceID, rootID in
+                guard sourceID == .pnpm, rootID == "pnpm.store" else { return }
+                do {
+                    try FileManager.default.removeItem(at: parentLink)
+                    try FileManager.default.createSymbolicLink(at: parentLink, withDestinationURL: replacement)
+                } catch {
+                    Issue.record(error)
+                }
+            }
+        )
+        let snapshot = try await analyzer.scan(sourceID: .pnpm)
+        let actual = try #require(snapshot.result(for: .pnpm))
+
+        #expect(try manager.destinationOfSymbolicLink(atPath: parentLink.path) == replacement.path)
+        #expect(actual.entryCount == expected.entryCount)
+        #expect(actual.allocatedBytes == expected.allocatedBytes)
+        #expect(actual.logicalBytes == expected.logicalBytes)
+        #expect(actual.skippedEntryCount == 0)
     }
 
     @Test func scanMeasuresASymlinkWithoutFollowingItsTarget() async throws {
@@ -1219,7 +1433,7 @@ struct StorageAnalyzerTests {
         #expect(titles.contains("模块下载缓存"))
         #expect(titles.contains("已解压模块"))
         #expect(titles.contains("已安装工具"))
-        #expect(go.entryCount == 4)
+        #expect(go.entryCount == 18)
         #expect(go.components.first { $0.title == "已解压模块" }?.allocatedBytes ?? 0 >= 1_048_576)
         #expect(go.components.allSatisfy { !$0.id.contains("example.org") })
         #expect(go.components.allSatisfy { !$0.rootDisplayName.contains("example.org") })
@@ -1385,4 +1599,22 @@ private struct StorageFixture {
     func remove() {
         try? FileManager.default.removeItem(at: home)
     }
+}
+
+private func physicalMeasurement(at root: URL) throws -> (allocated: UInt64, logical: UInt64, count: Int) {
+    var paths = [root]
+    if let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) {
+        paths += enumerator.allObjects.compactMap { $0 as? URL }
+    }
+    var seen = Set<StoragePathIdentity>()
+    var allocated: UInt64 = 0
+    var logical: UInt64 = 0
+    for path in paths {
+        var metadata = stat()
+        guard lstat(path.path, &metadata) == 0 else { throw POSIXError(.EIO) }
+        guard seen.insert(.init(device: UInt64(metadata.st_dev), inode: UInt64(metadata.st_ino))).inserted else { continue }
+        allocated += UInt64(max(0, metadata.st_blocks)) * 512
+        logical += UInt64(max(0, metadata.st_size))
+    }
+    return (allocated, logical, seen.count)
 }

@@ -1,0 +1,6 @@
+{"checksum": "422ddcf1db54edda", "count": 1000, "equal": true, "kind": "verify", "skewed": false}
+{"checksum": "ece8ba9975d0e33f", "count": 8000, "equal": true, "kind": "verify", "skewed": false}
+{"checksum": "5f5ec382963336d9", "count": 32000, "equal": true, "kind": "verify", "skewed": false}
+{"checksum": "1a347a80f5f9a93a", "count": 1000, "equal": true, "kind": "verify", "skewed": true}
+{"checksum": "9e7fabec8820f423", "count": 8000, "equal": true, "kind": "verify", "skewed": true}
+{"checksum": "24b989c921c198e7", "count": 32000, "equal": true, "kind": "verify", "skewed": true}

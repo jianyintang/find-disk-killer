@@ -53,6 +53,7 @@
 		60FBDF8CE690926784724D9B /* codex-openai.png in Resources */ = {isa = PBXBuildFile; fileRef = D8EBB20F5BF3CF0CE623067C /* codex-openai.png */; };
 		61564FA8A1037BE920518107 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 195FD2EA225982A5C2A7D542 /* RootView.swift */; };
 		61C51F635F2288A47E2B3CB8 /* FileAccessTraceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F0023EE9E80BF9FD710B334 /* FileAccessTraceStore.swift */; };
+		63A8B39EC43A36746881B3D5 /* StorageMapActivityEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5254BC486071EDA7094E8E7 /* StorageMapActivityEffects.swift */; };
 		67B4F1DFD79969033006C3EB /* chrome.png in Resources */ = {isa = PBXBuildFile; fileRef = 3E2CE88FCDF074ED2A74C15A /* chrome.png */; };
 		6856961C6AD87CA6359CBCA8 /* npm.svg in Resources */ = {isa = PBXBuildFile; fileRef = CACA7EF9AC852657B16B3DA6 /* npm.svg */; };
 		69BF51EA97AD722934283F03 /* HistoryTrendChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10C6565E5CC5D4A39D52770 /* HistoryTrendChart.swift */; };
@@ -242,6 +243,7 @@
 		9FC40456C0032BBAB5FA87E3 /* ClaudeNodeRuntimeStatusModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeNodeRuntimeStatusModel.swift; sourceTree = "<group>"; };
 		A2D149CD762D0BFD8DD8359E /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = de.lproj/Localizable.strings; sourceTree = "<group>"; };
 		A4EF9C93E6D03ECAC78C47B0 /* rust.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = rust.png; sourceTree = "<group>"; };
+		A5254BC486071EDA7094E8E7 /* StorageMapActivityEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageMapActivityEffects.swift; sourceTree = "<group>"; };
 		A53F0E89B523716633119DE0 /* FindDiskKillerApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FindDiskKillerApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A8784670E78734B9A225A4E8 /* Localization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Localization.swift; sourceTree = "<group>"; };
 		A9079EFE2C4AFE05113320F7 /* ProcessDetailOverview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessDetailOverview.swift; sourceTree = "<group>"; };
@@ -425,6 +427,7 @@
 				A9079EFE2C4AFE05113320F7 /* ProcessDetailOverview.swift */,
 				457028605863AA4C13E784A4 /* ProcessesView.swift */,
 				397BF22044FB3F231AE3EF11 /* SettingsView.swift */,
+				A5254BC486071EDA7094E8E7 /* StorageMapActivityEffects.swift */,
 				E24CDF128354712DAEF1352B /* StorageMapDashboardView.swift */,
 				66EE63E6F7899F3E16018B73 /* StorageMapFirstRunView.swift */,
 				2A31940C062C714728E9ACF6 /* StorageMapView.swift */,
@@ -747,6 +750,7 @@
 				C17D460138BAAD4608FB55FC /* SettingsView.swift in Sources */,
 				F5E7955B1A19F150460C4A82 /* SharedComponents.swift in Sources */,
 				EC72CA4E6E3B8222A0BBB747 /* SnapshotCacheWriter.swift in Sources */,
+				63A8B39EC43A36746881B3D5 /* StorageMapActivityEffects.swift in Sources */,
 				8B21599E9558F69C1945BF35 /* StorageMapDashboardView.swift in Sources */,
 				6BDE5C9BC75A644419D3406E /* StorageMapFirstRunView.swift in Sources */,
 				DAAFF80728BFA104A244C5FF /* StorageMapModel.swift in Sources */,

@@ -1,17 +1,21 @@
+import AppKit
 import FindDiskKillerCore
 import SwiftUI
 
 struct StorageMapDashboardView: View {
     @Binding var scope: StorageMapScope
 
-    let items: [StorageMapSourcePresentation]
+    let items: [StorageMapDashboardItem]
     let volumes: [StorageVolumeSnapshot]
     let analyzedBytes: UInt64?
     let entryCount: Int?
     let scannedAt: Date?
-    let completedSourceCount: Int?
-    let totalSourceCount: Int?
+    let analysisActivity: StorageMapAnalysisActivity?
     let safeCleanupBytes: UInt64
+    let isPresentingLiveResults: Bool
+    let errorMessage: String?
+    let skippedEntryCount: Int
+    let conflictBytes: UInt64
     let safeCleanupBytesBySource: [StorageSourceID: UInt64]
     let isAnalysisRunning: Bool
     let isStopping: Bool
@@ -34,66 +38,106 @@ struct StorageMapDashboardView: View {
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 20) {
-                StorageMapDashboardHeader(
-                    analyzedBytes: analyzedBytes,
-                    entryCount: entryCount,
-                    volumeCount: volumes.count,
-                    scannedAt: scannedAt,
-                    completedSourceCount: completedSourceCount,
-                    totalSourceCount: totalSourceCount,
-                    safeCleanupBytes: safeCleanupBytes,
-                    isAnalysisRunning: isAnalysisRunning,
-                    isStopping: isStopping,
-                    canAnalyze: canAnalyze,
-                    startAnalysis: startAnalysis,
-                    stopAnalysis: stopAnalysis,
-                    openSafeCleanup: openSafeCleanup
-                )
+        // Build the volume/source projection once per dashboard update. This
+        // projection used to be recomputed once for every child of the hero
+        // and table, including its sorting and localized title map.
+        let data = dashboardData
 
-                ViewThatFits(in: .horizontal) {
-                    StorageMapWideHero(
-                        scope: $scope,
-                        sources: dashboardData.sources,
-                        volumes: volumes,
-                        sourceTitles: dashboardData.sourceTitles,
-                        openSource: openSource
-                    )
-
-                    VStack(alignment: .leading, spacing: 20) {
-                        StorageSourceMapSection(
-                            scope: $scope,
-                            sources: dashboardData.sources,
-                            openSource: openSource
-                        )
-
-                        StorageVolumeGrid(
-                            volumes: volumes,
-                            sourceTitles: dashboardData.sourceTitles
-                        )
-                    }
-                }
-
-                StorageSourceTable(
-                    sources: dashboardData.sources,
-                    openAvailability: openAvailability,
-                    unavailableMessage: unavailableMessage,
-                    canReanalyze: canReanalyze,
-                    openSource: openSource,
-                    reanalyze: reanalyze
-                )
+        GeometryReader { proxy in
+            let contentWidth = max(0, proxy.size.width - 40)
+            ScrollView {
+                dashboardContent(data: data, availableWidth: contentWidth)
+                    .padding(20)
             }
-            .padding(20)
+            .scrollIndicators(.visible)
         }
-        .scrollIndicators(.visible)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .background(InstrumentDesign.Palette.canvas)
     }
+
+    private func dashboardContent(
+        data: StorageMapDashboardData,
+        availableWidth: CGFloat
+    ) -> some View {
+        LazyVStack(alignment: .leading, spacing: 20) {
+            StorageMapDashboardHeader(
+                analyzedBytes: analyzedBytes,
+                entryCount: entryCount,
+                volumeCount: volumes.count,
+                scannedAt: scannedAt,
+                analysisActivity: analysisActivity,
+                safeCleanupBytes: safeCleanupBytes,
+                isPresentingLiveResults: isPresentingLiveResults,
+                isAnalysisRunning: isAnalysisRunning,
+                isStopping: isStopping,
+                canAnalyze: canAnalyze,
+                startAnalysis: startAnalysis,
+                stopAnalysis: stopAnalysis,
+                openSafeCleanup: openSafeCleanup
+            )
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(L10n.text("统计已识别来源的文件分配空间，不代表整个磁盘的已用空间。"))
+                    .foregroundStyle(.secondary)
+                if let errorMessage {
+                    Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .textSelection(.enabled)
+                }
+                if skippedEntryCount > 0 {
+                    Label(L10n.text("部分位置无法读取，容量可能偏低"), systemImage: "exclamationmark.shield")
+                        .foregroundStyle(.orange)
+                }
+                if conflictBytes > 0 {
+                    Label(L10n.format("%@ 共享占用无法唯一归属，已在总量中计入一次。", AgentStorageSizeFormatter.string(conflictBytes)),
+                          systemImage: "square.on.square")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(.caption)
+            .fixedSize(horizontal: false, vertical: true)
+
+            if availableWidth >= StorageMapWideHero.minimumWidth {
+                StorageMapWideHero(
+                    scope: $scope,
+                    sources: data.sources,
+                    volumes: volumes,
+                    sourceTitles: data.sourceTitles,
+                    openSource: openSource
+                )
+            } else {
+                VStack(alignment: .leading, spacing: 20) {
+                    StorageSourceMapSection(
+                        scope: $scope,
+                        sources: data.sources,
+                        openSource: openSource
+                    )
+
+                    StorageVolumeGrid(
+                        volumes: volumes,
+                        sourceTitles: data.sourceTitles
+                    )
+                }
+            }
+
+            StorageSourceTable(
+                availableWidth: availableWidth,
+                sources: data.sources,
+                openAvailability: openAvailability,
+                unavailableMessage: unavailableMessage,
+                canReanalyze: canReanalyze,
+                openSource: openSource,
+                reanalyze: reanalyze
+            )
+        }
+    }
 }
 
 private struct StorageMapWideHero: View {
+    static let minimumWidth: CGFloat = Metrics.sourceColumnMinimumWidth
+        + Metrics.columnSpacing + Metrics.volumeColumnMinimumWidth
+
     private enum Metrics {
         static let sourceColumnMinimumWidth: CGFloat = 440
         static let sourceColumnComfortableWidth: CGFloat = 520
@@ -211,13 +255,11 @@ private struct StorageMapDashboardData {
     let sourceTitles: [StorageSourceID: String]
 
     init(
-        items: [StorageMapSourcePresentation],
+        items: [StorageMapDashboardItem],
         volumes: [StorageVolumeSnapshot],
         safeCleanupBytesBySource: [StorageSourceID: UInt64]
     ) {
-        sourceTitles = Dictionary(uniqueKeysWithValues: items.map {
-            ($0.id, L10n.text($0.candidate.descriptor.title))
-        })
+        sourceTitles = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.title) })
 
         var allocationsBySource: [StorageSourceID: [StorageMapVolumeAllocation]] = [:]
         for volume in volumes {
@@ -248,14 +290,39 @@ private struct StorageMapDashboardData {
 }
 
 private struct StorageMapDashboardSource: Identifiable {
-    let item: StorageMapSourcePresentation
+    let item: StorageMapDashboardItem
     let safeCleanupBytes: UInt64
     let volumeAllocations: [StorageMapVolumeAllocation]
 
     var id: StorageSourceID { item.id }
-    var title: String { L10n.text(item.candidate.descriptor.title) }
-    var family: StorageSourceFamily { item.candidate.descriptor.family }
+    var title: String { item.title }
+    var family: StorageSourceFamily { item.family }
     var bytes: UInt64 { item.displayBytes }
+}
+
+/// The dashboard is refreshed while a scan is running. Keep this projection
+/// deliberately small so the live view tree does not retain every source's
+/// resource tree and other detail-only data.
+struct StorageMapDashboardItem: Identifiable {
+    let id: StorageSourceID
+    let title: String
+    let family: StorageSourceFamily
+    let symbol: String
+    let activity: StorageSourceActivityPresentation
+    let displayBytes: UInt64
+
+    init(
+        candidate: StorageSourceCandidate,
+        activity: StorageSourceActivityPresentation,
+        displayBytes: UInt64
+    ) {
+        id = candidate.id
+        title = L10n.text(candidate.descriptor.title)
+        family = candidate.descriptor.family
+        symbol = candidate.descriptor.symbol
+        self.activity = activity
+        self.displayBytes = displayBytes
+    }
 }
 
 private struct StorageMapVolumeAllocation: Identifiable {
@@ -266,14 +333,96 @@ private struct StorageMapVolumeAllocation: Identifiable {
     var id: String { volumeID }
 }
 
+/// All three header elements exist once. Measure their actual widths before
+/// placing them, including both actions and the selected language's title.
+private struct StorageMapHeaderLayout: Layout {
+    struct Cache {
+        var title: CGSize
+        var metrics: CGSize
+        var actions: CGSize
+        var minimumTitleWidth: CGFloat
+    }
+
+    func makeCache(subviews: Subviews) -> Cache {
+        let titleWidth = ceil((L10n.text("空间地图") as NSString).size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: 22, weight: .semibold)
+        ]).width) + 2
+        let preferredTitleWidth = max(210, titleWidth)
+        return Cache(
+            title: subviews[0].sizeThatFits(.init(width: preferredTitleWidth, height: nil)),
+            metrics: subviews[1].sizeThatFits(.unspecified),
+            actions: subviews[2].sizeThatFits(.unspecified),
+            minimumTitleWidth: titleWidth
+        )
+    }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        cache = makeCache(subviews: subviews)
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout Cache
+    ) -> CGSize {
+        let width = proposal.width ?? cache.title.width + cache.metrics.width + cache.actions.width + 48
+        let frames = frames(width: width, cache: cache)
+        return CGSize(width: width, height: frames.map(\.maxY).max() ?? 0)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout Cache
+    ) {
+        for (index, frame) in frames(width: bounds.width, cache: cache).enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(frame.size)
+            )
+        }
+    }
+
+    private func frames(width: CGFloat, cache: Cache) -> [CGRect] {
+        let title = cache.title
+        let metrics = cache.metrics
+        let actions = cache.actions
+        if title.width + metrics.width + actions.width + 48 <= width {
+            let height = max(title.height, max(metrics.height, actions.height))
+            return [
+                CGRect(x: 0, y: (height - title.height) / 2, width: title.width, height: title.height),
+                CGRect(x: title.width + 24, y: (height - metrics.height) / 2,
+                       width: metrics.width, height: metrics.height),
+                CGRect(x: width - actions.width, y: (height - actions.height) / 2,
+                       width: actions.width, height: actions.height)
+            ]
+        }
+        if cache.minimumTitleWidth + actions.width + 16 <= width {
+            let topHeight = max(title.height, actions.height)
+            return [
+                CGRect(x: 0, y: 0, width: min(title.width, width - actions.width - 16), height: title.height),
+                CGRect(x: 0, y: topHeight + 16, width: metrics.width, height: metrics.height),
+                CGRect(x: width - actions.width, y: 0, width: actions.width, height: actions.height)
+            ]
+        }
+        return [
+            CGRect(x: 0, y: 0, width: width, height: title.height),
+            CGRect(x: 0, y: title.height + 16, width: metrics.width, height: metrics.height),
+            CGRect(x: 0, y: title.height + metrics.height + 32, width: actions.width, height: actions.height)
+        ]
+    }
+}
+
 private struct StorageMapDashboardHeader: View {
     let analyzedBytes: UInt64?
     let entryCount: Int?
     let volumeCount: Int
     let scannedAt: Date?
-    let completedSourceCount: Int?
-    let totalSourceCount: Int?
+    let analysisActivity: StorageMapAnalysisActivity?
     let safeCleanupBytes: UInt64
+    let isPresentingLiveResults: Bool
     let isAnalysisRunning: Bool
     let isStopping: Bool
     let canAnalyze: Bool
@@ -282,23 +431,10 @@ private struct StorageMapDashboardHeader: View {
     let openSafeCleanup: () -> Void
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 24) {
-                titleBlock
-                    .frame(minWidth: 210, alignment: .leading)
-                summaryMetrics
-                Spacer(minLength: 12)
-                actionGroup
-            }
-
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top, spacing: 16) {
-                    titleBlock
-                    Spacer(minLength: 8)
-                    actionGroup
-                }
-                summaryMetrics
-            }
+        StorageMapHeaderLayout {
+            titleBlock
+            summaryMetrics
+            actionGroup
         }
         .padding(.horizontal, 2)
         .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
@@ -309,28 +445,45 @@ private struct StorageMapDashboardHeader: View {
             Text(L10n.text("空间地图"))
                 .font(.title2.weight(.semibold))
                 .lineLimit(1)
-            Text(detailText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color.secondary.opacity(0.5))
+                    .frame(width: 7, height: 7)
+                    .accessibilityHidden(true)
+                Text(detailText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .modifier(StorageMapTextShimmer(isActive: analysisActivity != nil))
+            }
+            .frame(height: 16, alignment: .leading)
+            .help(activityDescription)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(activityDescription)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var summaryMetrics: some View {
         HStack(spacing: 0) {
             StorageMapHeaderMetric(
                 value: analyzedBytes.map(AgentStorageSizeFormatter.string) ?? "—",
-                label: L10n.text("已分析空间")
+                label: isPresentingLiveResults ? L10n.text("扫描中占用（待核对）") : L10n.text("已分析空间"),
+                width: 148
             )
             metricDivider
             StorageMapHeaderMetric(
                 value: entryCount.map { L10n.number($0) } ?? "—",
-                label: L10n.text("文件条目")
+                label: L10n.text("文件系统条目"),
+                width: 126
             )
+            .help(L10n.text("按文件身份去重，包含文件、目录和符号链接。"))
             metricDivider
             StorageMapHeaderMetric(
                 value: volumeCount > 0 ? L10n.number(volumeCount) : "—",
-                label: L10n.text("磁盘卷")
+                label: L10n.text("磁盘卷"),
+                width: 60
             )
         }
         .fixedSize(horizontal: true, vertical: false)
@@ -349,17 +502,24 @@ private struct StorageMapDashboardHeader: View {
         HStack(spacing: 10) {
             Button(action: isAnalysisRunning ? stopAnalysis : startAnalysis) {
                 HStack(spacing: 8) {
-                    Image(systemName: isAnalysisRunning ? "stop.fill" : "arrow.clockwise")
-                    Text(L10n.text(isAnalysisRunning ? "停止分析" : "重新分析"))
+                    if isAnalysisRunning {
+                        Image(systemName: isStopping ? "ellipsis" : "stop.fill")
+                            .font(.system(size: isStopping ? 12 : 9, weight: .medium))
+                            .frame(width: 22, height: 22)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .frame(width: 22, height: 22)
+                    }
+                    Text(L10n.text(isStopping ? "正在停止" : (isAnalysisRunning ? "停止分析" : "重新分析")))
                         .lineLimit(1)
                 }
                 .font(.callout.weight(.medium))
                 .contentShape(Rectangle())
             }
-            .buttonStyle(StorageMapHeaderActionButtonStyle(kind: .standard))
-            .help(L10n.text(isAnalysisRunning ? "停止分析" : "重新分析空间地图"))
+            .buttonStyle(StorageMapHeaderActionButtonStyle(kind: isAnalysisRunning ? .analyzing : .standard))
+            .help(L10n.text(isStopping ? "正在停止" : (isAnalysisRunning ? "停止分析" : "重新分析空间地图")))
             .accessibilityIdentifier("storage-map-dashboard-reanalyze")
-            .disabled(!canAnalyze)
+            .disabled(!canAnalyze || isStopping)
 
             if safeCleanupBytes > 0 {
                 Button(action: openSafeCleanup) {
@@ -367,7 +527,7 @@ private struct StorageMapDashboardHeader: View {
                         Image(systemName: "sparkles")
                             .font(.system(size: 18, weight: .semibold))
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(L10n.text("可安全清理"))
+                            Text(L10n.text("可清理项目占用"))
                                 .font(.caption.weight(.medium))
                             Text(AgentStorageSizeFormatter.string(safeCleanupBytes))
                                 .font(.system(.callout, design: .rounded, weight: .semibold))
@@ -385,15 +545,11 @@ private struct StorageMapDashboardHeader: View {
 
     private var detailText: String {
         if isStopping { return L10n.text("正在停止") }
-        if isAnalysisRunning,
-           let completedSourceCount,
-           let totalSourceCount,
-           totalSourceCount > 0 {
-            return L10n.format(
-                "进度 %d / %d",
-                min(completedSourceCount, totalSourceCount),
-                totalSourceCount
-            )
+        if let activity = analysisActivity {
+            if let source = activity.rows.first {
+                return L10n.format("%@ · %@", source.title, source.phaseTitle)
+            }
+            return activity.title
         }
         if isAnalysisRunning { return L10n.text("正在分析") }
         if let scannedAt {
@@ -404,10 +560,17 @@ private struct StorageMapDashboardHeader: View {
         }
         return L10n.text("等待你开始只读分析")
     }
+
+    private var activityDescription: String {
+        guard let activity = analysisActivity else { return detailText }
+        return ([activity.title, activity.summary].compactMap { $0 }
+            + activity.rows.map { $0.title + " · " + $0.detail }).joined(separator: "\n")
+    }
 }
 
 private enum StorageMapHeaderActionButtonKind {
     case standard
+    case analyzing
     case cleanup
 }
 
@@ -433,14 +596,28 @@ private struct StorageMapHeaderActionButtonBody<Label: View>: View {
     let isPressed: Bool
 
     @State private var isHovering = false
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         label
+            .modifier(StorageMapTextShimmer(isActive: kind == .analyzing))
             .frame(width: 166, height: 52)
             .foregroundStyle(foregroundColor)
             .background(backgroundColor, in: buttonShape)
+            .background {
+                if kind == .analyzing {
+                    buttonShape.fill(InstrumentDesign.Palette.canvasRaised)
+                }
+            }
             .overlay {
                 buttonShape.strokeBorder(borderColor, lineWidth: isHovering ? 1 : 0.75)
+            }
+            .overlay {
+                if kind == .analyzing, !reduceMotion {
+                    StorageMapLightSweep(strength: colorScheme == .dark ? 0.1 : 0.055)
+                        .clipShape(buttonShape)
+                }
             }
             .contentShape(buttonShape)
             .opacity(isEnabled ? 1 : 0.46)
@@ -455,7 +632,11 @@ private struct StorageMapHeaderActionButtonBody<Label: View>: View {
     }
 
     private var foregroundColor: Color {
-        kind == .cleanup ? InstrumentDesign.ColorRole.cleanup : .primary
+        switch kind {
+        case .standard: .primary
+        case .analyzing: .primary
+        case .cleanup: InstrumentDesign.ColorRole.cleanup
+        }
     }
 
     private var backgroundColor: Color {
@@ -464,6 +645,8 @@ private struct StorageMapHeaderActionButtonBody<Label: View>: View {
             if isPressed { return Color.primary.opacity(0.14) }
             if isHovering { return Color.primary.opacity(0.11) }
             return Color(nsColor: .controlBackgroundColor).opacity(0.92)
+        case .analyzing:
+            return Color.primary.opacity(isPressed ? 0.1 : (isHovering ? 0.065 : 0.025))
         case .cleanup:
             if isPressed { return InstrumentDesign.ColorRole.cleanup.opacity(0.24) }
             if isHovering { return InstrumentDesign.ColorRole.cleanup.opacity(0.2) }
@@ -477,6 +660,8 @@ private struct StorageMapHeaderActionButtonBody<Label: View>: View {
             return isHovering
                 ? Color.primary.opacity(0.3)
                 : Color(nsColor: .separatorColor).opacity(0.9)
+        case .analyzing:
+            return Color.primary.opacity(isHovering ? 0.28 : (colorScheme == .dark ? 0.18 : 0.14))
         case .cleanup:
             return InstrumentDesign.ColorRole.cleanup.opacity(isHovering ? 0.58 : 0.32)
         }
@@ -486,20 +671,18 @@ private struct StorageMapHeaderActionButtonBody<Label: View>: View {
 private struct StorageMapHeaderMetric: View {
     let value: String
     let label: String
+    let width: CGFloat
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(value)
-                .font(.system(.title3, design: .rounded, weight: .medium))
-                .monospacedDigit()
-                .lineLimit(1)
-                .contentTransition(.numericText())
+            StorageMapNumberText(value, size: 17, weight: .medium, rounded: true)
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .frame(minWidth: 76, alignment: .leading)
+        .frame(width: width, alignment: .leading)
+        .help(label)
         .accessibilityElement(children: .combine)
     }
 }
@@ -531,17 +714,9 @@ private struct StorageSourceMapHeader: View {
     let sourceCount: Int
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
-                scopeTabs
-                Spacer(minLength: 8)
-                sourceCountLabel
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                sourceCountLabel
-                scopeTabs
-            }
+        VStack(alignment: .leading, spacing: 8) {
+            sourceCountLabel
+            scopeTabs
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -551,7 +726,10 @@ private struct StorageSourceMapHeader: View {
     }
 
     private var sourceCountLabel: some View {
-        Text(L10n.format("%d 个来源", sourceCount))
+        Text(sourceCount > 5
+            ? L10n.format("展示前 5 个来源 · 共 %d 个", sourceCount)
+            : L10n.format("%d 个来源", sourceCount))
+            .help(L10n.text("卡片面积兼顾文字可读性；占比以标注的百分比为准。"))
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
             .fixedSize()
@@ -562,16 +740,30 @@ private struct StorageSourceScopeControl: View {
     @Binding var scope: StorageMapScope
 
     var body: some View {
-        GlassSegmentedControl("来源分类", selection: $scope) {
-            ForEach(StorageMapScope.allCases) { item in
-                Text(item.title)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-                    .tag(item)
+        GeometryReader { proxy in
+            if proxy.size.width >= 640 {
+                GlassSegmentedControl("来源分类", selection: $scope) {
+                    scopeOptions
+                }
+            } else {
+                Picker(L10n.text("来源分类"), selection: $scope) {
+                    scopeOptions
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(maxWidth: 720)
         .frame(height: 32)
+    }
+
+    private var scopeOptions: some View {
+        ForEach(StorageMapScope.allCases) { item in
+            Text(item.title)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .tag(item)
+        }
     }
 }
 
@@ -579,7 +771,10 @@ private struct StorageSourceCountHeader: View {
     let sourceCount: Int
 
     var body: some View {
-        Text(L10n.format("%d 个来源", sourceCount))
+        Text(sourceCount > 5
+            ? L10n.format("展示前 5 个来源 · 共 %d 个", sourceCount)
+            : L10n.format("%d 个来源", sourceCount))
+            .help(L10n.text("卡片面积兼顾文字可读性；占比以标注的百分比为准。"))
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
             .fixedSize()
@@ -664,10 +859,6 @@ private struct StorageSourceMapCard: View {
                         ProgressView()
                             .controlSize(.mini)
                             .allowsHitTesting(false)
-                    } else if source.item.activity.state == .active {
-                        ProgressView()
-                            .controlSize(.mini)
-                            .allowsHitTesting(false)
                     }
                 }
 
@@ -677,16 +868,11 @@ private struct StorageSourceMapCard: View {
                         .foregroundStyle(.orange)
                         .lineLimit(2)
                 } else {
-                    Text(AgentStorageSizeFormatter.string(source.bytes))
-                        .font(.system(
-                            size: emphasized ? 34 : 25,
-                            weight: .light,
-                            design: .default
-                        ))
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.64)
-                        .contentTransition(.numericText())
+                    StorageMapNumberText(
+                        AgentStorageSizeFormatter.string(source.bytes),
+                        size: emphasized ? 34 : 25,
+                        weight: .light
+                    )
 
                     Text(shareText)
                         .font(emphasized ? .title3 : .callout)
@@ -696,31 +882,25 @@ private struct StorageSourceMapCard: View {
 
                 Spacer(minLength: 4)
 
-                HStack(alignment: .bottom, spacing: 10) {
-                    if source.safeCleanupBytes > 0 {
-                        Label(
-                            AgentStorageSizeFormatter.string(source.safeCleanupBytes),
-                            systemImage: "checkmark.shield.fill"
-                        )
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(InstrumentDesign.ColorRole.cleanup)
-                        .lineLimit(1)
-                    } else {
-                        Text(source.item.activity.phaseTitle)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                GeometryReader { proxy in
+                    HStack(alignment: .bottom, spacing: 10) {
+                        footerLabel
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if proxy.size.width >= 180 {
+                            StorageSourceBrandIcon(
+                                sourceID: source.id,
+                                fallbackSymbol: source.item.symbol
+                            )
+                            .scaleEffect(emphasized ? 1.2 : 1)
+                            .opacity(0.72)
+                            .accessibilityHidden(true)
+                        }
                     }
-                    Spacer(minLength: 8)
-                    StorageSourceBrandIcon(
-                        sourceID: source.id,
-                        fallbackSymbol: source.item.candidate.descriptor.symbol
-                    )
-                    .scaleEffect(emphasized ? 1.2 : 1)
-                    .opacity(0.72)
-                    .accessibilityHidden(true)
+                    .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottomLeading)
                 }
+                // Preserve the icon's original footprint when a narrow card prioritizes its status.
+                .frame(height: 40, alignment: .bottomLeading)
             }
             .padding(emphasized ? 18 : 14)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -736,7 +916,7 @@ private struct StorageSourceMapCard: View {
             RoundedRectangle(cornerRadius: InstrumentDesign.Radius.panel)
                 .strokeBorder(
                     isHovering
-                        ? source.family.color.opacity(0.52)
+                        ? Color.primary.opacity(0.3)
                         : Color.primary.opacity(colorScheme == .dark ? 0.16 : 0.11),
                     lineWidth: isHovering ? 1.1 : 0.7
                 )
@@ -750,6 +930,28 @@ private struct StorageSourceMapCard: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityHint(L10n.text("查看专属分析"))
+    }
+
+    @ViewBuilder
+    private var footerLabel: some View {
+        if source.item.activity.state == .active {
+            Text(source.item.activity.phaseTitle)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .modifier(StorageMapTextShimmer(isActive: true))
+                .help(source.item.activity.workDetail)
+        } else if source.safeCleanupBytes > 0 {
+            Label(
+                AgentStorageSizeFormatter.string(source.safeCleanupBytes),
+                systemImage: "checkmark.shield.fill"
+            )
+            .font(.caption.weight(.medium))
+            .foregroundStyle(InstrumentDesign.ColorRole.cleanup)
+        } else {
+            Text(source.item.activity.phaseTitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private var shareText: String {
@@ -835,7 +1037,7 @@ private struct StorageSourceMapLayout: Layout {
         case 1:
             return [bounds]
         case 2:
-            return horizontalFrames(in: bounds, weights: weights, minimumShare: 0.34)
+            return horizontalFrames(in: bounds, weights: weights, minimumShare: 0.34, minimumLength: 180)
         case 3:
             let leadingShare = clampedShare(
                 weights[0] / weights.reduce(0, +),
@@ -855,8 +1057,8 @@ private struct StorageSourceMapLayout: Layout {
         case 4:
             let rowWeights = [weights[0] + weights[1], weights[2] + weights[3]]
             let rows = verticalFrames(in: bounds, weights: rowWeights, minimumShare: 0.40)
-            return horizontalFrames(in: rows[0], weights: Array(weights[0...1]), minimumShare: 0.34)
-                + horizontalFrames(in: rows[1], weights: Array(weights[2...3]), minimumShare: 0.34)
+            return horizontalFrames(in: rows[0], weights: Array(weights[0...1]), minimumShare: 0.34, minimumLength: 180)
+                + horizontalFrames(in: rows[1], weights: Array(weights[2...3]), minimumShare: 0.34, minimumLength: 180)
         default:
             let topWeight = weights[0] + weights[1]
             let bottomWeight = weights[2...4].reduce(0, +)
@@ -883,7 +1085,7 @@ private struct StorageSourceMapLayout: Layout {
                 width: bounds.width,
                 height: bounds.height - spacing - topHeight
             )
-            return horizontalFrames(in: topBounds, weights: Array(weights[0...1]), minimumShare: 0.34)
+            return horizontalFrames(in: topBounds, weights: Array(weights[0...1]), minimumShare: 0.34, minimumLength: 180)
                 + horizontalFrames(
                     in: bottomBounds,
                     weights: Array(weights[2...4]),
@@ -1239,6 +1441,7 @@ private struct StorageDashboardVolumeCard: View {
                     title: L10n.text("可用空间"),
                     value: AgentStorageSizeFormatter.string(volume.availableCapacity)
                 )
+                .help(L10n.text("系统报告的当前可用空间；共享块、快照和可清除空间会影响实际释放量。"))
             }
             .frame(maxWidth: .infinity)
         }
@@ -1306,12 +1509,14 @@ private struct StorageDashboardCapacityBar: View {
 
     private var segments: [StorageDashboardCapacitySegment] {
         let total = max(1, volume.totalCapacity)
+        let allocationScale = volume.analyzedBytes > volume.usedBytes && volume.analyzedBytes > 0
+            ? Double(volume.usedBytes) / Double(volume.analyzedBytes) : 1
         var values = volume.sourceUsages.map { usage in
             StorageDashboardCapacitySegment(
                 id: usage.sourceID.rawValue,
                 title: sourceTitles[usage.sourceID] ?? usage.sourceID.rawValue,
                 bytes: usage.allocatedBytes,
-                share: CGFloat(Double(usage.allocatedBytes) / Double(total)),
+                share: CGFloat(Double(usage.allocatedBytes) * allocationScale / Double(total)),
                 color: storageDashboardSourceColor(usage.sourceID)
             )
         }
@@ -1351,12 +1556,7 @@ private struct StorageDashboardCapacityBar: View {
         let totalSpacing = spacing * CGFloat(max(0, segments.count - 1))
         let contentWidth = max(0, availableWidth - totalSpacing)
         let shareTotal = max(0.000_001, segments.reduce(0) { $0 + $1.share })
-        let minimumWidth = min(3, contentWidth / CGFloat(segments.count))
-        let proposed = segments.map {
-            max(minimumWidth, contentWidth * ($0.share / shareTotal))
-        }
-        let proposedTotal = max(0.000_001, proposed.reduce(0, +))
-        return proposed.map { contentWidth * ($0 / proposedTotal) }
+        return segments.map { contentWidth * ($0.share / shareTotal) }
     }
 }
 
@@ -1368,7 +1568,30 @@ private struct StorageDashboardCapacitySegment: Identifiable {
     let color: Color
 }
 
+/// Header and rows share one column contract and one breakpoint. Longer
+/// translations expand the relevant column before the table chooses its mode.
+private struct StorageSourceTableColumns {
+    let identity = Self.width("来源", minimum: 220)
+    let family = Self.width("来源分类", minimum: 130)
+    let size = Self.width("已分析空间", minimum: 105)
+    let volumes = Self.width("磁盘卷", minimum: 230)
+    let cleanup = Self.width("可安全清理", minimum: 110)
+    let status = Self.width("状态", minimum: 105)
+
+    var requiredWidth: CGFloat {
+        identity + family + size + volumes + cleanup + status
+            + 5 * 16 + 10 + 34 + 2 * 14
+    }
+
+    private static func width(_ key: String, minimum: CGFloat) -> CGFloat {
+        max(minimum, ceil((L10n.text(key) as NSString).size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: 11)
+        ]).width) + 4)
+    }
+}
+
 private struct StorageSourceTable: View {
+    let availableWidth: CGFloat
     let sources: [StorageMapDashboardSource]
     let openAvailability: (StorageSourceID) -> StorageSourceResultAccess
     let unavailableMessage: (StorageSourceID, StorageSourceResultAccess) -> String
@@ -1377,6 +1600,9 @@ private struct StorageSourceTable: View {
     let reanalyze: (StorageSourceID) -> Void
 
     var body: some View {
+        let columns = StorageSourceTableColumns()
+        let usesWideLayout = availableWidth >= columns.requiredWidth
+
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text(L10n.text("来源"))
@@ -1388,7 +1614,7 @@ private struct StorageSourceTable: View {
             }
 
             VStack(spacing: 0) {
-                StorageSourceTableHeader()
+                StorageSourceTableHeader(columns: columns, usesWideLayout: usesWideLayout)
                 Divider()
                 if sources.isEmpty {
                     ContentUnavailableView {
@@ -1406,6 +1632,8 @@ private struct StorageSourceTable: View {
                             if index > 0 { Divider() }
                             let access = openAvailability(source.id)
                             StorageSourceTableRow(
+                                columns: columns,
+                                usesWideLayout: usesWideLayout,
                                 source: source,
                                 openAvailability: access,
                                 unavailableMessage: unavailableMessage(source.id, access),
@@ -1423,10 +1651,16 @@ private struct StorageSourceTable: View {
 }
 
 private struct StorageSourceTableHeader: View {
+    let columns: StorageSourceTableColumns
+    let usesWideLayout: Bool
+
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            wideContent
-            compactContent
+        Group {
+            if usesWideLayout {
+                wideContent
+            } else {
+                compactContent
+            }
         }
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .font(.caption)
@@ -1440,12 +1674,12 @@ private struct StorageSourceTableHeader: View {
     private var wideContent: some View {
         HStack(spacing: 10) {
             HStack(spacing: 16) {
-                header(L10n.text("来源"), width: 220)
-                header(L10n.text("来源分类"), width: 130)
-                header(L10n.text("已分析空间"), width: 105, alignment: .trailing)
-                header(L10n.text("磁盘卷"), width: 230)
-                header(L10n.text("可安全清理"), width: 110, alignment: .trailing)
-                header(L10n.text("状态"), width: 105, alignment: .trailing)
+                header(L10n.text("来源"), width: columns.identity)
+                header(L10n.text("来源分类"), width: columns.family)
+                header(L10n.text("已分析空间"), width: columns.size, alignment: .trailing)
+                header(L10n.text("磁盘卷"), width: columns.volumes)
+                header(L10n.text("可安全清理"), width: columns.cleanup, alignment: .trailing)
+                header(L10n.text("状态"), width: columns.status, alignment: .trailing)
             }
             Color.clear.frame(width: 34)
         }
@@ -1454,10 +1688,11 @@ private struct StorageSourceTableHeader: View {
     private var compactContent: some View {
         HStack(spacing: 10) {
             HStack(spacing: 12) {
-                header(L10n.text("来源"), width: 200)
-                Spacer(minLength: 8)
-                header(L10n.text("已分析空间"), width: 112, alignment: .trailing)
-                header(L10n.text("状态"), width: 96, alignment: .trailing)
+                Text(L10n.text("来源"))
+                    .lineLimit(1)
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                header(L10n.text("已分析空间"), width: max(112, columns.size), alignment: .trailing)
+                header(L10n.text("状态"), width: max(96, columns.status), alignment: .trailing)
             }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             Color.clear.frame(width: 34)
@@ -1476,6 +1711,8 @@ private struct StorageSourceTableHeader: View {
 }
 
 private struct StorageSourceTableRow: View {
+    let columns: StorageSourceTableColumns
+    let usesWideLayout: Bool
     let source: StorageMapDashboardSource
     let openAvailability: StorageSourceResultAccess
     let unavailableMessage: String
@@ -1492,9 +1729,12 @@ private struct StorageSourceTableRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Button(action: requestOpen) {
-                ViewThatFits(in: .horizontal) {
-                    wideContent
-                    compactContent
+                Group {
+                    if usesWideLayout {
+                        wideContent
+                    } else {
+                        compactContent
+                    }
                 }
                 .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -1508,6 +1748,7 @@ private struct StorageSourceTableRow: View {
                 .frame(width: 34, height: 30)
         }
         .padding(.horizontal, 14)
+        .padding(.vertical, usesWideLayout ? 0 : 6)
         .frame(minHeight: 56)
         .background(isHovering ? Color.primary.opacity(0.045) : Color.clear)
         .contentShape(Rectangle())
@@ -1526,12 +1767,12 @@ private struct StorageSourceTableRow: View {
 
     private var wideContent: some View {
         HStack(spacing: 16) {
-            identity.frame(width: 220, alignment: .leading)
-            family.frame(width: 130, alignment: .leading)
-            size.frame(width: 105, alignment: .trailing)
-            volumeDistribution.frame(width: 230, alignment: .leading)
-            safeCleanup.frame(width: 110, alignment: .trailing)
-            status.frame(width: 105, alignment: .trailing)
+            identity.frame(width: columns.identity, alignment: .leading)
+            family.frame(width: columns.family, alignment: .leading)
+            size.frame(width: columns.size, alignment: .trailing)
+            volumeDistribution.frame(width: columns.volumes, alignment: .leading)
+            safeCleanup.frame(width: columns.cleanup, alignment: .trailing)
+            status.frame(width: columns.status, alignment: .trailing)
         }
     }
 
@@ -1545,8 +1786,8 @@ private struct StorageSourceTableRow: View {
                 }
             }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-            size.frame(width: 112, alignment: .trailing)
-            status.frame(width: 96, alignment: .trailing)
+            size.frame(width: max(112, columns.size), alignment: .trailing)
+            status.frame(width: max(96, columns.status), alignment: .trailing)
         }
     }
 
@@ -1558,7 +1799,7 @@ private struct StorageSourceTableRow: View {
                 .accessibilityHidden(true)
             StorageSourceBrandIcon(
                 sourceID: source.id,
-                fallbackSymbol: source.item.candidate.descriptor.symbol
+                fallbackSymbol: source.item.symbol
             )
             Text(source.title)
                 .font(.callout.weight(.medium))
@@ -1578,12 +1819,13 @@ private struct StorageSourceTableRow: View {
     }
 
     private var size: some View {
-        Text(AgentStorageSizeFormatter.string(source.bytes))
-            .font(.system(.callout, design: .rounded, weight: .medium))
-            .monospacedDigit()
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .contentTransition(.numericText())
+        StorageMapNumberText(
+            AgentStorageSizeFormatter.string(source.bytes),
+            size: 13,
+            weight: .medium,
+            rounded: true
+        )
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     @ViewBuilder
@@ -1639,6 +1881,7 @@ private struct StorageSourceTableRow: View {
                 .font(.caption)
                 .foregroundStyle(statusColor)
                 .lineLimit(1)
+                .modifier(StorageMapTextShimmer(isActive: source.item.activity.state == .active))
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .accessibilityElement(children: .combine)
@@ -1680,7 +1923,7 @@ private struct StorageSourceTableRow: View {
     private var statusColor: Color {
         switch source.item.activity.state {
         case .ready, .queued: .secondary
-        case .active: .accentColor
+        case .active: .primary.opacity(0.72)
         case .complete: InstrumentDesign.ColorRole.healthy
         case .partial: .orange
         }

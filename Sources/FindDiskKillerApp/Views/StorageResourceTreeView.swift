@@ -31,7 +31,7 @@ struct StorageResourceTreeView: View {
     }
 
     var body: some View {
-        let selectionCounts = projection.selectionCounts(for: selectedIDs)
+        let selectionCounts = projection.selectionCounts(for: selectedIDs.subtracting(pendingSynchronizationIDs))
         VStack(spacing: 0) {
             ForEach(visibleRows) { row in
                 if row.id != visibleRows.first?.id {
@@ -73,6 +73,8 @@ struct StorageResourceTreeView: View {
             }
             .buttonStyle(.plain)
             .disabled(!row.hasChildren)
+            .accessibilityLabel(expandedIDs.contains(row.node.id)
+                ? L10n.text("收起清理项目") : L10n.text("展开清理项目"))
             selectionControl(
                 node: row.node,
                 requestIDs: requestIDs,
@@ -317,7 +319,12 @@ struct StorageResourceTreeIndex: Identifiable, Equatable, Sendable {
                 let request = StorageCleanupRequest(
                     id: node.id,
                     title: node.title,
-                    displayBytes: node.allocatedBytes,
+                    displayBytes: target == .dockerBuildCachePrune
+                        ? node.children.filter { !$0.isProtected }.reduce(UInt64.zero) { total, child in
+                            let sum = total.addingReportingOverflow(child.allocatedBytes)
+                            return sum.overflow ? .max : sum.partialValue
+                        }
+                        : node.allocatedBytes,
                     target: target
                 )
                 if requestsByID.updateValue(request, forKey: request.id) == nil {
@@ -370,10 +377,10 @@ struct StorageResourceTreeIndex: Identifiable, Equatable, Sendable {
     }
 
     func selectedRequests(for selectedIDs: Set<String>) -> [StorageCleanupRequest] {
-        requestOrder.compactMap { requestID in
+        StorageSafeCleanupProjection.independentRequests(requestOrder.compactMap { requestID in
             guard selectedIDs.contains(requestID) else { return nil }
             return requestsByID[requestID]
-        }
+        })
     }
 }
 
@@ -715,6 +722,10 @@ struct StorageCleanupReviewSheet: View {
                     .font(.callout.weight(.medium))
                     .foregroundStyle(summary.failedCount == 0 ? Color.green : Color.orange)
                 }
+                Text(L10n.text("大小为所选项目的参考占用，不保证立即释放。移入废纸篓的内容仍占用磁盘，需清空废纸篓后才可能释放。"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Text(L10n.format("共 %@", AgentStorageSizeFormatter.string(totalBytes)))
                         .font(.system(.callout, design: .monospaced, weight: .semibold))
@@ -752,6 +763,7 @@ struct StorageCleanupReviewSheet: View {
         }
         .frame(width: 620)
         .frame(minHeight: 430)
+        .interactiveDismissDisabled(isExecuting)
     }
 
     private func cleanupRow(_ request: StorageCleanupRequest) -> some View {

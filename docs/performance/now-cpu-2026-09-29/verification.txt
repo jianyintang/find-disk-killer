@@ -1,0 +1,6 @@
+Release build: success (63.44s)
+Targeted tests: 82 passed (6.309s)
+Visual harness: 1 passed, 4 layouts captured; native animation branch uses simulated visible NSWindow
+SwiftPM raw executable; no temporary .app bundle or DerivedData
+Registered application: /Applications/FindDiskKiller.app
+Final executable SHA-256: 0bcd4b24557f13cd3cdac5aeb52fa66989339957819b282ef1b6fee3284538d9

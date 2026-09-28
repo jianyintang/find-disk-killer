@@ -9,6 +9,7 @@ public actor StorageAnalyzer {
 
     static let rootWorkerCountPerSource = 2
 
+    private let session: StorageAnalysisSession?
     private let configuration: StorageScanConfiguration
     private let fileManager: FileManager
     private let sourceStartHook: SourceStartHook?
@@ -17,8 +18,10 @@ public actor StorageAnalyzer {
 
     public init(
         configuration: StorageScanConfiguration = .init(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        session: StorageAnalysisSession? = nil
     ) {
+        self.session = session
         self.configuration = configuration
         self.fileManager = fileManager
         sourceStartHook = nil
@@ -33,6 +36,7 @@ public actor StorageAnalyzer {
         rootStartHook: RootStartHook? = nil,
         volumeProvider: @escaping VolumeProvider = StorageAnalyzer.collectMountedVolumes
     ) {
+        session = nil
         self.configuration = configuration
         self.fileManager = fileManager
         self.sourceStartHook = sourceStartHook
@@ -52,8 +56,9 @@ public actor StorageAnalyzer {
 
     public func scan(progress: ProgressHandler? = nil) async throws -> StorageAnalysisSnapshot {
         progress?(StorageScanProgress(phase: .discovering))
-        let candidates = detect().filter { !$0.roots.isEmpty }
-        return try await scan(candidates: candidates, progress: progress)
+        let detected = detect()
+        let candidates = await session?.candidatesForRefresh(detected) ?? detected
+        return try await scan(candidates: candidates.filter { !$0.roots.isEmpty }, progress: progress)
     }
 
     public func scan(
@@ -61,12 +66,30 @@ public actor StorageAnalyzer {
         progress: ProgressHandler? = nil
     ) async throws -> StorageAnalysisSnapshot {
         progress?(StorageScanProgress(phase: .discovering, sourceID: sourceID))
-        let candidates = detect().filter { $0.id == sourceID }
-        return try await scan(candidates: candidates, progress: progress)
+        let detected = detect()
+        // A session must establish one physical ledger before replacing a source.
+        // This also handles the first refresh after loading a persisted UI snapshot.
+        let needsBaseline = await session?.isEmpty == true
+        var refreshCandidates = await session?.candidatesForRefresh(detected) ?? detected
+        if !refreshCandidates.contains(where: { $0.id == sourceID }),
+           let descriptor = StorageSourceCatalog.descriptor(for: sourceID) {
+            refreshCandidates.append(StorageSourceCandidate(descriptor: descriptor, roots: []))
+        }
+        let relatedIDs = await session?.relatedSourceIDs(to: sourceID, detected: refreshCandidates) ?? [sourceID]
+        let candidates = needsBaseline ? refreshCandidates.filter { !$0.roots.isEmpty || $0.id == sourceID }
+            : refreshCandidates.filter { relatedIDs.contains($0.id) }
+        return try await scan(
+            candidates: candidates,
+            refreshedSourceID: needsBaseline ? nil : sourceID,
+            invalidatedSourceIDs: relatedIDs,
+            progress: progress
+        )
     }
 
     private func scan(
         candidates: [StorageSourceCandidate],
+        refreshedSourceID: StorageSourceID? = nil,
+        invalidatedSourceIDs: Set<StorageSourceID> = [],
         progress: ProgressHandler?
     ) async throws -> StorageAnalysisSnapshot {
         try Task.checkCancellation()
@@ -91,12 +114,18 @@ public actor StorageAnalyzer {
             sourceStartHook: sourceStartHook,
             rootStartHook: rootStartHook
         )
-        let merged = merge(outputs: outputs, orderedBy: candidates)
         let inventories = await providerInventories
+        let retained = try await session?.commit(
+            candidates: candidates, outputs: outputs, inventories: inventories,
+            refreshedSourceIDs: refreshedSourceID.map { invalidatedSourceIDs.union([$0]) }
+        )
+        let accountingCandidates = retained?.candidates ?? candidates
+        let merged = merge(outputs: retained?.outputs ?? outputs, orderedBy: accountingCandidates)
 
         try Task.checkCancellation()
         progress?(StorageScanProgress(
             phase: .reconciling,
+            sequence: progressAccumulator.nextSequence(),
             completedSourceCount: candidates.count,
             totalSourceCount: candidates.count,
             processedEntryCount: merged.processedEntryCount,
@@ -104,18 +133,25 @@ public actor StorageAnalyzer {
             volumes: progressAccumulator.currentVolumes()
         ))
         let snapshot = reconcile(
-            candidates: candidates,
+            candidates: accountingCandidates,
             ledger: merged.ledger,
             skippedBySource: merged.skippedBySource,
-            mountedVolumes: mountedVolumes,
-            providerInventories: inventories
+            mountedVolumes: volumeProvider(),
+            providerInventories: retained?.inventories ?? inventories,
+            sessionID: retained?.sessionID,
+            sessionRevision: retained?.revision
         )
         progress?(StorageScanProgress(
             phase: .finished,
+            sequence: progressAccumulator.nextSequence(),
+            sourceID: refreshedSourceID,
             completedSourceCount: candidates.count,
             totalSourceCount: candidates.count,
             processedEntryCount: snapshot.measuredEntryCount,
             processedBytes: snapshot.totalAllocatedBytes,
+            sourceProcessedEntryCount: refreshedSourceID.flatMap { snapshot.result(for: $0)?.entryCount } ?? 0,
+            sourceProcessedBytes: refreshedSourceID.flatMap { snapshot.result(for: $0)?.allocatedBytes } ?? 0,
+            sourceCompleted: refreshedSourceID != nil,
             volumes: snapshot.volumes
         ))
         return snapshot
@@ -207,6 +243,18 @@ public actor StorageAnalyzer {
             return lhs.path < rhs.path
         }
         progress.sourceStarted(candidate.id, totalWorkCount: roots.count)
+        // Resolve symlinks once per root before sharing paths with the workers.
+        // This removes repeated filesystem queries from descendant exclusion.
+        var resolvedRootPaths: [String: String] = [:]
+        resolvedRootPaths.reserveCapacity(roots.count)
+        for root in roots {
+            try Task.checkCancellation()
+            resolvedRootPaths[root.id] = URL(fileURLWithPath: root.path, isDirectory: true)
+                .resolvingSymlinksInPath()
+                .standardizedFileURL
+                .path
+        }
+        let canonicalRootPaths = resolvedRootPaths
         let rootOutputs = try await withThrowingTaskGroup(of: StorageRootScanOutput.self) { group in
             var iterator = Array(roots.enumerated()).makeIterator()
             let workerCount = min(rootWorkerCountPerSource, roots.count)
@@ -218,6 +266,7 @@ public actor StorageAnalyzer {
                             root: work.element,
                             rootOffset: work.offset,
                             totalRootCount: roots.count,
+                            resolvedRootPaths: canonicalRootPaths,
                             mountedVolumes: mountedVolumes,
                             agentRootsAggregationOnly: agentRootsAggregationOnly,
                             packageManagerRootsAggregationOnly: packageManagerRootsAggregationOnly,
@@ -239,6 +288,7 @@ public actor StorageAnalyzer {
                             root: work.element,
                             rootOffset: work.offset,
                             totalRootCount: roots.count,
+                            resolvedRootPaths: canonicalRootPaths,
                             mountedVolumes: mountedVolumes,
                             agentRootsAggregationOnly: agentRootsAggregationOnly,
                             packageManagerRootsAggregationOnly: packageManagerRootsAggregationOnly,
@@ -252,21 +302,21 @@ public actor StorageAnalyzer {
         }
 
         var ledger: [StoragePhysicalIdentity: StorageLedgerEntry] = [:]
-        var processedEntries = 0
         var processedBytes: UInt64 = 0
         var processedBytesByVolume: [String: UInt64] = [:]
         var skippedRootCount = 0
         for output in rootOutputs.sorted(by: { $0.rootOffset < $1.rootOffset }) {
-            processedEntries += output.processedEntryCount
             skippedRootCount += output.skippedRootCount
             for (identity, entry) in output.ledger {
                 if var existing = ledger[identity] {
-                    existing.claims.append(contentsOf: entry.claims)
+                    for claim in entry.claims where !existing.claims.contains(claim) {
+                        existing.claims.append(claim)
+                    }
                     ledger[identity] = existing
                 } else {
                     ledger[identity] = entry
                     processedBytes = processedBytes.addingClamped(entry.allocatedBytes)
-                    if let volumeID = output.volumeID {
+                    if let volumeID = entry.volumeID {
                         processedBytesByVolume[volumeID, default: 0] =
                             processedBytesByVolume[volumeID, default: 0]
                                 .addingClamped(entry.allocatedBytes)
@@ -276,7 +326,7 @@ public actor StorageAnalyzer {
         }
         progress.sourceFinished(
             candidate.id,
-            processedEntryCount: processedEntries,
+            processedEntryCount: ledger.count,
             processedBytes: processedBytes,
             sourceVolumeBytes: processedBytesByVolume
         )
@@ -284,8 +334,8 @@ public actor StorageAnalyzer {
             sourceID: candidate.id,
             ledger: ledger,
             skippedRootCount: skippedRootCount,
-            processedEntryCount: processedEntries,
-            processedBytes: processedBytes
+            processedEntryCount: ledger.count,
+            processedBytes: ledger.values.reduce(0) { $0.addingClamped($1.allocatedBytes) }
         )
     }
 
@@ -294,6 +344,7 @@ public actor StorageAnalyzer {
         root: StorageSourceRoot,
         rootOffset: Int,
         totalRootCount: Int,
+        resolvedRootPaths: [String: String],
         mountedVolumes: [VolumeInfo],
         agentRootsAggregationOnly: Bool,
         packageManagerRootsAggregationOnly: Bool,
@@ -306,13 +357,12 @@ public actor StorageAnalyzer {
         var processedEntries = 0
         var processedBytes: UInt64 = 0
         var processedBytesByVolume: [String: UInt64] = [:]
-        let resolvedRootPath = URL(fileURLWithPath: root.path, isDirectory: true)
-            .resolvingSymlinksInPath()
-            .standardizedFileURL.path
-        let volumeID = VolumePathResolver.bestMatch(
-            for: resolvedRootPath,
-            in: mountedVolumes
-        )?.id
+        var skippedEntries = 0
+        let resolvedRootPath = resolvedRootPaths[root.id]
+            ?? URL(fileURLWithPath: root.path, isDirectory: true)
+                .resolvingSymlinksInPath()
+                .standardizedFileURL
+                .path
         progress.sourceProgress(
             candidate.id,
             workID: root.id,
@@ -324,49 +374,43 @@ public actor StorageAnalyzer {
             totalWorkCount: totalRootCount
         )
         let excludedDescendantPaths = Set(candidate.roots.compactMap { other -> String? in
+            guard let otherPath = resolvedRootPaths[other.id] else { return nil }
             guard other.id != root.id,
-                  other.path.hasPrefix(root.path.hasSuffix("/") ? root.path : root.path + "/") else {
+                  otherPath.hasPrefix(resolvedRootPath.hasSuffix("/") ? resolvedRootPath : resolvedRootPath + "/") else {
                 return nil
             }
-            return String(other.path.dropFirst(root.path.count))
+            return String(otherPath.dropFirst(resolvedRootPath.count))
                 .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         })
         do {
-            if candidate.id == .go || candidate.id == .workspace
+            let aggregatesCategories = candidate.id == .go || candidate.id == .workspace
                 || candidate.id == .gradle || candidate.id == .androidSDK
                 || candidate.id == .flutter || candidate.id == .cocoaPods
                 || candidate.id == .homebrew || candidate.id == .rust
                 || candidate.id == .toolCaches
                 || (agentRootsAggregationOnly && Self.isAgentStorageSource(candidate.id))
                 || (packageManagerRootsAggregationOnly
-                    && Self.isHighCardinalityPackageManagerSource(candidate.id)) {
-                try measureDirectoryAggregate(
-                    root: root,
-                    excludingNames: root.id.hasSuffix(".module-cache") ? ["cache"] : [],
-                    excludingRelativePaths: excludedDescendantPaths,
-                    into: &ledger,
-                    processedEntries: &processedEntries,
-                    processedBytes: &processedBytes,
-                    processedBytesByVolume: &processedBytesByVolume,
-                    mountedVolumes: mountedVolumes
-                )
-            } else {
-                try measure(
-                    root: root,
-                    fileManager: FileManager(),
-                    excludedDescendantPaths: excludedDescendantPaths,
-                    into: &ledger,
-                    processedEntries: &processedEntries,
-                    processedBytes: &processedBytes,
-                    processedBytesByVolume: &processedBytesByVolume,
-                    mountedVolumes: mountedVolumes,
-                    progress: progress,
-                    workID: root.id,
-                    currentWork: root.displayName,
-                    currentWorkIndex: rootOffset + 1,
-                    totalWorkCount: totalRootCount
-                )
-            }
+                    && Self.isHighCardinalityPackageManagerSource(candidate.id))
+            try measure(
+                root: root,
+                resolvedRootPath: resolvedRootPath,
+                fileManager: FileManager(),
+                excludedDescendantPaths: excludedDescendantPaths,
+                skippedEntries: &skippedEntries,
+                aggregateClassification: aggregatesCategories
+                    ? StoragePathClassifier.classify(sourceID: root.sourceID, root: root, relativePath: "")
+                    : nil,
+                into: &ledger,
+                processedEntries: &processedEntries,
+                processedBytes: &processedBytes,
+                processedBytesByVolume: &processedBytesByVolume,
+                mountedVolumes: mountedVolumes,
+                progress: progress,
+                workID: root.id,
+                currentWork: root.displayName,
+                currentWorkIndex: rootOffset + 1,
+                totalWorkCount: totalRootCount
+            )
             progress.sourceProgress(
                 candidate.id,
                 workID: root.id,
@@ -379,9 +423,8 @@ public actor StorageAnalyzer {
             )
             return StorageRootScanOutput(
                 rootOffset: rootOffset,
-                volumeID: volumeID,
                 ledger: ledger,
-                skippedRootCount: 0,
+                skippedRootCount: skippedEntries,
                 processedEntryCount: processedEntries
             )
         } catch is CancellationError {
@@ -389,71 +432,10 @@ public actor StorageAnalyzer {
         } catch {
             return StorageRootScanOutput(
                 rootOffset: rootOffset,
-                volumeID: volumeID,
                 ledger: ledger,
-                skippedRootCount: 1,
+                skippedRootCount: skippedEntries + 1,
                 processedEntryCount: processedEntries
             )
-        }
-    }
-
-    private nonisolated static func measureDirectoryAggregate(
-        root: StorageSourceRoot,
-        excludingNames: [String],
-        excludingRelativePaths: Set<String>,
-        into ledger: inout [StoragePhysicalIdentity: StorageLedgerEntry],
-        processedEntries: inout Int,
-        processedBytes: inout UInt64,
-        processedBytesByVolume: inout [String: UInt64],
-        mountedVolumes: [VolumeInfo]
-    ) throws {
-        let rootURL = URL(fileURLWithPath: root.path, isDirectory: true)
-            .resolvingSymlinksInPath()
-            .standardizedFileURL
-        var rootStat = stat()
-        guard lstat(rootURL.path, &rootStat) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-        let allocatedBytes = try directoryAllocatedBytes(
-            at: rootURL,
-            excludingNames: excludingNames,
-            excludingRelativePaths: excludingRelativePaths
-        )
-        let classification = StoragePathClassifier.classify(
-            sourceID: root.sourceID,
-            root: root,
-            relativePath: ""
-        )
-        let identity = StoragePhysicalIdentity(
-            device: UInt64(rootStat.st_dev),
-            inode: UInt64(rootStat.st_ino)
-        )
-        let claim = StorageLedgerClaim(
-            sourceID: root.sourceID,
-            rootID: root.id,
-            rootPath: rootURL.path,
-            simulatorObjectIdentifier: nil,
-            category: classification.category,
-            risk: classification.risk,
-            isProtected: classification.isProtected,
-            modifiedAt: Date(
-                timeIntervalSince1970: TimeInterval(rootStat.st_mtimespec.tv_sec)
-            )
-        )
-        ledger[identity] = StorageLedgerEntry(
-            identity: identity,
-            allocatedBytes: allocatedBytes,
-            logicalBytes: allocatedBytes,
-            claims: [claim]
-        )
-        processedEntries += 1
-        processedBytes = processedBytes.addingClamped(allocatedBytes)
-        if let volumeID = VolumePathResolver.bestMatch(
-            for: rootURL.path,
-            in: mountedVolumes
-        )?.id {
-            processedBytesByVolume[volumeID, default: 0] =
-                processedBytesByVolume[volumeID, default: 0].addingClamped(allocatedBytes)
         }
     }
 
@@ -473,128 +455,13 @@ public actor StorageAnalyzer {
         }
     }
 
-    private nonisolated static func directoryAllocatedBytes(
-        at url: URL,
-        excludingNames: [String],
-        excludingRelativePaths: Set<String>
-    ) throws -> UInt64 {
-        let excludedComponents = excludingRelativePaths.compactMap {
-            normalizedRelativePathComponents($0)
-        } + excludingNames.map { [$0] }
-        let targets: [URL]
-        let rootDirectoryBytes: UInt64
-        if excludedComponents.isEmpty {
-            targets = [url]
-            rootDirectoryBytes = 0
-        } else {
-            let selection = try directoryAggregateSelection(
-                at: url,
-                excluding: excludedComponents,
-                fileManager: FileManager()
-            )
-            targets = selection.targets
-            rootDirectoryBytes = selection.directoryAllocatedBytes
-        }
-        guard !targets.isEmpty else { return rootDirectoryBytes }
-
-        let process = Process()
-        let output = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/du")
-        process.arguments = ["-sk", "-P"] + targets.map(\.path)
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
-        try process.run()
-        while process.isRunning {
-            if Task.isCancelled {
-                process.terminate()
-                process.waitUntilExit()
-                throw CancellationError()
-            }
-            Thread.sleep(forTimeInterval: 0.02)
-        }
-        guard process.terminationReason == .exit,
-              process.terminationStatus == 0 else {
-            throw POSIXError(.EIO)
-        }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        guard let lines = String(data: data, encoding: .utf8)?
-            .split(whereSeparator: \.isNewline),
-              lines.count == targets.count else {
-            throw POSIXError(.EIO)
-        }
-        return try lines.reduce(rootDirectoryBytes) { total, line in
-            guard let firstField = line.split(whereSeparator: \.isWhitespace).first,
-                  let blocks = UInt64(firstField) else {
-                throw POSIXError(.EIO)
-            }
-            return total.addingClamped(blocks.multipliedClamped(by: 1_024))
-        }
-    }
-
-    private nonisolated static func normalizedRelativePathComponents(
-        _ path: String
-    ) -> [String]? {
-        let components = path.split(separator: "/").map(String.init)
-        guard !components.isEmpty,
-              components.allSatisfy({ $0 != "." && $0 != ".." }) else {
-            return nil
-        }
-        return components
-    }
-
-    private nonisolated static func directoryAggregateSelection(
-        at directory: URL,
-        excluding paths: [[String]],
-        fileManager: FileManager
-    ) throws -> (targets: [URL], directoryAllocatedBytes: UInt64) {
-        var directoryStat = stat()
-        guard lstat(directory.path, &directoryStat) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-        var directoryAllocatedBytes = UInt64(max(0, directoryStat.st_blocks))
-            .multipliedClamped(by: 512)
-        let exclusionsByChild = Dictionary(grouping: paths, by: { $0[0] })
-        let children = try fileManager.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil,
-            options: []
-        )
-        var targets: [URL] = []
-        for child in children {
-            guard let exclusions = exclusionsByChild[child.lastPathComponent] else {
-                targets.append(child)
-                continue
-            }
-            if exclusions.contains(where: { $0.count == 1 }) {
-                continue
-            }
-            var childStat = stat()
-            guard lstat(child.path, &childStat) == 0 else {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-            }
-            let childType = childStat.st_mode & S_IFMT
-            guard childType == S_IFDIR else {
-                targets.append(child)
-                continue
-            }
-            let nested = try directoryAggregateSelection(
-                at: child,
-                excluding: exclusions.map { Array($0.dropFirst()) },
-                fileManager: fileManager
-            )
-            targets.append(contentsOf: nested.targets)
-            directoryAllocatedBytes = directoryAllocatedBytes.addingClamped(
-                nested.directoryAllocatedBytes
-            )
-        }
-        return (targets, directoryAllocatedBytes)
-    }
-
     private nonisolated static func measure(
         root: StorageSourceRoot,
+        resolvedRootPath: String,
         fileManager: FileManager,
         excludedDescendantPaths: Set<String>,
+        skippedEntries: inout Int,
+        aggregateClassification: StoragePathClassification?,
         into ledger: inout [StoragePhysicalIdentity: StorageLedgerEntry],
         processedEntries: inout Int,
         processedBytes: inout UInt64,
@@ -606,44 +473,43 @@ public actor StorageAnalyzer {
         currentWorkIndex: Int,
         totalWorkCount: Int
     ) throws {
-        // Resolve only the configured source root. Package managers and AI tools
-        // commonly relocate their data to another volume through a root symlink.
+        // Traverse the same canonical target used to derive exclusions, even if
+        // the configured root symlink changes while this worker is queued.
         // Descendant symlinks remain ordinary measured entries and are not followed.
-        let rootURL = URL(fileURLWithPath: root.path, isDirectory: true)
-            .resolvingSymlinksInPath()
-            .standardizedFileURL
-        let measuredVolumeID = VolumePathResolver.bestMatch(
-            for: rootURL.path,
-            in: mountedVolumes
-        )?.id
+        let rootURL = URL(fileURLWithPath: resolvedRootPath, isDirectory: true)
+        var volumeIDsByDevice: [UInt64: String] = [:]
         let rootKind = try measureEntry(
             at: rootURL,
             relativePath: "",
             root: root,
             measuredRootPath: rootURL.path,
+            aggregateClassification: aggregateClassification,
             into: &ledger,
             processedEntries: &processedEntries,
             processedBytes: &processedBytes,
             processedBytesByVolume: &processedBytesByVolume,
-            volumeID: measuredVolumeID
+            mountedVolumes: mountedVolumes,
+            volumeIDsByDevice: &volumeIDsByDevice
         )
         guard rootKind == .directory else { return }
-        var enumerationError: Error?
+        var enumerationFailures = 0
         guard let enumerator = fileManager.enumerator(
             at: rootURL,
             includingPropertiesForKeys: nil,
             options: [],
-            errorHandler: { _, error in
-                enumerationError = error
+            errorHandler: { _, _ in
+                enumerationFailures += 1
                 return true
             }
         ) else {
-            if let enumerationError { throw enumerationError }
+            skippedEntries += max(1, enumerationFailures)
             return
         }
 
+        var visitedEntries = 0
         while let url = enumerator.nextObject() as? URL {
-            if processedEntries.isMultiple(of: 128) {
+            visitedEntries += 1
+            if visitedEntries.isMultiple(of: 128) {
                 try Task.checkCancellation()
             }
             let relativePath = relativePath(from: rootURL, to: url)
@@ -651,21 +517,29 @@ public actor StorageAnalyzer {
                 enumerator.skipDescendants()
                 continue
             }
-            let entryKind = try measureEntry(
-                at: url,
-                relativePath: relativePath,
-                root: root,
-                measuredRootPath: rootURL.path,
-                into: &ledger,
-                processedEntries: &processedEntries,
-                processedBytes: &processedBytes,
-                processedBytesByVolume: &processedBytesByVolume,
-                volumeID: measuredVolumeID
-            )
-            if entryKind == .symbolicLink {
+            do {
+                let entryKind = try measureEntry(
+                    at: url,
+                    relativePath: relativePath,
+                    root: root,
+                    measuredRootPath: rootURL.path,
+                    aggregateClassification: aggregateClassification,
+                    into: &ledger,
+                    processedEntries: &processedEntries,
+                    processedBytes: &processedBytes,
+                    processedBytesByVolume: &processedBytesByVolume,
+                    mountedVolumes: mountedVolumes,
+                    volumeIDsByDevice: &volumeIDsByDevice
+                )
+                if entryKind == .symbolicLink {
+                    enumerator.skipDescendants()
+                }
+            } catch {
+                // One disappearing or unreadable entry must not hide readable siblings.
+                skippedEntries += 1
                 enumerator.skipDescendants()
             }
-            if processedEntries.isMultiple(of: 512) {
+            if visitedEntries.isMultiple(of: 512) {
                 progress.sourceProgress(
                     root.sourceID,
                     workID: workID,
@@ -678,7 +552,7 @@ public actor StorageAnalyzer {
                 )
             }
         }
-        if let enumerationError { throw enumerationError }
+        skippedEntries += enumerationFailures
         progress.sourceProgress(
             root.sourceID,
             workID: workID,
@@ -696,15 +570,25 @@ public actor StorageAnalyzer {
         relativePath: String,
         root: StorageSourceRoot,
         measuredRootPath: String,
+        aggregateClassification: StoragePathClassification?,
         into ledger: inout [StoragePhysicalIdentity: StorageLedgerEntry],
         processedEntries: inout Int,
         processedBytes: inout UInt64,
         processedBytesByVolume: inout [String: UInt64],
-        volumeID: String?
+        mountedVolumes: [VolumeInfo],
+        volumeIDsByDevice: inout [UInt64: String]
     ) throws -> StorageMeasuredEntryKind {
         var before = stat()
         guard lstat(url.path, &before) == 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        let device = UInt64(before.st_dev)
+        let volumeID: String?
+        if let cached = volumeIDsByDevice[device] {
+            volumeID = cached.isEmpty ? nil : cached
+        } else {
+            volumeID = VolumePathResolver.bestMatch(for: url.path, in: mountedVolumes)?.id
+            volumeIDsByDevice[device] = volumeID ?? ""
         }
         let kind = before.st_mode & S_IFMT
         let measuredKind: StorageMeasuredEntryKind
@@ -715,7 +599,7 @@ public actor StorageAnalyzer {
         }
         let allocated = UInt64(max(0, before.st_blocks)).multipliedClamped(by: 512)
         let logical = UInt64(max(0, before.st_size))
-        let classification = StoragePathClassifier.classify(
+        let classification = aggregateClassification ?? StoragePathClassifier.classify(
             sourceID: root.sourceID,
             root: root,
             relativePath: relativePath
@@ -739,13 +623,14 @@ public actor StorageAnalyzer {
             modifiedAt: Date(timeIntervalSince1970: TimeInterval(before.st_mtimespec.tv_sec))
         )
         if var entry = ledger[identity] {
-            entry.claims.append(claim)
+            if !entry.claims.contains(claim) { entry.claims.append(claim) }
             ledger[identity] = entry
         } else {
             ledger[identity] = StorageLedgerEntry(
                 identity: identity,
                 allocatedBytes: allocated,
                 logicalBytes: logical,
+                volumeID: volumeID,
                 claims: [claim]
             )
             processedBytes = processedBytes.addingClamped(allocated)
@@ -754,7 +639,7 @@ public actor StorageAnalyzer {
                     processedBytesByVolume[volumeID, default: 0].addingClamped(allocated)
             }
         }
-        processedEntries += 1
+        processedEntries = ledger.count
         return measuredKind
     }
 
@@ -775,35 +660,27 @@ public actor StorageAnalyzer {
         ledger: [StoragePhysicalIdentity: StorageLedgerEntry],
         skippedBySource: [StorageSourceID: Int],
         mountedVolumes: [VolumeInfo],
-        providerInventories: [StorageSourceID: DockerStorageInventory]
+        providerInventories: [StorageSourceID: DockerStorageInventory],
+        sessionID: UUID?,
+        sessionRevision: UInt64?
     ) -> StorageAnalysisSnapshot {
         var aggregates: [StorageComponentKey: StorageComponentAccumulator] = [:]
         var simulatorObjects: [SimulatorObjectKey: StorageObjectAccumulator] = [:]
         var volumeUsage: [String: [StorageSourceID: UInt64]] = [:]
-        var volumeIDByRootPath: [String: String] = [:]
-        var rootPathsWithoutVolume = Set<String>()
         var conflictBytes: UInt64 = 0
+        let rootsByID = Dictionary(candidates.flatMap(\.roots).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var blockedCleanupRootIDs = Set<String>()
 
         for entry in ledger.values {
+            let claimsByRoot = Set(entry.claims.map(\.rootID))
+            if claimsByRoot.count > 1 {
+                blockedCleanupRootIDs.formUnion(claimsByRoot)
+            }
             guard let claim = StorageClaimArbitrator.winner(for: entry.claims) else {
                 conflictBytes = conflictBytes.addingClamped(entry.allocatedBytes)
                 continue
             }
-            let volumeID: String?
-            if let cached = volumeIDByRootPath[claim.rootPath] {
-                volumeID = cached
-            } else if rootPathsWithoutVolume.contains(claim.rootPath) {
-                volumeID = nil
-            } else if let resolved = VolumePathResolver.bestMatch(
-                for: claim.rootPath,
-                in: mountedVolumes
-            )?.id {
-                volumeIDByRootPath[claim.rootPath] = resolved
-                volumeID = resolved
-            } else {
-                rootPathsWithoutVolume.insert(claim.rootPath)
-                volumeID = nil
-            }
+            let volumeID = entry.volumeID
             if let volumeID {
                 volumeUsage[volumeID, default: [:]][claim.sourceID, default: 0] =
                     volumeUsage[volumeID, default: [:]][claim.sourceID, default: 0]
@@ -817,9 +694,7 @@ public actor StorageAnalyzer {
                 isProtected: claim.isProtected
             )
             var aggregate = aggregates[key] ?? StorageComponentAccumulator(
-                rootDisplayName: candidates
-                    .first(where: { $0.id == claim.sourceID })?
-                    .roots.first(where: { $0.id == claim.rootID })?.displayName ?? claim.category
+                rootDisplayName: rootsByID[claim.rootID]?.displayName ?? claim.category
             )
             aggregate.allocatedBytes = aggregate.allocatedBytes.addingClamped(entry.allocatedBytes)
             aggregate.logicalBytes = aggregate.logicalBytes.addingClamped(entry.logicalBytes)
@@ -884,7 +759,9 @@ public actor StorageAnalyzer {
                 physicalNodes: Self.makeResourceTree(
                     candidate: candidate,
                     components: components,
-                    simulatorObjects: simulatorObjects
+                    simulatorObjects: simulatorObjects,
+                    blockedCleanupRootIDs: skipped > 0
+                        ? Set(candidate.roots.map(\.id)) : blockedCleanupRootIDs
                 ),
                 inventoryNodes: inventory?.nodes ?? []
             )
@@ -946,7 +823,10 @@ public actor StorageAnalyzer {
             conflictBytes: conflictBytes,
             measuredEntryCount: ledger.count,
             skippedEntryCount: skippedBySource.values.reduce(0, +),
-            volumes: volumes
+            volumes: volumes,
+            includesRetainedSources: session != nil,
+            accountingSessionID: sessionID,
+            accountingRevision: sessionRevision
         )
     }
 
@@ -1048,7 +928,8 @@ public actor StorageAnalyzer {
     private nonisolated static func makeResourceTree(
         candidate: StorageSourceCandidate,
         components: [StorageComponent],
-        simulatorObjects: [SimulatorObjectKey: StorageObjectAccumulator]
+        simulatorObjects: [SimulatorObjectKey: StorageObjectAccumulator],
+        blockedCleanupRootIDs: Set<String>
     ) -> [StorageResourceNode] {
         if candidate.id == .simulators {
             return makeSimulatorResourceTree(
@@ -1058,7 +939,26 @@ public actor StorageAnalyzer {
             )
         }
         let nodes = candidate.roots.compactMap {
-            makeRootResourceNode(root: $0, components: components)
+            makeRootResourceNode(
+                root: $0, components: components,
+                allowsCleanup: !blockedCleanupRootIDs.contains($0.id)
+            )
+        }
+        if candidate.id == .go,
+           let module = nodes.first(where: { $0.id == "go.module-cache" }),
+           let download = nodes.first(where: { $0.id == "go.module-download-cache" }) {
+            // go clean -modcache includes the nested download cache. Represent
+            // that scope in both the tree and the selected operation's size.
+            let combined = StorageResourceNode(
+                id: module.id, kind: module.kind, title: module.title,
+                detail: module.detail, symbol: module.symbol,
+                allocatedBytes: module.allocatedBytes.addingClamped(download.allocatedBytes),
+                logicalBytes: module.logicalBytes.addingClamped(download.logicalBytes),
+                entryCount: module.entryCount + download.entryCount,
+                risk: module.risk, evidence: module.evidence, isProtected: module.isProtected,
+                cleanupTarget: module.cleanupTarget, children: module.children + [download]
+            )
+            return nodes.filter { $0.id != module.id && $0.id != download.id } + [combined]
         }
         guard candidate.id == .workspace else { return nodes }
         return groupRepositoryNodes(nodes, roots: candidate.roots)
@@ -1215,11 +1115,12 @@ public actor StorageAnalyzer {
 
     private nonisolated static func makeRootResourceNode(
         root: StorageSourceRoot,
-        components: [StorageComponent]
+        components: [StorageComponent],
+        allowsCleanup: Bool = true
     ) -> StorageResourceNode? {
         let rootComponents = components.filter { $0.rootID == root.id }
         guard !rootComponents.isEmpty else { return nil }
-        let cleanupTarget = cleanupTarget(for: root, components: rootComponents)
+        let cleanupTarget = allowsCleanup ? cleanupTarget(for: root, components: rootComponents) : nil
         let children = rootComponents.map { component in
             StorageResourceNode(
                 id: component.id,
@@ -1298,7 +1199,7 @@ public actor StorageAnalyzer {
               (linkValue.st_mode & S_IFMT) != S_IFLNK else { return nil }
         guard let identity = pathIdentity(root.path) else { return nil }
         if let context = root.resourceContext {
-            guard context.isCleanupAllowed else { return nil }
+            guard context.isCleanupAllowed, context.identity == identity else { return nil }
             switch context.kind {
             case .repository:
                 return .trashRepository(path: root.path, identity: identity)
@@ -1512,17 +1413,15 @@ public actor StorageAnalyzer {
         let bySource = Dictionary(uniqueKeysWithValues: outputs.map { ($0.sourceID, $0) })
         var ledger: [StoragePhysicalIdentity: StorageLedgerEntry] = [:]
         var skippedBySource: [StorageSourceID: Int] = [:]
-        var processedEntries = 0
-        var processedBytes: UInt64 = 0
 
         for candidate in candidates {
             guard let output = bySource[candidate.id] else { continue }
             skippedBySource[candidate.id] = output.skippedRootCount
-            processedEntries += output.processedEntryCount
-            processedBytes = processedBytes.addingClamped(output.processedBytes)
             for (identity, entry) in output.ledger {
                 if var existing = ledger[identity] {
-                    existing.claims.append(contentsOf: entry.claims)
+                    for claim in entry.claims where !existing.claims.contains(claim) {
+                        existing.claims.append(claim)
+                    }
                     ledger[identity] = existing
                 } else {
                     ledger[identity] = entry
@@ -1532,13 +1431,111 @@ public actor StorageAnalyzer {
         return StorageMergedScanOutput(
             ledger: ledger,
             skippedBySource: skippedBySource,
-            processedEntryCount: processedEntries,
-            processedBytes: processedBytes
+            processedEntryCount: ledger.count,
+            processedBytes: ledger.values.reduce(0) { $0.addingClamped($1.allocatedBytes) }
         )
     }
 }
 
-private struct StorageSourceScanOutput: Sendable {
+/// Retains physical identities across local refreshes, so a hard link or an
+/// overlapping workspace cannot be counted again when only one source changes.
+public actor StorageAnalysisSession {
+    fileprivate struct State: Sendable {
+        let sessionID: UUID
+        let revision: UInt64
+        let candidates: [StorageSourceCandidate]
+        let outputs: [StorageSourceScanOutput]
+        let inventories: [StorageSourceID: DockerStorageInventory]
+    }
+
+    private let id = UUID()
+    private var revision: UInt64 = 0
+    private var candidatesByID: [StorageSourceID: StorageSourceCandidate] = [:]
+    private var outputsByID: [StorageSourceID: StorageSourceScanOutput] = [:]
+    private var inventoriesByID: [StorageSourceID: DockerStorageInventory] = [:]
+
+    public init() {}
+    public var isEmpty: Bool { outputsByID.isEmpty }
+
+    fileprivate func candidatesForRefresh(_ detected: [StorageSourceCandidate]) -> [StorageSourceCandidate] {
+        detected.map { candidate in
+            if candidate.id == .workspace, candidate.roots.isEmpty,
+               let retained = candidatesByID[.workspace] { return retained }
+            return candidate
+        }
+    }
+
+    fileprivate func relatedSourceIDs(
+        to sourceID: StorageSourceID,
+        detected: [StorageSourceCandidate]
+    ) -> Set<StorageSourceID> {
+        let allCandidates = candidatesByID.merging(
+            Dictionary(uniqueKeysWithValues: detected.map { ($0.id, $0) }),
+            uniquingKeysWith: { _, new in new }
+        )
+        let pathsBySource = allCandidates.mapValues { candidate in
+            candidate.roots.map { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().standardizedFileURL.path }
+        }
+        var related: Set<StorageSourceID> = [sourceID]
+        var pending = [sourceID]
+        while let current = pending.popLast() {
+            let identities = Set(outputsByID[current]?.ledger.keys.map { $0 } ?? [])
+            let paths = pathsBySource[current] ?? candidatesByID[current]?.roots.map(\.path) ?? []
+            for candidateID in Set(allCandidates.keys).subtracting(related) {
+                let overlaps = (pathsBySource[candidateID] ?? []).contains { path in
+                    paths.contains { other in
+                        VolumePathResolver.contains(path: path, in: other)
+                            || VolumePathResolver.contains(path: other, in: path)
+                    }
+                }
+                let sharesIdentities = outputsByID[candidateID]?.ledger.keys.contains {
+                    identities.contains($0)
+                } == true
+                if overlaps || sharesIdentities {
+                    related.insert(candidateID)
+                    pending.append(candidateID)
+                }
+            }
+        }
+        return related
+    }
+
+    fileprivate func commit(
+        candidates: [StorageSourceCandidate],
+        outputs: [StorageSourceScanOutput],
+        inventories: [StorageSourceID: DockerStorageInventory],
+        refreshedSourceIDs: Set<StorageSourceID>?
+    ) throws -> State {
+        try Task.checkCancellation()
+        if let refreshedSourceIDs {
+            for sourceID in refreshedSourceIDs {
+                candidatesByID.removeValue(forKey: sourceID)
+                outputsByID.removeValue(forKey: sourceID)
+                inventoriesByID.removeValue(forKey: sourceID)
+            }
+        } else {
+            // Repository discovery is on demand; retain its measured identities
+            // as well as its display result when a general refresh defers it.
+            let keepsWorkspace = !candidates.contains { $0.id == .workspace }
+            candidatesByID = keepsWorkspace ? candidatesByID.filter { $0.key == .workspace } : [:]
+            outputsByID = keepsWorkspace ? outputsByID.filter { $0.key == .workspace } : [:]
+            inventoriesByID = [:]
+        }
+        for candidate in candidates { candidatesByID[candidate.id] = candidate }
+        for output in outputs { outputsByID[output.sourceID] = output }
+        for (id, inventory) in inventories { inventoriesByID[id] = inventory }
+        revision &+= 1
+        return State(
+            sessionID: id,
+            revision: revision,
+            candidates: candidatesByID.values.sorted { $0.id.rawValue < $1.id.rawValue },
+            outputs: Array(outputsByID.values),
+            inventories: inventoriesByID
+        )
+    }
+}
+
+fileprivate struct StorageSourceScanOutput: Sendable {
     let sourceID: StorageSourceID
     let ledger: [StoragePhysicalIdentity: StorageLedgerEntry]
     let skippedRootCount: Int
@@ -1548,7 +1545,6 @@ private struct StorageSourceScanOutput: Sendable {
 
 private struct StorageRootScanOutput: Sendable {
     let rootOffset: Int
-    let volumeID: String?
     let ledger: [StoragePhysicalIdentity: StorageLedgerEntry]
     let skippedRootCount: Int
     let processedEntryCount: Int
@@ -1583,6 +1579,15 @@ private final class StorageScanProgressAccumulator: @unchecked Sendable {
         var completed: Bool
         var volumeBytes: [String: UInt64]
         var workStates: [String: WorkState]
+    }
+
+    private var sequence: UInt64 = 0
+
+    func nextSequence() -> UInt64 {
+        lock.withLock {
+            sequence &+= 1
+            return sequence
+        }
     }
 
     private var latestBySource: [StorageSourceID: SourceState] = [:]
@@ -1742,8 +1747,10 @@ private final class StorageScanProgressAccumulator: @unchecked Sendable {
                 result.entries += value.entries
                 result.bytes = result.bytes.addingClamped(value.bytes)
             }
+            sequence &+= 1
             update = StorageScanProgress(
                 phase: .measuring,
+                sequence: sequence,
                 sourceID: sourceID,
                 completedSourceCount: completedSources.count,
                 totalSourceCount: totalSourceCount,
@@ -1808,7 +1815,7 @@ private final class StorageScanProgressAccumulator: @unchecked Sendable {
     }
 }
 
-private struct StoragePhysicalIdentity: Hashable, Sendable {
+fileprivate struct StoragePhysicalIdentity: Hashable, Sendable {
     let device: UInt64
     let inode: UInt64
 }
@@ -1819,7 +1826,7 @@ private enum StorageMeasuredEntryKind: Sendable {
     case other
 }
 
-private struct StorageLedgerClaim: Sendable {
+fileprivate struct StorageLedgerClaim: Equatable, Sendable {
     let sourceID: StorageSourceID
     let rootID: String
     let rootPath: String
@@ -1830,15 +1837,23 @@ private struct StorageLedgerClaim: Sendable {
     let modifiedAt: Date
 }
 
-private struct StorageLedgerEntry: Sendable {
+fileprivate struct StorageLedgerEntry: Sendable {
     let identity: StoragePhysicalIdentity
     let allocatedBytes: UInt64
     let logicalBytes: UInt64
+    let volumeID: String?
     var claims: [StorageLedgerClaim]
 }
 
 private enum StorageClaimArbitrator {
     static func winner(for claims: [StorageLedgerClaim]) -> StorageLedgerClaim? {
+        let claims = claims.sorted { lhs, rhs in
+            if lhs.isProtected != rhs.isProtected { return lhs.isProtected }
+            if lhs.risk != rhs.risk { return lhs.risk > rhs.risk }
+            if lhs.rootPath.count != rhs.rootPath.count { return lhs.rootPath.count > rhs.rootPath.count }
+            if lhs.rootID != rhs.rootID { return lhs.rootID < rhs.rootID }
+            return lhs.category < rhs.category
+        }
         let sourceIDs = Set(claims.map(\.sourceID))
         guard sourceIDs.count > 1 else { return claims.first }
         let nonWorkspace = claims.filter { $0.sourceID != .workspace }

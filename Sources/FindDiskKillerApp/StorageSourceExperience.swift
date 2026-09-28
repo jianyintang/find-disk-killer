@@ -344,7 +344,7 @@ struct StorageSourceActivityPresentation: Equatable {
         return progress.completedCount >= total
     }
 
-    private static func agentPhaseTitle(_ progress: AgentStorageScanProgress) -> String {
+    static func agentPhaseTitle(_ progress: AgentStorageScanProgress) -> String {
         switch progress.phase {
         case .discoveringSources: L10n.text("正在定位数据位置")
         case .readingMetadata: L10n.text("正在读取聊天关系")
@@ -358,7 +358,7 @@ struct StorageSourceActivityPresentation: Equatable {
         }
     }
 
-    private static func agentWorkDetail(_ progress: AgentStorageScanProgress) -> String {
+    static func agentWorkDetail(_ progress: AgentStorageScanProgress) -> String {
         switch progress.phase {
         case .discoveringSources:
             L10n.format("已发现 %d 个数据位置", progress.completedCount)
@@ -381,6 +381,124 @@ struct StorageSourceActivityPresentation: Equatable {
         case .organizingResults:
             L10n.text("正在整理聊天、全局与未归属空间")
         }
+    }
+}
+
+/// Describes only work owned by the current scan, independently of the selected category.
+struct StorageMapAnalysisActivity: Equatable {
+    struct Row: Identifiable, Equatable {
+        let id: String
+        let title: String
+        let phaseTitle: String
+        let detail: String
+    }
+
+    let title: String
+    let summary: String?
+    let rows: [Row]
+    let isStopping: Bool
+
+    @MainActor
+    static func resolve(model: StorageMapModel, agentStorage: AgentStorageModel) -> Self? {
+        let storageRunning = model.phase == .scanning || model.phase == .stopping
+        let agentRunning = agentStorage.isScanning || !agentStorage.reanalyzingProviders.isEmpty
+        guard storageRunning || agentRunning || !model.reanalyzingSourceIDs.isEmpty else { return nil }
+
+        if model.phase == .stopping {
+            return Self(
+                title: L10n.text("正在停止"),
+                summary: L10n.text("正在结束当前分析，请稍候。"),
+                rows: [],
+                isStopping: true
+            )
+        }
+
+        var rows: [Row] = []
+        let reconciling = storageRunning
+            && (model.progress?.phase == .reconciling || model.progress?.phase == .finished)
+        if !reconciling {
+            for candidate in model.candidates {
+                guard storageRunning || model.reanalyzingSourceIDs.contains(candidate.id),
+                      let progress = model.progressBySource[candidate.id],
+                      !progress.sourceCompleted else { continue }
+                let activity = StorageSourceActivityPresentation.regular(
+                    candidate: candidate, result: nil, progress: progress, isFullScanRunning: true
+                )
+                rows.append(Row(
+                    id: "storage-" + candidate.id.rawValue,
+                    title: L10n.text(candidate.descriptor.title),
+                    phaseTitle: progress.phase == .discovering ? L10n.text("正在定位数据位置") : activity.phaseTitle,
+                    detail: [
+                        progress.phase == .discovering ? L10n.text("正在定位数据位置") : activity.phaseTitle,
+                        activity.workDetail,
+                        activity.supportingDetail
+                    ]
+                        .compactMap { $0 }.joined(separator: " · ")
+                ))
+            }
+        }
+
+        if agentRunning {
+            for provider in AgentStorageProvider.allCases where agentStorage.isAnalyzing(provider) {
+                guard let progress = agentStorage.progressByProvider[provider] else { continue }
+                // The model seeds zero-count discovery events for queued providers.
+                guard progress.phase != .discoveringSources || progress.completedCount > 0 else { continue }
+                // A provider's final event can arrive before the combined snapshot is ready.
+                if progress.phase == .organizingResults,
+                   let total = progress.totalCount, progress.completedCount >= total { continue }
+                rows.append(Row(
+                    id: "agent-" + provider.rawValue,
+                    title: provider.displayName,
+                    phaseTitle: StorageSourceActivityPresentation.agentPhaseTitle(progress),
+                    detail: [
+                        StorageSourceActivityPresentation.agentPhaseTitle(progress),
+                        StorageSourceActivityPresentation.agentWorkDetail(progress)
+                    ].joined(separator: " · ")
+                ))
+            }
+            if !rows.contains(where: { $0.id.hasPrefix("agent-") }) {
+                rows.append(Row(
+                    id: "agent-summary",
+                    title: L10n.text("AI 工具"),
+                    phaseTitle: agentStorage.progress.phase == .organizingResults
+                        ? L10n.text("正在整理空间归属")
+                        : StorageSourceActivityPresentation.agentPhaseTitle(agentStorage.progress),
+                    detail: agentStorage.progress.phase == .organizingResults
+                        ? L10n.text("正在整理空间归属")
+                        : StorageSourceActivityPresentation.agentPhaseTitle(agentStorage.progress)
+                ))
+            }
+        }
+
+        var summary: [String] = []
+        if storageRunning, let progress = model.progress {
+            if progress.totalSourceCount > 0 {
+                summary.append(L10n.format(
+                    "文件扫描：已完成 %d / %d 个来源",
+                    min(progress.completedSourceCount, progress.totalSourceCount),
+                    progress.totalSourceCount
+                ))
+            }
+            if progress.processedEntryCount > 0 {
+                summary.append(L10n.format("已检查 %d 项", progress.processedEntryCount))
+            }
+        }
+        let title: String
+        if reconciling {
+            title = L10n.text("正在核对共享占用")
+        } else if storageRunning && model.progress?.phase == .discovering {
+            title = L10n.text("正在定位数据位置")
+        } else if !storageRunning && model.reanalyzingSourceIDs.isEmpty && agentRunning {
+            title = L10n.text("正在分析 AI Agent 空间")
+        } else {
+            title = L10n.text("正在分析")
+        }
+        return Self(
+            title: title,
+            summary: summary.isEmpty ? nil : summary.joined(separator: " · "),
+            rows: rows,
+            isStopping: false
+        )
     }
 }
 

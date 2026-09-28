@@ -35,6 +35,9 @@ final class StorageMapModel {
     private(set) var reanalyzingSourceIDs: Set<StorageSourceID> = []
     private(set) var refreshErrorsBySource: [StorageSourceID: String] = [:]
     private(set) var resultRevisionsBySource: [StorageSourceID: UInt64] = [:]
+    /// Prevents an explicit stop from returning to the first-run waiting state
+    /// or starting another automatic scan when the page is entered again.
+    private var hasStartedUnifiedAnalysis = false
     private(set) var errorMessage: String?
     private(set) var hasFullDiskRepositoryAccess: Bool
 
@@ -59,6 +62,7 @@ final class StorageMapModel {
         locationRepository: AgentDataLocationRepository = .shared,
         cacheURL: URL? = StorageMapModel.defaultCacheURL
     ) {
+        let session = StorageAnalysisSession()
         let repositoryAccessCheck: RepositoryAccessCheck = {
             RepositoryAccessAuthorization.hasFullDiskAccess()
         }
@@ -92,17 +96,18 @@ final class StorageMapModel {
                     maximumConcurrentSources: 2,
                     agentRootsAggregationOnly: true,
                     packageManagerRootsAggregationOnly: true
-                )).scan(progress: progress)
+                ), session: session).scan(progress: progress)
             },
             scanSource: { sourceID, progress in
-                try await StorageAnalyzer(configuration: .init(
+                let needsBaseline = await session.isEmpty
+                return try await StorageAnalyzer(configuration: .init(
                     agentDataLocations: locationRepository.locations(),
                     includesPrivacyProtectedRepositoryLocations: repositoryAccessCheck(),
-                    discoversCodeRepositories: sourceID == .workspace,
+                    discoversCodeRepositories: sourceID == .workspace || needsBaseline,
                     maximumConcurrentSources: 2,
                     agentRootsAggregationOnly: sourceID.agentStorageProvider != nil,
                     packageManagerRootsAggregationOnly: true
-                )).scan(sourceID: sourceID, progress: progress)
+                ), session: session).scan(sourceID: sourceID, progress: progress)
             },
             locationRepository: locationRepository,
             repositoryAccessCheck: repositoryAccessCheck,
@@ -218,17 +223,17 @@ final class StorageMapModel {
                 in: volumes,
                 with: progress.volumes,
                 sourceID: sourceID,
-                preserveUnmeasuredVolumes: !progress.sourceCompleted
+                preserveUnmeasuredVolumes: false
             )
         }
         return volumes
     }
 
     func presentationAllocatedBytes(for sourceID: StorageSourceID) -> UInt64? {
-        if (phase == .scanning || phase == .stopping),
-           let progress = progressBySource[sourceID],
-           Self.hasMeasuredData(progress, sourceSpecific: true) {
-            return progress.sourceProcessedBytes
+        if let active = activeFullProgress,
+           Self.hasMeasuredData(active, sourceSpecific: false) {
+            // Do not mix previous snapshot values with the new scan's subtotal.
+            return progressBySource[sourceID]?.sourceProcessedBytes ?? 0
         }
         if reanalyzingSourceIDs.contains(sourceID),
            let progress = progressBySource[sourceID],
@@ -365,6 +370,7 @@ final class StorageMapModel {
         cancelSourceAnalyses()
         generation &+= 1
         let requestedGeneration = generation
+        hasStartedUnifiedAnalysis = true
         scanTask?.cancel()
         phase = .scanning
         progress = StorageScanProgress(
@@ -400,7 +406,7 @@ final class StorageMapModel {
                 self.progress = nil
                 self.progressBySource = [:]
                 self.scanTask = nil
-                await self.persistSnapshot(committedSnapshot)
+                if let snapshot = self.snapshot { await self.persistSnapshot(snapshot) }
                 self.drainPendingSourceRefreshes()
             } catch is CancellationError {
                 guard requestedGeneration == self.generation else { return }
@@ -424,7 +430,6 @@ final class StorageMapModel {
     func startAnalysis(sourceID: StorageSourceID) {
         guard phase != .scanning,
               phase != .stopping,
-              (snapshot?.result(for: sourceID) != nil || sourceID == .workspace),
               candidates.contains(where: { $0.id == sourceID }),
               !reanalyzingSourceIDs.contains(sourceID) else { return }
         let requestedGeneration = sourceGenerations[sourceID, default: 0] &+ 1
@@ -456,9 +461,13 @@ final class StorageMapModel {
                     partial: partial,
                     sourceID: sourceID
                 )
-                self.publishSnapshot(committedSnapshot, updatedSourceIDs: [sourceID])
+                let changedSourceIDs = Set(committedSnapshot.results.compactMap { result in
+                    self.snapshot?.result(for: result.id) == result ? nil : result.id
+                }).union([sourceID])
+                self.publishSnapshot(committedSnapshot, updatedSourceIDs: changedSourceIDs)
                 self.reanalyzingSourceIDs.remove(sourceID)
                 self.refreshErrorsBySource.removeValue(forKey: sourceID)
+                if self.refreshErrorsBySource.isEmpty { self.errorMessage = nil }
                 self.progressBySource.removeValue(forKey: sourceID)
                 self.sourceScanTasks.removeValue(forKey: sourceID)
                 if let snapshot = self.snapshot {
@@ -467,12 +476,23 @@ final class StorageMapModel {
             } catch is CancellationError {
                 self.finishSourceAnalysis(sourceID, generation: requestedGeneration)
             } catch {
+                guard !Task.isCancelled,
+                      self.sourceGenerations[sourceID] == requestedGeneration else { return }
                 self.finishSourceAnalysis(sourceID, generation: requestedGeneration)
                 let message = L10n.errorDescription(error)
                 self.errorMessage = message
                 self.refreshErrorsBySource[sourceID] = message
             }
         }
+    }
+
+    func stopAnalysis(sourceID: StorageSourceID) {
+        sourceScanTasks[sourceID]?.cancel()
+        sourceScanTasks.removeValue(forKey: sourceID)
+        sourceGenerations[sourceID, default: 0] &+= 1
+        reanalyzingSourceIDs.remove(sourceID)
+        progressBySource.removeValue(forKey: sourceID)
+        pendingSourceRefreshIDs.remove(sourceID)
     }
 
     func refreshAfterCleanup(sourceID: StorageSourceID) {
@@ -485,6 +505,21 @@ final class StorageMapModel {
         pendingSourceRefreshIDs.insert(sourceID)
         errorMessage = nil
         drainPendingSourceRefreshes()
+    }
+
+    func shouldStartInitialAnalysis(including agentStorage: AgentStorageModel) -> Bool {
+        guard phase == .ready, !hasStartedUnifiedAnalysis,
+              !candidates.isEmpty, errorMessage == nil,
+              !isFullAnalysisRunning(including: agentStorage) else { return false }
+        let hasAllSourceResults = snapshot.map { snapshot in
+            candidates.allSatisfy { candidate in
+                candidate.id == .workspace && candidate.roots.isEmpty
+                    || snapshot.result(for: candidate.id) != nil
+            }
+        } ?? false
+        let requiredProviders = Set(candidates.compactMap { $0.id.agentStorageProvider })
+        let completedProviders = Set(agentStorage.snapshot?.providers.map(\.provider) ?? [])
+        return !hasAllSourceResults || !requiredProviders.isSubset(of: completedProviders)
     }
 
     func startAnalysis(including agentStorage: AgentStorageModel) {
@@ -504,11 +539,12 @@ final class StorageMapModel {
         generation &+= 1
         let stoppingGeneration = generation
         phase = .stopping
-        scanTask?.cancel()
+        let stoppingTask = scanTask
+        stoppingTask?.cancel()
         scanTask = nil
 
         Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(160))
+            await stoppingTask?.value
             guard let self, self.generation == stoppingGeneration else { return }
             self.phase = .ready
             self.progress = nil
@@ -529,12 +565,16 @@ final class StorageMapModel {
     }
 
     func retryDetection() {
+        cancelSourceAnalyses()
+        progress = nil
+        progressBySource = [:]
         generation &+= 1
         preparationTask?.cancel()
         preparationTask = nil
         scanTask?.cancel()
         scanTask = nil
         phase = .idle
+        hasStartedUnifiedAnalysis = false
         candidates = []
         pendingSourceRefreshIDs = []
         refreshErrorsBySource = [:]
@@ -579,6 +619,7 @@ final class StorageMapModel {
         refreshErrorsBySource = [:]
         candidates = []
         phase = .idle
+        hasStartedUnifiedAnalysis = false
         cacheRevision &+= 1
         let revision = cacheRevision
         let cacheWriter = snapshotCacheWriter
@@ -618,14 +659,25 @@ final class StorageMapModel {
     ) {
         guard sourceGenerations[sourceID] == generation,
               reanalyzingSourceIDs.contains(sourceID) else { return }
-        let current = progressBySource[sourceID]
-        if current == nil
-            || Self.progressPhaseOrder(update.phase) > Self.progressPhaseOrder(current!.phase)
-            || (update.phase == current!.phase
-                && update.sourceProcessedEntryCount >= current!.sourceProcessedEntryCount
-                && update.sourceProcessedBytes >= current!.sourceProcessedBytes) {
+        // Whole-session reconciliation contains all sources. Only completed
+        // updates with this source's counters may replace its live measurement.
+        guard update.sourceID == sourceID || update.sequence == 0 else { return }
+        if Self.isNewerSourceProgress(update, than: progressBySource[sourceID]) {
             progressBySource[sourceID] = update
         }
+    }
+
+    private static func isNewerSourceProgress(
+        _ update: StorageScanProgress, than current: StorageScanProgress?
+    ) -> Bool {
+        guard let current else { return true }
+        if update.sequence > 0, current.sequence > 0 { return update.sequence > current.sequence }
+        if update.phase != current.phase {
+            return progressPhaseOrder(update.phase) > progressPhaseOrder(current.phase)
+        }
+        if update.sourceCompleted != current.sourceCompleted { return update.sourceCompleted }
+        return update.sourceProcessedEntryCount >= current.sourceProcessedEntryCount
+            && update.sourceProcessedBytes >= current.sourceProcessedBytes
     }
 
     private func finishSourceAnalysis(_ sourceID: StorageSourceID, generation: UInt64) {
@@ -639,6 +691,7 @@ final class StorageMapModel {
         for task in sourceScanTasks.values { task.cancel() }
         sourceScanTasks = [:]
         reanalyzingSourceIDs = []
+        progressBySource = [:]
         sourceGenerations = sourceGenerations.mapValues { $0 &+ 1 }
     }
 
@@ -656,7 +709,21 @@ final class StorageMapModel {
         _ newSnapshot: StorageAnalysisSnapshot?,
         updatedSourceIDs: Set<StorageSourceID>
     ) {
+        if let newSnapshot, let snapshot,
+           let sessionID = newSnapshot.accountingSessionID,
+           sessionID == snapshot.accountingSessionID,
+           let revision = newSnapshot.accountingRevision,
+           let currentRevision = snapshot.accountingRevision,
+           revision < currentRevision { return }
         snapshot = newSnapshot
+        if let newSnapshot, newSnapshot.includesRetainedSources {
+            let resultsByID = Dictionary(uniqueKeysWithValues: newSnapshot.results.map { ($0.id, $0) })
+            candidates.removeAll { resultsByID[$0.id] == nil && $0.id != .workspace }
+            let existingIDs = Set(candidates.map(\.id))
+            for result in newSnapshot.results where !existingIDs.contains(result.id) {
+                candidates.append(StorageSourceCandidate(descriptor: result.descriptor, roots: []))
+            }
+        }
         for sourceID in updatedSourceIDs {
             resultRevisionsBySource[sourceID, default: 0] &+= 1
         }
@@ -667,7 +734,7 @@ final class StorageMapModel {
         partial: StorageAnalysisSnapshot,
         sourceID: StorageSourceID
     ) -> StorageAnalysisSnapshot {
-        guard let previous else { return partial }
+        guard !partial.includesRetainedSources, let previous else { return partial }
         let replacement = partial.result(for: sourceID)
         var results = previous.results.filter { $0.id != sourceID }
         if let replacement { results.append(replacement) }
@@ -715,7 +782,8 @@ final class StorageMapModel {
         replacement: StorageAnalysisSnapshot,
         candidates: [StorageSourceCandidate]
     ) -> StorageAnalysisSnapshot {
-        guard candidates.contains(where: { $0.id == .workspace && $0.roots.isEmpty }),
+        guard !replacement.includesRetainedSources,
+              candidates.contains(where: { $0.id == .workspace && $0.roots.isEmpty }),
               replacement.result(for: .workspace) == nil,
               let previous,
               let workspaceResult = previous.result(for: .workspace) else {
@@ -774,16 +842,21 @@ final class StorageMapModel {
     private func accept(_ update: StorageScanProgress, generation: UInt64) {
         guard generation == self.generation, phase == .scanning else { return }
         if let sourceID = update.sourceID {
-            let currentSource = progressBySource[sourceID]
-            if currentSource == nil
-                || Self.progressPhaseOrder(update.phase) > Self.progressPhaseOrder(currentSource!.phase)
-                || (update.phase == currentSource!.phase
-                    && update.sourceProcessedEntryCount >= currentSource!.sourceProcessedEntryCount
-                    && update.sourceProcessedBytes >= currentSource!.sourceProcessedBytes) {
+            if Self.isNewerSourceProgress(update, than: progressBySource[sourceID]) {
                 progressBySource[sourceID] = update
             }
         }
         guard let current = progress else {
+            progress = update
+            return
+        }
+        if update.sequence > 0, current.sequence > 0 {
+            guard update.sequence > current.sequence else { return }
+            progress = update
+            return
+        }
+        if Self.progressPhaseOrder(update.phase) > Self.progressPhaseOrder(current.phase)
+            || update.sourceCompleted {
             progress = update
             return
         }
@@ -792,6 +865,7 @@ final class StorageMapModel {
         guard updatePhase >= currentPhase else { return }
         progress = StorageScanProgress(
             phase: update.phase,
+            sequence: update.sequence,
             sourceID: update.sourceID ?? current.sourceID,
             completedSourceCount: max(
                 current.completedSourceCount,
@@ -924,7 +998,7 @@ final class StorageMapModel {
     nonisolated private static var defaultCacheURL: URL? {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
             .appending(path: "FindDiskKiller", directoryHint: .isDirectory)
-            .appending(path: "storage-map-v10.json", directoryHint: .notDirectory)
+            .appending(path: "storage-map-v11.json", directoryHint: .notDirectory)
     }
 
     nonisolated private static func loadSnapshot(from url: URL?) async -> StorageAnalysisSnapshot? {

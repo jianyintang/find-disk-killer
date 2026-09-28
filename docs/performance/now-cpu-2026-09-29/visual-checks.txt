@@ -1,0 +1,8 @@
+wide-dark: plots=1, grids=1, plotBounds=(0.0, 0.0, 617.0, 237.0)
+wide-light: plots=1, grids=1, plotBounds=(0.0, 0.0, 617.0, 237.0)
+narrow-dark: plots=1, grids=1, plotBounds=(0.0, 0.0, 594.0, 237.0)
+breakpoint-light: plots=1, grids=1, plotBounds=(0.0, 0.0, 679.0, 237.0)
+presentation translation during sweep: 25.931413279473784
+clipped predecessor path begins at x=-30.3
+simulated visible-window update: 97 native layers animating; visible=true
+low effects: native animations cleared

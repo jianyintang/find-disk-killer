@@ -1,4 +1,5 @@
 import Charts
+import Accessibility
 import FindDiskKillerCore
 import Observation
 import SwiftUI
@@ -7,6 +8,7 @@ import SwiftUI
 /// screen (occluded, minimized or on another Space). Rendering work — and the
 /// system-wide compositing cost of the sweep — only matters when the user can
 /// actually see it, so background updates switch to instant replacements.
+@MainActor
 private enum ChartAnimationGate {
     static var hasVisibleWindow: Bool {
         NSApp.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) }
@@ -254,6 +256,245 @@ func warningThroughputSegments(
     return segments
 }
 
+struct LayerPlotPoint: Equatable {
+    let date: Date
+    let value: Double?
+    let segment: Int
+}
+
+struct LayerPlotSeries: Equatable {
+    let points: [LayerPlotPoint]
+    let color: Color
+    let fillOpacity: Double
+    var baseline: Double = 0
+}
+
+private func diskPlotSeries(
+    points: [ThroughputPoint], warningSegments: [WarningThroughputSegment],
+    warningThreshold: Double?, fills: Bool
+) -> [LayerPlotSeries] {
+    var result = [
+        LayerPlotSeries(points: points.map { .init(date: $0.timestamp, value: $0.readBytesPerSecond, segment: $0.segment) },
+                        color: InstrumentDesign.ColorRole.diskRead, fillOpacity: fills ? 0.12 : 0),
+        LayerPlotSeries(points: points.map { .init(date: $0.timestamp, value: $0.writeBytesPerSecond, segment: $0.segment) },
+                        color: InstrumentDesign.ColorRole.diskWrite, fillOpacity: fills ? 0.12 : 0)
+    ]
+    if let warningThreshold {
+        let warningPoints = warningSegments.enumerated().flatMap { index, segment in
+            segment.points.map { LayerPlotPoint(date: $0.timestamp, value: $0.value, segment: index) }
+        }
+        result.append(LayerPlotSeries(points: warningPoints, color: InstrumentDesign.ColorRole.warning,
+                                      fillOpacity: fills ? 0.10 : 0, baseline: warningThreshold))
+    }
+    return result
+}
+
+/// Segments remain separate across missing observations; no interpolated sample is invented.
+func layerPlotSegments(_ points: [LayerPlotPoint]) -> [[LayerPlotPoint]] {
+    var result: [[LayerPlotPoint]] = []
+    var current: [LayerPlotPoint] = []
+    for point in points {
+        guard let value = point.value, value.isFinite else {
+            if !current.isEmpty { result.append(current); current = [] }
+            continue
+        }
+        if let last = current.last, last.segment != point.segment || last.date >= point.date {
+            result.append(current)
+            current = []
+        }
+        current.append(point)
+    }
+    if !current.isEmpty { result.append(current) }
+    return result
+}
+
+/// Retain one real predecessor for clipping at the moving left edge. Never bridge a gap.
+func layerPlotPredecessor(previous: [LayerPlotPoint], next: [LayerPlotPoint]) -> LayerPlotPoint? {
+    guard let first = next.first,
+          let previousIndex = previous.lastIndex(where: { $0.date < first.date }),
+          previousIndex + 1 < previous.count,
+          previous[previousIndex + 1] == first else { return nil }
+    let predecessor = previous[previousIndex]
+    guard predecessor.segment == first.segment,
+          predecessor.value?.isFinite == true,
+          first.value?.isFinite == true else { return nil }
+    return predecessor
+}
+
+/// Charts owns axes, hover and accessibility. Core Animation owns only the
+/// sampled paths, so a smooth sweep does not relayout every chart mark per frame.
+private struct LayerTimeSeriesPlot: NSViewRepresentable {
+    let series: [LayerPlotSeries]
+    let domain: ClosedRange<Date>
+    let yOrigin: CGFloat
+    let yScale: CGFloat
+    let latestTimestamp: Date?
+    let animates: Bool
+
+    func makeNSView(context: Context) -> LayerTimeSeriesView { LayerTimeSeriesView() }
+
+    func updateNSView(_ view: LayerTimeSeriesView, context: Context) {
+        view.update(series: series, domain: domain, yOrigin: yOrigin, yScale: yScale,
+                    latestTimestamp: latestTimestamp, animates: animates)
+    }
+}
+
+private struct DiskPlotAccessibility: AXChartDescriptorRepresentable {
+    let points: [ThroughputPoint]
+    let domain: ClosedRange<Date>
+    let maximum: Double
+
+    func makeChartDescriptor() -> AXChartDescriptor {
+        let x = AXNumericDataAxisDescriptor(
+            title: L10n.text("时间"),
+            range: domain.lowerBound.timeIntervalSince1970...domain.upperBound.timeIntervalSince1970,
+            gridlinePositions: []
+        ) { L10n.date(Date(timeIntervalSince1970: $0), date: .omitted, time: .standard) }
+        let y = AXNumericDataAxisDescriptor(title: L10n.text("磁盘 I/O"), range: 0...maximum,
+                                            gridlinePositions: [], valueDescriptionProvider: ByteRateFormatter.rate)
+        let series = [(L10n.text("读取"), \ThroughputPoint.readBytesPerSecond),
+                      (L10n.text("写入"), \ThroughputPoint.writeBytesPerSecond)].flatMap { name, keyPath in
+            layerPlotSegments(points.map { .init(date: $0.timestamp, value: $0[keyPath: keyPath], segment: $0.segment) })
+                .map { segment in
+                    AXDataSeriesDescriptor(name: name, isContinuous: true, dataPoints: segment.compactMap { point in
+                        point.value.map { AXDataPoint(x: point.date.timeIntervalSince1970, y: $0) }
+                    })
+                }
+        }
+        return AXChartDescriptor(title: L10n.text("磁盘吞吐趋势"), xAxis: x, yAxis: y, series: series)
+    }
+
+    func updateChartDescriptor(_ descriptor: AXChartDescriptor) {
+        let updated = makeChartDescriptor()
+        descriptor.title = updated.title
+        descriptor.xAxis = updated.xAxis
+        descriptor.yAxis = updated.yAxis
+        descriptor.series = updated.series
+    }
+}
+
+private final class LayerTimeSeriesView: NSView {
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    private let traces = CALayer()
+    private var series: [LayerPlotSeries] = []
+    private var predecessors: [LayerPlotPoint?] = []
+    private var domain: ClosedRange<Date> = Date.distantPast...Date.distantFuture
+    private var yOrigin: CGFloat = 0
+    private var yScale: CGFloat = 1
+    private var latestTimestamp: Date?
+    private var renderedSize = CGSize.zero
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        layer?.addSublayer(traces)
+        setAccessibilityElement(false)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func update(series: [LayerPlotSeries], domain: ClosedRange<Date>, yOrigin: CGFloat,
+                yScale: CGFloat, latestTimestamp: Date?, animates: Bool) {
+        if !animates { traces.removeAllAnimations() }
+        guard self.series != series || self.domain != domain || self.yOrigin != yOrigin
+                || self.yScale != yScale || renderedSize != bounds.size else { return }
+        let previousDomain = self.domain
+        let previousTimestamp = self.latestTimestamp
+        let sameSize = renderedSize == bounds.size
+        if self.series != series {
+            predecessors = zip(self.series, series).map {
+                layerPlotPredecessor(previous: $0.points, next: $1.points)
+            }
+        }
+        self.series = series
+        self.domain = domain
+        self.yOrigin = yOrigin
+        self.yScale = yScale
+        self.latestTimestamp = latestTimestamp
+        render()
+
+        let duration = domain.upperBound.timeIntervalSince(domain.lowerBound)
+        let shift = domain.lowerBound.timeIntervalSince(previousDomain.lowerBound)
+        // Range changes, resize, hidden windows and Reduce Motion use one immediate commit.
+        if animates, sameSize, window?.occlusionState.contains(.visible) == true,
+           let previousTimestamp, let latestTimestamp, latestTimestamp > previousTimestamp,
+           abs(duration - previousDomain.upperBound.timeIntervalSince(previousDomain.lowerBound)) < 0.001,
+           shift > 0, shift < duration / 2 {
+            let sweep = CABasicAnimation(keyPath: "transform.translation.x")
+            sweep.fromValue = bounds.width * shift / duration
+            sweep.toValue = 0
+            sweep.duration = InstrumentDesign.Motion.sampleTransitionDuration
+            sweep.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            traces.add(sweep, forKey: "sample-sweep")
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        if renderedSize != bounds.size { render() }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        render()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        render()
+    }
+
+    private func render() {
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        renderedSize = bounds.size
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        traces.removeAllAnimations()
+        traces.frame = bounds
+        while (traces.sublayers?.count ?? 0) < series.count * 2 { traces.addSublayer(CAShapeLayer()) }
+        while (traces.sublayers?.count ?? 0) > series.count * 2 { traces.sublayers?.last?.removeFromSuperlayer() }
+        let duration = max(domain.upperBound.timeIntervalSince(domain.lowerBound), 1)
+        func position(_ point: LayerPlotPoint) -> CGPoint {
+            CGPoint(x: bounds.width * point.date.timeIntervalSince(domain.lowerBound) / duration,
+                    y: yOrigin + (point.value ?? 0) * yScale)
+        }
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            for (index, series) in series.enumerated() {
+                let line = CGMutablePath(), area = CGMutablePath()
+                let predecessor = predecessors.indices.contains(index) ? predecessors[index] : nil
+                let drawingPoints = predecessor.map { [$0] + series.points } ?? series.points
+                for segment in layerPlotSegments(drawingPoints) {
+                    guard let first = segment.first, let last = segment.last else { continue }
+                    line.move(to: position(first))
+                    area.move(to: position(first))
+                    for point in segment.dropFirst() {
+                        line.addLine(to: position(point))
+                        area.addLine(to: position(point))
+                    }
+                    area.addLine(to: CGPoint(x: position(last).x, y: yOrigin + series.baseline * yScale))
+                    area.addLine(to: CGPoint(x: position(first).x, y: yOrigin + series.baseline * yScale))
+                    area.closeSubpath()
+                }
+                let color = NSColor(series.color).cgColor
+                let fillLayer = traces.sublayers![index * 2] as! CAShapeLayer
+                fillLayer.contentsScale = window?.backingScaleFactor ?? 2
+                fillLayer.path = area
+                fillLayer.fillColor = color.copy(alpha: series.fillOpacity)
+                let lineLayer = traces.sublayers![index * 2 + 1] as! CAShapeLayer
+                lineLayer.contentsScale = window?.backingScaleFactor ?? 2
+                lineLayer.path = line
+                lineLayer.fillColor = nil
+                lineLayer.strokeColor = color
+                lineLayer.lineWidth = InstrumentDesign.Stroke.chart
+                lineLayer.lineJoin = .round
+            }
+        }
+        CATransaction.commit()
+    }
+}
+
 struct MonitorChart: View {
     let points: [ThroughputPoint]
     var height: CGFloat = 210
@@ -283,7 +524,13 @@ struct MonitorChart: View {
     }
 
     var body: some View {
-        let selectedTimestamp = selectedPoint?.timestamp
+        // Resolve constant chart labels once per update, not once per mark.
+        // Body evaluation keeps runtime language changes reflected here.
+        let timeLabel = L10n.text("时间")
+        let readLabel = L10n.text("读取")
+        let writeLabel = L10n.text("写入")
+        let selectedTimeLabel = L10n.text("选中时间")
+        let warningLabel = L10n.text("警告阈值")
         let chartPoints = timeline.renderedPoints
         let warningSegments = warningThroughputSegments(
             samples: chartPoints.map {
@@ -295,100 +542,30 @@ struct MonitorChart: View {
             },
             threshold: warningThreshold ?? .greatestFiniteMagnitude
         )
+        let traces = diskPlotSeries(points: chartPoints, warningSegments: warningSegments,
+                                    warningThreshold: warningThreshold, fills: visualEffectLevel.usesChartFills)
+        let maximum = max(1, warningThreshold ?? 0,
+                          chartPoints.reduce(0) { max($0, $1.readBytesPerSecond ?? 0, $1.writeBytesPerSecond ?? 0) })
         Chart {
-            ForEach(chartPoints) { point in
+            PointMark(x: .value(timeLabel, timeline.domain.lowerBound), y: .value(readLabel, 0))
+                .foregroundStyle(.clear).symbolSize(0)
+            PointMark(x: .value(timeLabel, timeline.domain.upperBound), y: .value(writeLabel, maximum))
+                .foregroundStyle(.clear).symbolSize(0)
+            if let point = selectedPoint {
+                RuleMark(x: .value(selectedTimeLabel, point.timestamp))
+                    .foregroundStyle(.secondary.opacity(0.55))
+                    .lineStyle(StrokeStyle(lineWidth: 1))
                 if let read = point.readBytesPerSecond {
-                if visualEffectLevel.usesChartFills {
-                    AreaMark(
-                        x: .value(L10n.text("时间"), point.timestamp),
-                        yStart: .value(L10n.text("读取"), 0),
-                        yEnd: .value(L10n.text("读取"), read),
-                        series: .value(L10n.text("系列"), "read-area-\(point.segment)")
-                    )
-                    .foregroundStyle(InstrumentDesign.ColorRole.diskRead.opacity(0.12))
-                    .interpolationMethod(.linear)
+                    PointMark(x: .value(timeLabel, point.timestamp), y: .value(readLabel, read))
+                        .foregroundStyle(InstrumentDesign.ColorRole.diskRead)
                 }
-                LineMark(
-                    x: .value(L10n.text("时间"), point.timestamp),
-                    y: .value(L10n.text("读取"), read),
-                    series: .value(L10n.text("系列"), "read-\(point.segment)")
-                )
-                .foregroundStyle(InstrumentDesign.ColorRole.diskRead)
-                .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
-                .interpolationMethod(.linear)
-                }
-
                 if let write = point.writeBytesPerSecond {
-                if visualEffectLevel.usesChartFills {
-                    AreaMark(
-                        x: .value(L10n.text("时间"), point.timestamp),
-                        yStart: .value(L10n.text("写入"), 0),
-                        yEnd: .value(L10n.text("写入"), write),
-                        series: .value(
-                            L10n.text("系列"),
-                            "write-area-\(point.segment)"
-                        )
-                    )
-                    .foregroundStyle(InstrumentDesign.ColorRole.diskWrite.opacity(0.12))
-                    .interpolationMethod(.linear)
-                }
-                LineMark(
-                    x: .value(L10n.text("时间"), point.timestamp),
-                    y: .value(L10n.text("写入"), write),
-                    series: .value(
-                        L10n.text("系列"),
-                        "write-\(point.segment)"
-                    )
-                )
-                .foregroundStyle(InstrumentDesign.ColorRole.diskWrite)
-                .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
-                .interpolationMethod(.linear)
-                }
-
-                if selectedTimestamp == point.timestamp {
-                    RuleMark(x: .value(L10n.text("选中时间"), point.timestamp))
-                        .foregroundStyle(.secondary.opacity(0.55))
-                        .lineStyle(StrokeStyle(lineWidth: 1))
-                    if let read = point.readBytesPerSecond {
-                        PointMark(x: .value(L10n.text("时间"), point.timestamp), y: .value(L10n.text("读取"), read))
-                            .foregroundStyle(InstrumentDesign.ColorRole.diskRead)
-                    }
-                    if let write = point.writeBytesPerSecond {
-                        PointMark(x: .value(L10n.text("时间"), point.timestamp), y: .value(L10n.text("写入"), write))
-                            .foregroundStyle(
-                                isWarning(write)
-                                    ? InstrumentDesign.ColorRole.warning
-                                    : InstrumentDesign.ColorRole.diskWrite
-                            )
-                    }
+                    PointMark(x: .value(timeLabel, point.timestamp), y: .value(writeLabel, write))
+                        .foregroundStyle(isWarning(write) ? InstrumentDesign.ColorRole.warning : InstrumentDesign.ColorRole.diskWrite)
                 }
             }
-
             if let warningThreshold {
-                ForEach(warningSegments) { segment in
-                    ForEach(segment.points) { point in
-                        if visualEffectLevel.usesChartFills {
-                            AreaMark(
-                                x: .value(L10n.text("时间"), point.timestamp),
-                                yStart: .value(L10n.text("警告阈值"), warningThreshold),
-                                yEnd: .value(L10n.text("写入"), point.value),
-                                series: .value(L10n.text("系列"), "warning-area-\(segment.id)")
-                            )
-                            .foregroundStyle(InstrumentDesign.ColorRole.warning.opacity(0.10))
-                            .interpolationMethod(.linear)
-                        }
-                        LineMark(
-                            x: .value(L10n.text("时间"), point.timestamp),
-                            y: .value(L10n.text("写入"), point.value),
-                            series: .value(L10n.text("系列"), "warning-\(segment.id)")
-                        )
-                        .foregroundStyle(InstrumentDesign.ColorRole.warning)
-                        .lineStyle(StrokeStyle(lineWidth: InstrumentDesign.Stroke.chart))
-                        .interpolationMethod(.linear)
-                    }
-                }
-
-                RuleMark(y: .value(L10n.text("警告阈值"), warningThreshold))
+                RuleMark(y: .value(warningLabel, warningThreshold))
                     .foregroundStyle(InstrumentDesign.ColorRole.warning.opacity(0.58))
                     .lineStyle(StrokeStyle(lineWidth: 0.75, dash: [5, 4]))
                     .annotation(position: .top, alignment: .trailing) {
@@ -424,26 +601,41 @@ struct MonitorChart: View {
         .chartPlotStyle { plotArea in
             plotArea.background(Color.primary.opacity(0.012))
         }
+        .chartBackground { proxy in
+            GeometryReader { geometry in
+                if let anchor = proxy.plotFrame,
+                   let zeroY = proxy.position(forY: Double(0)),
+                   let maximumY = proxy.position(forY: maximum) {
+                    let frame = geometry[anchor]
+                    LayerTimeSeriesPlot(
+                        series: traces, domain: timeline.domain,
+                        yOrigin: zeroY, yScale: (maximumY - zeroY) / maximum,
+                        latestTimestamp: chartPoints.last?.timestamp,
+                        animates: hoverDate == nil && !reduceMotion && !visualEffectLevel.disablesMotion
+                    )
+                    .frame(width: frame.width, height: frame.height)
+                    .position(x: frame.midX, y: frame.midY)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                }
+            }
+        }
         .chartHoverSelection($hoverDate, location: $hoverLocation)
         .frame(height: height)
-        .drawingGroup()
         .onChange(of: TimelineUpdateKey(
             timestamps: points.map(\.timestamp),
             windowDuration: windowDuration
         )) { _, _ in
-            let suppressSweep = reduceMotion
-                || visualEffectLevel.disablesMotion
-                || !ChartAnimationGate.hasVisibleWindow
-               
             timeline.update(
                 with: points,
-                reduceMotion: suppressSweep,
+                reduceMotion: true,
                 windowDuration: windowDuration
             )
         }
         .onDisappear { timeline.cancelTransition() }
         .accessibilityLabel(L10n.text("磁盘吞吐趋势"))
         .accessibilityValue(accessibilitySummary)
+        .accessibilityChartDescriptor(DiskPlotAccessibility(points: chartPoints, domain: timeline.domain, maximum: maximum))
         .overlay {
             if points.count < 2 {
                 ContentUnavailableView(
@@ -459,8 +651,8 @@ struct MonitorChart: View {
                     location: hoverLocation,
                     date: point.timestamp,
                     rows: [
-                        (L10n.text("读取"), rateOrUnavailable(point.readBytesPerSecond), InstrumentDesign.ColorRole.diskRead),
-                        (L10n.text("写入"), rateOrUnavailable(point.writeBytesPerSecond), InstrumentDesign.ColorRole.diskWrite)
+                        (readLabel, rateOrUnavailable(point.readBytesPerSecond), InstrumentDesign.ColorRole.diskRead),
+                        (writeLabel, rateOrUnavailable(point.writeBytesPerSecond), InstrumentDesign.ColorRole.diskWrite)
                     ]
                 )
             }

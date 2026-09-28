@@ -2688,7 +2688,7 @@ private struct AgentStorageScanEngine {
         category: AgentStorageArtifactCategory,
         path: String
     ) {
-        guard var family = families[familyID], var node = family.nodes[nodeID] else {
+        guard families[familyID]?.nodes[nodeID] != nil else {
             let provider = entry.claims.first?.provider ?? .codex
             addUnattributed(
                 provider: provider,
@@ -2698,17 +2698,22 @@ private struct AgentStorageScanEngine {
             )
             return
         }
-        node.allocatedBytes = node.allocatedBytes.addingClamped(entry.allocatedBytes)
-        node.artifactCount += 1
-        node.path = node.path ?? path
-        if let artifact = cleanupArtifact(for: entry, path: path, category: category) {
-            node.cleanupArtifacts.append(artifact)
+        let artifact = cleanupArtifact(for: entry, path: path, category: category)
+        // Borrow each dictionary value once. Copying it out before appending
+        // would copy the growing artifact array on every physical entry.
+        func accumulateNode(_ node: inout MutableNode) {
+            node.allocatedBytes = node.allocatedBytes.addingClamped(entry.allocatedBytes)
+            node.artifactCount += 1
+            node.path = node.path ?? path
+            if let artifact { node.cleanupArtifacts.append(artifact) }
         }
-        family.nodes[nodeID] = node
-        family.artifactCount += 1
-        family.composition[category, default: 0] = family.composition[category, default: 0]
-            .addingClamped(entry.allocatedBytes)
-        families[familyID] = family
+        func accumulateFamily(_ family: inout MutableFamily) {
+            accumulateNode(&family.nodes[nodeID]!)
+            family.artifactCount += 1
+            family.composition[category, default: 0] = family.composition[category, default: 0]
+                .addingClamped(entry.allocatedBytes)
+        }
+        accumulateFamily(&families[familyID]!)
     }
 
     private mutating func addToFamilyOther(
@@ -2717,7 +2722,7 @@ private struct AgentStorageScanEngine {
         category: AgentStorageArtifactCategory,
         path: String
     ) {
-        guard var family = families[familyID] else {
+        guard families[familyID] != nil else {
             let provider = entry.claims.first?.provider ?? .claude
             addUnattributed(
                 provider: provider,
@@ -2727,16 +2732,17 @@ private struct AgentStorageScanEngine {
             )
             return
         }
-        family.familyOtherAllocatedBytes = family.familyOtherAllocatedBytes
-            .addingClamped(entry.allocatedBytes)
-        family.artifactCount += 1
-        family.path = family.path ?? path
-        if let artifact = cleanupArtifact(for: entry, path: path, category: category) {
-            family.cleanupArtifacts.append(artifact)
+        let artifact = cleanupArtifact(for: entry, path: path, category: category)
+        func accumulate(_ family: inout MutableFamily) {
+            family.familyOtherAllocatedBytes = family.familyOtherAllocatedBytes
+                .addingClamped(entry.allocatedBytes)
+            family.artifactCount += 1
+            family.path = family.path ?? path
+            if let artifact { family.cleanupArtifacts.append(artifact) }
+            family.composition[category, default: 0] = family.composition[category, default: 0]
+                .addingClamped(entry.allocatedBytes)
         }
-        family.composition[category, default: 0] = family.composition[category, default: 0]
-            .addingClamped(entry.allocatedBytes)
-        families[familyID] = family
+        accumulate(&families[familyID]!)
     }
 
     private func cleanupArtifact(

@@ -1,0 +1,74 @@
+[
+  {
+    "run": "controlled-baseline",
+    "phase": "before",
+    "bounds": {
+      "Height": 879.0,
+      "Width": 1174.0,
+      "X": 661.0,
+      "Y": 207.0
+    },
+    "onscreen": true,
+    "scroll_top": true
+  },
+  {
+    "run": "controlled-baseline",
+    "phase": "after",
+    "bounds": {
+      "Height": 879.0,
+      "Width": 1174.0,
+      "X": 661.0,
+      "Y": 207.0
+    },
+    "onscreen": true,
+    "scroll_top": true
+  },
+  {
+    "run": "controlled-final",
+    "phase": "before",
+    "bounds": {
+      "Height": 879.0,
+      "Width": 1174.0,
+      "X": 2916.0,
+      "Y": 264.0
+    },
+    "onscreen": true,
+    "scroll_top": true
+  },
+  {
+    "run": "controlled-final",
+    "phase": "after",
+    "bounds": {
+      "Height": 879.0,
+      "Width": 1174.0,
+      "X": 2916.0,
+      "Y": 264.0
+    },
+    "onscreen": false,
+    "scroll_top": false
+  },
+  {
+    "run": "final-front-verified",
+    "phase": "before",
+    "bounds": {
+      "Height": 879.0,
+      "Width": 1174.0,
+      "X": 2916.0,
+      "Y": 264.0
+    },
+    "onscreen": true,
+    "scroll_top": true
+  },
+  {
+    "run": "final-front-verified",
+    "phase": "after",
+    "bounds": {
+      "Height": 879.0,
+      "Width": 1174.0,
+      "X": 2916.0,
+      "Y": 264.0
+    },
+    "onscreen": true,
+    "scroll_top": true
+  }
+]

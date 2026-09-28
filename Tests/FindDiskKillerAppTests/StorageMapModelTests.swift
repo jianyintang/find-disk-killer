@@ -1002,24 +1002,51 @@ import Testing
     #expect(detail.contains("refreshRepositoryAuthorization"))
 }
 
-@Test func storageMapStartsItsUnifiedInitialAnalysisAfterDetection() throws {
-    let testsURL = URL(fileURLWithPath: #filePath)
-    let repositoryRoot = testsURL
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-    let sourceURL = repositoryRoot
-        .appendingPathComponent("Sources/FindDiskKillerApp/Views/StorageMapView.swift")
-    let source = try String(contentsOf: sourceURL, encoding: .utf8)
-    let taskBody = try #require(
-        source.split(separator: ".task {", maxSplits: 1).last?
-            .split(separator: ".onChange", maxSplits: 1).first
+@MainActor
+@Test(arguments: [false, true])
+func storageMapStoppedInitialAnalysisRemainsRestartableWithoutReturningToDiscovery(
+    completesStorage: Bool
+) async throws {
+    let storageProbe = StorageMapScanProbe()
+    let agentProbe = UnifiedAgentStorageScanProbe()
+    let candidate = storageMapAgentCandidate()
+    let model = StorageMapModel(
+        cacheURL: nil,
+        detect: { [candidate] },
+        scan: { progress in
+            if completesStorage { return storageMapAccessSnapshot(sourceIDs: [.codex]) }
+            return try await storageProbe.scanUntilCancelled(progress: progress)
+        }
     )
+    let agents = AgentStorageModel { configuration in
+        await agentProbe.scanUntilCancelled(configuration)
+    }
+    await model.prepare()
+    #expect(model.shouldStartInitialAnalysis(including: agents))
+    model.startAnalysis(including: agents)
+    try await waitForStorageMapTest {
+        let agentCalls = await agentProbe.callCount
+        return agentCalls == 1 && (completesStorage ? model.snapshot != nil : model.phase == .scanning)
+    }
+    model.stopAnalysis(including: agents)
+    try await waitForStorageMapTest { !model.isFullAnalysisRunning(including: agents) }
 
-    #expect(taskBody.contains("await model.prepare()"))
-    #expect(taskBody.contains("shouldStartInitialAnalysis"))
-    #expect(taskBody.contains("startFullAnalysis()"))
-    #expect(source.contains("model.phase == .ready"))
+    // Reentering the page must not undo the user's explicit stop.
+    await model.prepare()
+    #expect(!model.shouldStartInitialAnalysis(including: agents))
+    #expect(StorageMapOverviewPresentation.resolve(
+        isDetecting: model.phase == .detecting,
+        isPendingAutomaticAnalysis: model.shouldStartInitialAnalysis(including: agents),
+        hasCandidates: !model.candidates.isEmpty,
+        hasAvailableResults: model.hasPreviousResults,
+        isFullAnalysisRunning: model.isFullAnalysisRunning(including: agents)
+    ) == (completesStorage ? .analysis : .firstRun))
+    #expect(await agentProbe.callCount == 1)
+
+    model.startAnalysis(including: agents)
+    try await waitForStorageMapTest { await agentProbe.callCount == 2 }
+    model.stopAnalysis(including: agents)
+    try await waitForStorageMapTest { !model.isFullAnalysisRunning(including: agents) }
 }
 
 @Test func storageMapKeepsDiscoveryVisibleUntilAutomaticAnalysisStarts() {
@@ -1027,21 +1054,21 @@ import Testing
         isDetecting: true,
         isPendingAutomaticAnalysis: false,
         hasCandidates: true,
-        hasUnifiedResults: false,
+        hasAvailableResults: false,
         isFullAnalysisRunning: false
     ) == .discovery)
     #expect(StorageMapOverviewPresentation.resolve(
         isDetecting: false,
         isPendingAutomaticAnalysis: true,
         hasCandidates: true,
-        hasUnifiedResults: false,
+        hasAvailableResults: false,
         isFullAnalysisRunning: false
     ) == .discovery)
     #expect(StorageMapOverviewPresentation.resolve(
         isDetecting: false,
         isPendingAutomaticAnalysis: false,
         hasCandidates: true,
-        hasUnifiedResults: false,
+        hasAvailableResults: false,
         isFullAnalysisRunning: true
     ) == .analysis)
 }
@@ -1535,7 +1562,7 @@ import Testing
 
 @Test func goModuleCacheCleanupVerifiesGOMODCACHEBeforeCleaning() async throws {
     let moduleCache = FileManager.default.temporaryDirectory
-        .appending(path: "FindDiskKiller-gomod-\\(UUID().uuidString)", directoryHint: .isDirectory)
+        .appending(path: "FindDiskKiller-gomod-\(UUID().uuidString)", directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: moduleCache, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: moduleCache) }
     var moduleStat = stat()
@@ -1569,17 +1596,17 @@ import Testing
 
 @Test func goModuleCacheCleanupRefusesWhenGOMODCACHEMovedSinceAnalysis() async throws {
     let moduleCache = FileManager.default.temporaryDirectory
-        .appending(path: "FindDiskKiller-gomod-\\(UUID().uuidString)", directoryHint: .isDirectory)
+        .appending(path: "FindDiskKiller-gomod-\(UUID().uuidString)", directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: moduleCache, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: moduleCache) }
     var moduleStat = stat()
     _ = lstat(moduleCache.path, &moduleStat)
     let movedPath = FileManager.default.temporaryDirectory
-        .appending(path: "FindDiskKiller-gomod-moved-\\(UUID().uuidString)", directoryHint: .isDirectory)
+        .appending(path: "FindDiskKiller-gomod-moved-\(UUID().uuidString)", directoryHint: .isDirectory)
         .path
     let executor = StorageResourceCleanupExecutor(goCommand: { arguments in
         guard arguments == ["env", "GOMODCACHE"] else {
-            Issue.record("Unexpected go arguments: \\(arguments)")
+            Issue.record("Unexpected go arguments: \(arguments)")
             return ""
         }
         return movedPath
@@ -2859,4 +2886,255 @@ private extension String {
             }
         }
     }
+}
+
+@MainActor
+@Test func storageMapUsesOrderedProgressEvenWhenDeduplicationReducesBytes() async throws {
+    let model = StorageMapModel(
+        cacheURL: nil,
+        detect: { [storageMapCandidate()] },
+        scan: { progress in
+            progress(.init(phase: .measuring, sequence: 1, sourceID: .npm,
+                           processedEntryCount: 8, processedBytes: 16_384,
+                           sourceProcessedEntryCount: 8, sourceProcessedBytes: 16_384))
+            progress(.init(phase: .measuring, sequence: 3, sourceID: .npm,
+                           processedEntryCount: 4, processedBytes: 8_192,
+                           sourceProcessedEntryCount: 4, sourceProcessedBytes: 8_192,
+                           sourceCompleted: true))
+            progress(.init(phase: .measuring, sequence: 2, sourceID: .npm,
+                           processedEntryCount: 10, processedBytes: 20_480,
+                           sourceProcessedEntryCount: 10, sourceProcessedBytes: 20_480))
+            try await Task.sleep(for: .seconds(60))
+            return storageMapSnapshot()
+        }
+    )
+    await model.prepare()
+    model.startAnalysis()
+    defer { model.prepareForTermination() }
+    try await waitForStorageMapTest { model.progress?.sequence == 3 }
+    #expect(model.presentationTotalAllocatedBytes == 8_192)
+    #expect(model.presentationAllocatedBytes(for: .npm) == 8_192)
+    #expect(model.presentationEntryCount == 4)
+}
+
+@MainActor
+@Test func storageMapSourceReconciliationDoesNotPublishMissingSourceCountersAsZero() async throws {
+    let initial = storageMapSnapshot()
+    let model = StorageMapModel(
+        cacheURL: nil,
+        detect: { [storageMapCandidate()] },
+        scan: { _ in initial },
+        scanSource: { sourceID, progress in
+            progress(.init(phase: .measuring, sequence: 1, sourceID: sourceID,
+                           sourceProcessedEntryCount: 4, sourceProcessedBytes: 8_192))
+            progress(.init(phase: .reconciling, sequence: 2,
+                           processedEntryCount: 4, processedBytes: 8_192))
+            try await Task.sleep(for: .seconds(60))
+            return initial
+        }
+    )
+    await model.prepare()
+    model.startAnalysis()
+    try await waitForStorageMapTest { model.snapshot != nil && model.phase == .ready }
+    model.startAnalysis(sourceID: .npm)
+    defer { model.prepareForTermination() }
+    try await waitForStorageMapTest { model.progressBySource[.npm]?.sequence == 1 }
+    #expect(model.presentationAllocatedBytes(for: .npm) == 8_192)
+}
+
+@MainActor
+@Test func storageMapCancelledSourceCannotPublishALateFailure() async throws {
+    let initial = storageMapSnapshot()
+    let model = StorageMapModel(
+        cacheURL: nil,
+        detect: { [storageMapCandidate()] },
+        scan: { _ in initial },
+        scanSource: { _, _ in
+            try? await Task.sleep(for: .seconds(60))
+            throw CocoaError(.fileReadNoPermission)
+        }
+    )
+    await model.prepare()
+    model.startAnalysis()
+    try await waitForStorageMapTest { model.snapshot != nil && model.phase == .ready }
+    model.startAnalysis(sourceID: .npm)
+    await Task.yield()
+    model.stopAnalysis(sourceID: .npm)
+    for _ in 0..<10 { await Task.yield() }
+    #expect(model.snapshot == initial)
+    #expect(model.errorMessage == nil)
+    #expect(model.refreshErrorsBySource.isEmpty)
+    #expect(model.reanalyzingSourceIDs.isEmpty)
+}
+
+@MainActor
+@Test func storageMapRejectsOlderAccountingSnapshotsFromConcurrentRefreshes() async throws {
+    let accountingID = UUID()
+    let base = storageMapMultiSourceSnapshot(npmBytes: 4_096, chromeBytes: 8_192)
+    let newer = storageMapMultiSourceSnapshot(npmBytes: 1_024, chromeBytes: 2_048)
+    let initial = accountingSnapshot(base, sessionID: accountingID, revision: 1)
+    let older = accountingSnapshot(base, sessionID: accountingID, revision: 2)
+    let latest = accountingSnapshot(newer, sessionID: accountingID, revision: 3)
+    let model = StorageMapModel(
+        cacheURL: nil,
+        detect: { [storageMapCandidate(), storageMapChromeCandidate()] },
+        scan: { _ in initial },
+        scanSource: { sourceID, _ in
+            if sourceID == .npm {
+                try await Task.sleep(for: .milliseconds(80))
+                return older
+            }
+            return latest
+        }
+    )
+    await model.prepare()
+    model.startAnalysis()
+    try await waitForStorageMapTest { model.snapshot != nil && model.phase == .ready }
+    model.startAnalysis(sourceID: .npm)
+    model.startAnalysis(sourceID: .chrome)
+    try await waitForStorageMapTest { model.reanalyzingSourceIDs.isEmpty }
+    #expect(model.snapshot?.accountingRevision == 3)
+    #expect(model.snapshot?.totalAllocatedBytes == 3_072)
+    #expect(model.snapshot?.result(for: .npm)?.allocatedBytes == 1_024)
+}
+
+private func accountingSnapshot(
+    _ snapshot: StorageAnalysisSnapshot, sessionID: UUID, revision: UInt64
+) -> StorageAnalysisSnapshot {
+    StorageAnalysisSnapshot(
+        scannedAt: snapshot.scannedAt, results: snapshot.results,
+        totalAllocatedBytes: snapshot.totalAllocatedBytes, conflictBytes: snapshot.conflictBytes,
+        measuredEntryCount: snapshot.measuredEntryCount, skippedEntryCount: snapshot.skippedEntryCount,
+        volumes: snapshot.volumes, includesRetainedSources: true,
+        accountingSessionID: sessionID, accountingRevision: revision
+    )
+}
+
+@Test func cleanupSelectionExcludesNestedDownloadsAlreadyCoveredByGoModuleCleanup() {
+    let identity = StoragePathIdentity(device: 1, inode: 2)
+    let module = StorageCleanupRequest(
+        id: "module", title: "Modules", displayBytes: 12_288,
+        target: .goModuleCache(path: "/tmp/go/pkg/mod", identity: identity)
+    )
+    let downloads = StorageCleanupRequest(
+        id: "downloads", title: "Downloads", displayBytes: 4_096,
+        target: .removePathContents(path: "/tmp/go/pkg/mod/cache/download", identity: identity,
+                                    sourceID: .go, rootID: "go.module-download-cache")
+    )
+    #expect(StorageSafeCleanupProjection.independentRequests([downloads, module]) == [module])
+    #expect(StorageSafeCleanupProjection.independentRequests([downloads]) == [downloads])
+    #expect(downloads.movesToTrash)
+    #expect(!module.movesToTrash)
+    #expect(!StorageCleanupRequest(id: "image", title: "Image", displayBytes: 10,
+                                  target: .dockerImage(id: "abc")).movesToTrash)
+}
+
+@Test func containerBuildCacheSelectionCountsOnlyUnusedRecords() {
+    let children = [false, true].enumerated().map { index, protected in
+        StorageResourceNode(id: "cache-\(index)", kind: .dockerBuildCacheRecord, title: "Cache",
+                            symbol: "hammer", allocatedBytes: protected ? 16_384 : 4_096,
+                            risk: .rebuildableCache, evidence: .providerReported, isProtected: protected)
+    }
+    let group = StorageResourceNode(id: "docker.engine.build-cache", kind: .dockerBuildCache,
+                                    title: "Cache", symbol: "hammer", allocatedBytes: 20_480,
+                                    risk: .rebuildableCache, evidence: .providerReported, isProtected: false,
+                                    cleanupTarget: .dockerBuildCachePrune, children: children)
+    let index = StorageResourceTreeIndex(nodes: [group])
+    #expect(index.selectedRequests(for: [group.id]).first?.displayBytes == 4_096)
+}
+
+@MainActor
+@Test func storageMapActivityTracksRemainingAgentWorkAfterFileScanFinishes() async throws {
+    let model = StorageMapModel(
+        cacheURL: nil,
+        detect: { [storageMapCandidate()] },
+        scan: { _ in storageMapSnapshot() }
+    )
+    let agents = AgentStorageModel(cacheURL: nil) { _, progress in
+        progress(.init(phase: .organizingResults, completedCount: 1, totalCount: 1, provider: .claude))
+        progress(.init(phase: .organizingResults, completedCount: 1, totalCount: 1, provider: .openCode))
+        progress(.init(phase: .attributingDatabase, completedCount: 2_345,
+                       provider: .codex, databaseStage: .readingRecords))
+        try await Task.sleep(for: .seconds(60))
+        throw CancellationError()
+    }
+    await model.prepare()
+    #expect(StorageMapAnalysisActivity.resolve(model: model, agentStorage: agents) == nil)
+    model.startAnalysis()
+    agents.startAnalysis()
+    defer { agents.stop() }
+    try await waitForStorageMapTest {
+        model.phase == .ready && agents.progressByProvider[.codex]?.completedCount == 2_345
+    }
+
+    let activity = try #require(StorageMapAnalysisActivity.resolve(model: model, agentStorage: agents))
+    #expect(activity.title == L10n.text("正在分析 AI Agent 空间"))
+    #expect(activity.summary == nil) // The previous file-scan total is not ongoing progress.
+    #expect(activity.rows.map(\.id) == ["agent-codex"])
+    #expect(activity.rows[0].detail.contains(L10n.format("已读取 %d 条日志记录", 2_345)))
+    agents.stop()
+    #expect(StorageMapAnalysisActivity.resolve(model: model, agentStorage: agents) == nil)
+}
+
+@MainActor
+@Test func storageMapActivityExcludesCompletedSourcesAndAcknowledgesStopImmediately() async throws {
+    let model = StorageMapModel(
+        cacheURL: nil,
+        detect: { [storageMapCandidate(), storageMapChromeCandidate()] },
+        scan: { progress in
+            progress(.init(phase: .measuring, sequence: 1, sourceID: .chrome,
+                           completedSourceCount: 1, totalSourceCount: 2,
+                           sourceCompleted: true))
+            progress(.init(phase: .measuring, sequence: 2, sourceID: .npm,
+                           completedSourceCount: 1, totalSourceCount: 2,
+                           processedEntryCount: 600, sourceProcessedEntryCount: 400,
+                           currentWork: "npm cache"))
+            try await Task.sleep(for: .seconds(60))
+            throw CancellationError()
+        }
+    )
+    let agents = AgentStorageModel(cacheURL: nil)
+    await model.prepare()
+    model.startAnalysis()
+    defer { model.stopAnalysis() }
+    // Feedback exists before the first scanner callback.
+    #expect(StorageMapAnalysisActivity.resolve(model: model, agentStorage: agents) != nil)
+    try await waitForStorageMapTest { model.progress?.sequence == 2 }
+    let activity = try #require(StorageMapAnalysisActivity.resolve(model: model, agentStorage: agents))
+    #expect(activity.rows.map(\.id) == ["storage-npm"])
+    #expect(activity.rows[0].detail.contains("npm cache"))
+    #expect(activity.rows[0].detail.contains(L10n.format("已检查 %d 项", 400)))
+    #expect(activity.summary?.contains(L10n.format("文件扫描：已完成 %d / %d 个来源", 1, 2)) == true)
+
+    model.stopAnalysis()
+    let stopping = try #require(StorageMapAnalysisActivity.resolve(model: model, agentStorage: agents))
+    #expect(stopping.isStopping)
+    #expect(stopping.rows.isEmpty)
+    try await waitForStorageMapTest { model.phase == .ready }
+    #expect(StorageMapAnalysisActivity.resolve(model: model, agentStorage: agents) == nil)
+}
+
+@MainActor
+@Test func storageMapActivityKeepsReconciliationVisibleWithoutStaleWork() async throws {
+    let model = StorageMapModel(
+        cacheURL: nil,
+        detect: { [storageMapCandidate()] },
+        scan: { progress in
+            progress(.init(phase: .measuring, sequence: 1, sourceID: .npm,
+                           sourceProcessedEntryCount: 100, currentWork: "npm cache"))
+            progress(.init(phase: .reconciling, sequence: 2,
+                           completedSourceCount: 1, totalSourceCount: 1, processedEntryCount: 100))
+            try await Task.sleep(for: .seconds(60))
+            throw CancellationError()
+        }
+    )
+    let agents = AgentStorageModel(cacheURL: nil)
+    await model.prepare()
+    model.startAnalysis()
+    defer { model.stopAnalysis() }
+    try await waitForStorageMapTest { model.progress?.phase == .reconciling }
+    let activity = try #require(StorageMapAnalysisActivity.resolve(model: model, agentStorage: agents))
+    #expect(activity.title == L10n.text("正在核对共享占用"))
+    #expect(activity.rows.isEmpty)
+    #expect(!activity.isStopping)
 }

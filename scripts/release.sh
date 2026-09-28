@@ -102,6 +102,7 @@ xcodebuild archive \
     -scheme FindDiskKillerApp \
     -configuration Release \
     -archivePath "$archive_path" \
+    -derivedDataPath "$temporary_directory/DerivedData.noindex" \
     -destination 'generic/platform=macOS' \
     MARKETING_VERSION="$version" \
     CURRENT_PROJECT_VERSION="$build_number" \

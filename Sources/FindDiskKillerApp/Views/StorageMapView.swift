@@ -63,12 +63,12 @@ enum StorageMapOverviewPresentation: Equatable {
         isDetecting: Bool,
         isPendingAutomaticAnalysis: Bool,
         hasCandidates: Bool,
-        hasUnifiedResults: Bool,
+        hasAvailableResults: Bool,
         isFullAnalysisRunning: Bool
     ) -> Self {
         if isDetecting || isPendingAutomaticAnalysis { return .discovery }
         if !hasCandidates { return .noSources }
-        if !hasUnifiedResults, !isFullAnalysisRunning { return .firstRun }
+        if !hasAvailableResults, !isFullAnalysisRunning { return .firstRun }
         return .analysis
     }
 }
@@ -180,14 +180,19 @@ struct StorageMapView: View {
                     if proxy.size.width >= 560 {
                         StorageMapDashboardView(
                             scope: $scope,
-                            items: visibleItems,
+                            items: dashboardItems,
                             volumes: model.presentationVolumes,
                             analyzedBytes: model.presentationTotalAllocatedBytes,
                             entryCount: model.presentationEntryCount,
                             scannedAt: model.snapshot?.scannedAt,
-                            completedSourceCount: model.progress?.completedSourceCount,
-                            totalSourceCount: model.progress?.totalSourceCount,
+                            analysisActivity: StorageMapAnalysisActivity.resolve(
+                                model: model, agentStorage: agentStorage
+                            ),
                             safeCleanupBytes: overviewCleanupIndex.totalBytes,
+                            isPresentingLiveResults: model.isPresentingLiveResults,
+                            errorMessage: model.errorMessage,
+                            skippedEntryCount: model.snapshot?.skippedEntryCount ?? 0,
+                            conflictBytes: model.snapshot?.conflictBytes ?? 0,
                             safeCleanupBytesBySource: safeCleanupBytesBySource,
                             isAnalysisRunning: isFullAnalysisRunning,
                             isStopping: model.phase == .stopping,
@@ -226,7 +231,7 @@ struct StorageMapView: View {
             isDetecting: model.phase == .detecting,
             isPendingAutomaticAnalysis: shouldStartInitialAnalysis,
             hasCandidates: !model.candidates.isEmpty,
-            hasUnifiedResults: hasUnifiedResults,
+            hasAvailableResults: model.hasPreviousResults,
             isFullAnalysisRunning: isFullAnalysisRunning
         )
     }
@@ -436,6 +441,7 @@ struct StorageMapView: View {
                 isFullAnalysisRunning: isFullAnalysisRunning,
                 hasFullDiskRepositoryAccess: model.hasFullDiskRepositoryAccess,
                 startAnalysis: { model.startAnalysis(sourceID: sourceID) },
+                stopAnalysis: { model.stopAnalysis(sourceID: sourceID) },
                 refreshRepositoryAuthorization: model.refreshRepositoryAuthorization,
                 goBack: { route = .overview },
                 didCleanup: { model.refreshAfterCleanup(sourceID: sourceID) }
@@ -510,28 +516,8 @@ struct StorageMapView: View {
         return L10n.format("详情尚未就绪：%@", reason)
     }
 
-    private var requiredAgentProviders: Set<AgentStorageProvider> {
-        Set(model.candidates.compactMap { $0.id.agentStorageProvider })
-    }
-
-    private var hasUnifiedResults: Bool {
-        guard let snapshot = model.snapshot,
-              model.candidates.allSatisfy({ candidate in
-                  candidate.id == .workspace && candidate.roots.isEmpty
-                      || snapshot.result(for: candidate.id) != nil
-              }) else {
-            return false
-        }
-        let completedProviders = Set(agentStorage.snapshot?.providers.map(\.provider) ?? [])
-        return requiredAgentProviders.isSubset(of: completedProviders)
-    }
-
     private var shouldStartInitialAnalysis: Bool {
-        model.phase == .ready
-            && !model.candidates.isEmpty
-            && !hasUnifiedResults
-            && !isFullAnalysisRunning
-            && model.errorMessage == nil
+        model.shouldStartInitialAnalysis(including: agentStorage)
     }
 
     private func agentSummary(
@@ -628,6 +614,28 @@ struct StorageMapView: View {
         }
     }
 
+    private var dashboardItems: [StorageMapDashboardItem] {
+        let items = model.candidates
+            .filter { renderedScope.includes($0.descriptor.family) }
+            .map { candidate in
+                let result = model.snapshot?.result(for: candidate.id)
+                return StorageMapDashboardItem(
+                    candidate: candidate,
+                    activity: activityPresentation(candidate: candidate, result: result),
+                    displayBytes: model.presentationAllocatedBytes(for: candidate.id) ?? 0
+                )
+            }
+        let positions = Dictionary(
+            uniqueKeysWithValues: displayedSourceOrder.enumerated().map { ($1, $0) }
+        )
+        return items.sorted { lhs, rhs in
+            let lhsPosition = positions[lhs.id] ?? Int.max
+            let rhsPosition = positions[rhs.id] ?? Int.max
+            if lhsPosition != rhsPosition { return lhsPosition < rhsPosition }
+            return lhs.id.rawValue < rhs.id.rawValue
+        }
+    }
+
     private func stabilizeDisplayedOrder() {
         displayedSourceOrder = StorageSourceDisplayOrdering.stabilized(
             current: displayedSourceOrder,
@@ -672,10 +680,7 @@ struct StorageMapView: View {
             compositionSummary: agentSummary(for: candidate.id)
                 .flatMap(StorageSourceActivityPresentation.completedAgentComposition)
                 ?? result.flatMap(StorageSourceActivityPresentation.completedComposition),
-            displayBytes: activity.processedBytes
-                ?? model.presentationAllocatedBytes(for: candidate.id)
-                ?? result?.allocatedBytes
-                ?? 0
+            displayBytes: model.presentationAllocatedBytes(for: candidate.id) ?? 0
         )
     }
 
@@ -1586,6 +1591,13 @@ private struct StorageSafeCleanupView: View {
             Text(L10n.text("仅包含可重建缓存；发生变化的项目会自动跳过。"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
+            Text(L10n.text("文件缓存移入废纸篓；容器镜像通过官方工具删除，无法从废纸篓恢复。"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(L10n.text("大小为所选项目的参考占用，不保证立即释放。移入废纸篓的内容仍占用磁盘，需清空废纸篓后才可能释放。"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -1593,7 +1605,7 @@ private struct StorageSafeCleanupView: View {
         VStack(alignment: .trailing, spacing: 2) {
             Text(L10n.format("已选 %@", AgentStorageSizeFormatter.string(selectedBytes)))
                 .font(.callout.weight(.semibold).monospacedDigit())
-            Text(L10n.format("%d 个项目", selectedIDs.count))
+            Text(L10n.format("%d 个项目", selectedEntries.count))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -1605,7 +1617,8 @@ private struct StorageSafeCleanupView: View {
             HStack(spacing: 8) {
                 if isExecuting { ProgressView().controlSize(.small) }
                 Image(systemName: isExecuting ? "trash.slash" : "trash")
-                Text(isExecuting ? L10n.text("正在清理") : L10n.text("移到废纸篓"))
+                Text(isExecuting ? L10n.text("正在清理")
+                    : StorageCleanupRequest.actionTitle(for: selectedEntries.map { $0.1 }))
             }
         }
         .buttonStyle(AppActionButtonStyle(kind: .primary, size: .large))
@@ -1727,14 +1740,14 @@ private struct StorageSafeCleanupView: View {
                     selectionButton(
                         selectedCount: selectedCount,
                         totalCount: groupIDs.count,
-                        accessibilityLabel: L10n.format("选择 %@", group.title)
+                        accessibilityLabel: L10n.format("选择 %@", L10n.text(group.title))
                     ) {
                         toggleSelection(groupIDs)
                     }
                 }
                 StorageSourceBrandIcon(sourceID: group.id, fallbackSymbol: group.symbol)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(group.title).font(.callout.weight(.semibold))
+                    Text(L10n.text(group.title)).font(.callout.weight(.semibold))
                     Text(group.family.title)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -1795,6 +1808,11 @@ private struct StorageSafeCleanupView: View {
                 Text(L10n.text(request.title))
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
+                Text(request.actionDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help(request.actionDescription)
                 if let outcome = outcomesByID[request.id] {
                     Text(outcome.succeeded
                         ? L10n.text("已清理，等待同步确认")
@@ -2832,9 +2850,11 @@ private struct StorageSourceDetailView: View {
     let isFullAnalysisRunning: Bool
     let hasFullDiskRepositoryAccess: Bool
     let startAnalysis: () -> Void
+    let stopAnalysis: () -> Void
     let refreshRepositoryAuthorization: () -> Bool
     let goBack: () -> Void
     let didCleanup: () -> Void
+    @State private var didStartWorkspaceAnalysis = false
     @State private var selectedResourceIDs: Set<String> = []
     @State private var resourceProjection: StorageResourceTreeIndex?
     @State private var didInitializeCleanupSelection = false
@@ -2873,6 +2893,10 @@ private struct StorageSourceDetailView: View {
                         Text(L10n.text("正在同步最新状态"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if !isFullAnalysisRunning {
+                            Button(L10n.text("停止分析"), action: stopAnalysis)
+                                .buttonStyle(AppActionButtonStyle(kind: .secondary))
+                        }
                     }
                 } else if let refreshError {
                     HStack(spacing: 7) {
@@ -2913,6 +2937,11 @@ private struct StorageSourceDetailView: View {
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
                                 containerEngineDetail(result)
+                                if let diagnostic = result.inventoryDiagnostic {
+                                    Label(L10n.text(diagnostic), systemImage: "exclamationmark.triangle")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                }
                             }
                         } else {
                             VStack(alignment: .leading, spacing: 7) {
@@ -2969,6 +2998,8 @@ private struct StorageSourceDetailView: View {
         .task(id: shouldStartWorkspaceAnalysis) {
             guard shouldStartWorkspaceAnalysis else { return }
             await Task.yield()
+            guard !Task.isCancelled else { return }
+            didStartWorkspaceAnalysis = true
             startAnalysis()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -3000,7 +3031,9 @@ private struct StorageSourceDetailView: View {
 
     private var shouldStartWorkspaceAnalysis: Bool {
         item.id == .workspace
+            && !didStartWorkspaceAnalysis
             && item.result == nil
+            && refreshError == nil
             && !isScanning
             && !isFullAnalysisRunning
     }
@@ -3489,6 +3522,7 @@ private enum StorageComponentPresentation {
                     entryCount: group.reduce(0) { $0 + $1.entryCount },
                     newestModificationDate: group.compactMap(\.newestModificationDate).max(),
                     risk: group.map(\.risk).max() ?? .protectedUserData,
+                    evidence: group.first?.evidence ?? .fileSystemAllocated,
                     isProtected: group.contains(where: \.isProtected)
                 )
             }
